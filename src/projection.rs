@@ -19,3 +19,10 @@ pub const EYE_HEIGHT: f32 = 2.2;
 /// almost at the waterline, so the sea barely tilts down and the swell can rise
 /// up over the horizon.
 pub const BASE_EYE: f32 = 7.0;
+
+/// Metres the shoreline is lifted above the true sea so the shore reads as a
+/// beach a touch proud of the water rather than awash at the mean waterline.
+pub const SHORE_LIFT: f32 = 2.0;
+
+/// Metres; nothing renders past this.
+pub const MAX_VIEW: f32 = 5000.0;

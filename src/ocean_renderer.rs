@@ -19,10 +19,12 @@
 use macroquad::prelude::*;
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::islands_render::{paint_island, IslandView};
 use crate::ocean;
 use crate::palette::{self, Daytime, Palette, PALETTE_LEN};
 use crate::projection::BASE_EYE;
 use crate::sailing::Kinematics;
+use crate::world::Island;
 
 /// Vertical exaggeration applied to wave displacement (and to the ship's heave,
 /// so the bob stays in sync). Shared with the island projection so land bobs by
@@ -196,6 +198,9 @@ impl OceanRenderer {
         storm: f32,
         w: f32,
         h: f32,
+        // Visible islands, sorted *descending* by near-shore distance (farthest
+        // first), so we can draw each between the wave bands at its own depth.
+        islands: &[&Island],
     ) {
         // Ease the live palette toward the current daytime's target with a slow
         // cross-fade, then blend toward the cold storm palette by the gale's fury.
@@ -234,6 +239,26 @@ impl OceanRenderer {
         let lx = sun_rel.sin() * self.sun_elev.cos();
         let ly = sun_rel.cos() * self.sun_elev.cos();
         let lz = self.sun_elev.sin();
+
+        // Island view: same camera, with the sun in *world* space (chart x/y, z up)
+        // so the landmass facets shade consistently as the ship turns.
+        let view = IslandView {
+            w,
+            horizon,
+            px_per_rad,
+            px_per_rad_h,
+            half_fov_h_view,
+            eye_rise: heave * WAVE_GAIN,
+            sun: (
+                SUN_BEARING.sin() * self.sun_elev.cos(),
+                SUN_BEARING.cos() * self.sun_elev.cos(),
+                self.sun_elev.sin(),
+            ),
+        };
+        // Near-shore distance key per island (aligned with `islands`), used to slot
+        // each island into the band march. Farthest-first to match the band order.
+        let isle_key = |isle: &Island| kin.pos.distance_to(isle.pos) - isle.radius;
+        let mut isle_idx = 0;
 
         // Even screen-row spacing: linear in the depression angle of the flat sea.
         let th_far = (BASE_EYE / self.f_far).atan();
@@ -279,6 +304,16 @@ impl OceanRenderer {
                         * px_per_rad;
             }
 
+            // Draw every island farther than this band's near edge *before* the
+            // band, so the band (nearer water) then paints over its base — a near
+            // crest rolls in front of a far island while its summit stands clear.
+            // (At j=0, f = f_far: this also flushes isles beyond the mesh, behind
+            // all the waves.)
+            while isle_idx < islands.len() && isle_key(islands[isle_idx]) >= f {
+                paint_island(islands[isle_idx], kin, &view);
+                isle_idx += 1;
+            }
+
             if j > 0 {
                 self.paint_band(f, prev_f - f, sea, lx, ly, lz);
             }
@@ -302,6 +337,13 @@ impl OceanRenderer {
                 draw_triangle(vec2(x_l, y_l), vec2(x_r, y_r), vec2(x_r, h), near_col);
                 draw_triangle(vec2(x_l, y_l), vec2(x_r, h), vec2(x_l, h), near_col);
             }
+        }
+
+        // Any remaining islands are nearer than the closest band: draw them in
+        // front of all the water.
+        while isle_idx < islands.len() {
+            paint_island(islands[isle_idx], kin, &view);
+            isle_idx += 1;
         }
 
         // Streak the surface flecks on top of the finished wave mesh.
