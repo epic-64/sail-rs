@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="rs-hull" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6b421f"/>
+      <stop offset="1" stop-color="#3c2410"/>
+    </linearGradient>
+    <linearGradient id="rs-sail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4ecd8"/>
+      <stop offset="1" stop-color="#cfc2a4"/>
+    </linearGradient>
+  </defs>
+  <!-- seen bow-on: masts line up on the centreline, the mainmast behind and a
+       touch shorter so it reads as further away down the deck -->
+  <rect x="97.75" y="40" width="4" height="116" fill="#4a2f17"/>
+  <rect x="97.5" y="32" width="4.5" height="124" fill="#5a3a1c"/>
+  <!-- yards span symmetrically about the centreline -->
+  <rect x="66" y="56" width="68" height="3" fill="#3f2814"/>
+  <rect x="58" y="46" width="84" height="3" fill="#4a2f17"/>
+  <!-- square sails seen from the front: broad, symmetric pillows -->
+  <path fill="url(#rs-sail)" fill-opacity="0.95" d="M68,58 C74,82 126,82 132,58 C116,68 84,68 68,58 Z"/>
+  <path fill="url(#rs-sail)" d="M60,48 C68,76 132,76 140,48 C120,60 80,60 60,48 Z"/>
+  <!-- bowsprit + jib reaching down toward the viewer -->
+  <rect x="98.5" y="150" width="3" height="40" fill="#4a2f17"/>
+  <path fill="url(#rs-sail)" fill-opacity="0.9" d="M100,150 L114,186 L86,186 Z"/>
+  <!-- hull: bulwarks flared at the rail, drawing down to a pointed stem -->
+  <path fill="url(#rs-hull)" d="M52,150
+    C50,150 49,151 50,154 L62,172
+    C74,186 88,190 100,190
+    C112,190 126,186 138,172 L150,154
+    C151,151 150,150 148,150 Z"/>
+  <!-- raised forecastle across the rail -->
+  <path fill="#4a2f17" d="M58,150 L142,150 C144,150 145,152 144,156 L56,156 C55,152 56,150 58,150 Z"/>
+  <!-- a pennant atop the foremast -->
+  <path fill="#b23a2e" d="M100,32 L122,36 L100,42 Z"/>
+</svg>

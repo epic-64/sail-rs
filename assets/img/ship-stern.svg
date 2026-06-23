@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="rs-hull" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6b421f"/>
+      <stop offset="1" stop-color="#3c2410"/>
+    </linearGradient>
+    <linearGradient id="rs-sail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4ecd8"/>
+      <stop offset="1" stop-color="#cfc2a4"/>
+    </linearGradient>
+  </defs>
+  <!-- seen from astern: masts line up on the centreline, the foremast tucked
+       behind and a touch shorter so it reads as further away -->
+  <rect x="97.5" y="44" width="4" height="112" fill="#4a2f17"/>
+  <rect x="97.75" y="32" width="4.5" height="124" fill="#5a3a1c"/>
+  <!-- yards span symmetrically about the centreline -->
+  <rect x="66" y="58" width="68" height="3" fill="#3f2814"/>
+  <rect x="58" y="46" width="84" height="3" fill="#4a2f17"/>
+  <!-- square sails billowing away downwind: broad, symmetric pillows -->
+  <path fill="url(#rs-sail)" fill-opacity="0.95" d="M68,60 C74,84 126,84 132,60 C116,70 84,70 68,60 Z"/>
+  <path fill="url(#rs-sail)" d="M60,48 C68,76 132,76 140,48 C120,60 80,60 60,48 Z"/>
+  <!-- transom: a flat stern, wide at the rail and tucked in to the waterline -->
+  <path fill="url(#rs-hull)" d="M52,150
+    C50,150 49,151 50,154 L56,170
+    C62,182 80,186 100,186
+    C120,186 138,182 144,170 L150,154
+    C151,151 150,150 148,150 Z"/>
+  <!-- raised stern castle across the rail -->
+  <path fill="#4a2f17" d="M58,150 L142,150 C144,150 145,152 144,156 L56,156 C55,152 56,150 58,150 Z"/>
+  <!-- stern-gallery windows -->
+  <g fill="#2a1a0c" opacity="0.7">
+    <rect x="74" y="160" width="8" height="9"/>
+    <rect x="92" y="161" width="8" height="9"/>
+    <rect x="110" y="161" width="8" height="9"/>
+    <rect x="128" y="160" width="8" height="9"/>
+  </g>
+  <!-- a pennant atop the mainmast -->
+  <path fill="#b23a2e" d="M100,32 L122,36 L100,42 Z"/>
+</svg>

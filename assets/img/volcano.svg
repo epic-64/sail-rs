@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="180" viewBox="0 0 220 180">
+  <defs>
+    <linearGradient id="vc-rock" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6a625c"/>
+      <stop offset="0.55" stop-color="#46403c"/>
+      <stop offset="1" stop-color="#2c2724"/>
+    </linearGradient>
+    <radialGradient id="vc-glow" cx="0.5" cy="0.3" r="0.7">
+      <stop offset="0" stop-color="#ffd27a"/>
+      <stop offset="0.5" stop-color="#ff8a2b"/>
+      <stop offset="1" stop-color="#ff8a2b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- smoke plume -->
+  <g fill="#8d8884" fill-opacity="0.5">
+    <circle cx="108" cy="34" r="18"/>
+    <circle cx="92" cy="22" r="13"/>
+    <circle cx="124" cy="20" r="15"/>
+    <circle cx="110" cy="10" r="12"/>
+  </g>
+  <!-- ember glow over the crater -->
+  <ellipse cx="110" cy="50" rx="34" ry="22" fill="url(#vc-glow)"/>
+  <!-- cone -->
+  <path fill="url(#vc-rock)" d="M6,180 L86,58 C96,46 124,46 134,58 L214,180 Z"/>
+  <!-- crater rim notch -->
+  <path fill="#2c2724" d="M84,60 C96,72 124,72 136,60 C128,52 92,52 84,60 Z"/>
+  <!-- lava in the crater -->
+  <path fill="#ff7a1f" d="M92,60 C100,68 120,68 128,60 C120,55 100,55 92,60 Z"/>
+  <!-- lava streaks running down the slope -->
+  <path fill="#d4451c" d="M112,66 L106,180 L120,180 L120,66 Z" fill-opacity="0.85"/>
+  <path fill="#a8330f" d="M132,70 L150,180 L162,180 L142,72 Z" fill-opacity="0.7"/>
+  <!-- shaded right face -->
+  <path fill="#1c1815" fill-opacity="0.5" d="M134,58 L214,180 L120,180 Z"/>
+</svg>

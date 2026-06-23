@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="160" viewBox="0 0 260 160">
+  <defs>
+    <linearGradient id="h-foliage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#54c074"/>
+      <stop offset="0.55" stop-color="#2f9a52"/>
+      <stop offset="1" stop-color="#1d6e3a"/>
+    </linearGradient>
+  </defs>
+  <!-- low, craggy, asymmetric ridge — a knobbly rise, not a smooth dome -->
+  <path fill="url(#h-foliage)" d="M2,160
+    L24,118 L44,128 L70,96 L96,112 L120,74 L142,100 L168,88 L196,116 L222,104 L258,160 Z"/>
+  <!-- shaded lee flank to the right of the main crag -->
+  <path fill="#1d6e3a" fill-opacity="0.4" d="M120,74 L142,100 L168,88 L196,116 L222,104 L258,160 L120,160 Z"/>
+  <!-- a couple of rocky outcrops catching the light on the ridgeline -->
+  <path fill="#6bc98a" fill-opacity="0.5" d="M120,74 L132,90 L108,90 Z"/>
+  <path fill="#6bc98a" fill-opacity="0.45" d="M70,96 L80,108 L60,108 Z"/>
+</svg>

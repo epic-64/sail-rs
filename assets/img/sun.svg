@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
+  <defs>
+    <radialGradient id="s-glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff7e0" stop-opacity="0.95"/>
+      <stop offset="0.28" stop-color="#ffe9a8" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#ffe9a8" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffe9a8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="s-core" cx="0.5" cy="0.45" r="0.5">
+      <stop offset="0" stop-color="#fffdf4"/>
+      <stop offset="0.7" stop-color="#fff3cf"/>
+      <stop offset="1" stop-color="#ffe6a0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="110" cy="110" r="110" fill="url(#s-glow)"/>
+  <circle cx="110" cy="110" r="46" fill="url(#s-core)"/>
+</svg>

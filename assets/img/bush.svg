@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="160" viewBox="0 0 140 160">
+  <defs>
+    <linearGradient id="b-foliage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fc97e"/>
+      <stop offset="0.6" stop-color="#329a55"/>
+      <stop offset="1" stop-color="#1d6e3a"/>
+    </linearGradient>
+  </defs>
+  <!-- clustered shrub -->
+  <ellipse cx="70" cy="150" rx="62" ry="12" fill="#1d6e3a" fill-opacity="0.3"/>
+  <circle cx="40" cy="120" r="34" fill="url(#b-foliage)"/>
+  <circle cx="100" cy="120" r="34" fill="url(#b-foliage)"/>
+  <circle cx="70" cy="96" r="40" fill="url(#b-foliage)"/>
+  <circle cx="70" cy="120" r="36" fill="#3aa860"/>
+  <path fill="#1d6e3a" fill-opacity="0.4" d="M70,58 a40,40 0 0,1 30,90 l-30,0 Z"/>
+</svg>
