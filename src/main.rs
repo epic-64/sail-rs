@@ -24,6 +24,7 @@ fn window_conf() -> Conf {
         window_width: 1280,
         window_height: 720,
         high_dpi: true,
+        sample_count: 4, // MSAA: smooth the wave-quad edges
         ..Default::default()
     }
 }
@@ -45,7 +46,7 @@ fn rgb(c: (f32, f32, f32)) -> Color {
 /// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
 /// toward the storm overcast by `storm`. Drawn as horizontal strips since
 /// macroquad has no built-in gradient.
-fn draw_sky(day: Daytime, storm: f32, w: f32, h: f32, horizon: f32) {
+fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32) {
     let fair = palette::fair_sky(day);
     let top = lerp3(fair[0], palette::STORM_SKY[0], storm);
     let mid = lerp3(fair[1], palette::STORM_SKY[1], storm);
@@ -160,7 +161,7 @@ async fn main() {
         let half_fov_h_view = projection::MAX_HALF_FOV_H.min((w * 0.5) / px_per_rad);
 
         clear_background(BLACK);
-        draw_sky(day, storm, w, h, horizon);
+        draw_sky(day, storm, w, horizon);
         draw_sun(day, storm, kin.heading_rad, half_fov_h_view, w, h, horizon);
 
         // Distant-water backdrop behind the wave mesh, so the band between the

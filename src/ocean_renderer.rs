@@ -36,10 +36,18 @@ pub struct OceanRenderer {
     // Grid resolution. Columns span the field of view; rows march out to sea.
     cols: usize,
     rows: usize,
+    // Row-distribution exponent (>1): pushes rows toward the far field so distant
+    // bands subdivide finely (no big flat horizon triangles) while near bands stay
+    // large and chunky. 1.0 = the old even-in-depression-angle spacing.
+    row_bias: f32,
 
     fov_margin: f32,
     f_near: f32,
     f_far: f32,
+    // Distance (m) over which the depth *colour* ramp (near→mid→far teal) runs.
+    // Decoupled from `f_far` so the mesh can reach right out to the horizon without
+    // washing the whole sea into the pale far colour.
+    depth_far: f32,
     sun_elev: f32,
     shininess: f32,
     base_saturation: f32,
@@ -63,8 +71,6 @@ pub struct OceanRenderer {
     sss_power: f32,
     sss_scale: f32,
     c_glow: (f32, f32, f32),
-
-    row_span_metres: f32,
 
     // Eased palette state.
     live: Palette,
@@ -106,17 +112,25 @@ fn hash2(ix: i32, iy: i32) -> i32 {
 
 impl OceanRenderer {
     pub fn new(start_day: Daytime) -> Self {
-        let cols = 52;
-        let rows = 36;
+        // We keep the original chunky, low-poly *near* look (flat-shaded facets ≈
+        // the old 52×36 canvas mesh) but bias the rows hard toward the far field so
+        // the distant bands get subdivided instead of stretching into big flat
+        // triangles at the horizon — see `row_bias` in `render`. The mesh runs all
+        // the way out to `f_far` (near the true horizon) so the sea fills the
+        // distance, while the colour ramp uses the nearer `depth_far`.
+        let cols = 60;
+        let rows = 104;
         let f_near = 6.0;
-        let f_far = 620.0;
+        let f_far = 2600.0;
         let live = palette::palette_for(start_day);
         OceanRenderer {
             cols,
             rows,
+            row_bias: 2.7,
             fov_margin: 1.12,
             f_near,
             f_far,
+            depth_far: 850.0,
             sun_elev: 0.55,
             shininess: 90.0,
             base_saturation: 1.22,
@@ -135,7 +149,6 @@ impl OceanRenderer {
             sss_power: 3.0,
             sss_scale: 0.7,
             c_glow: (46.0, 222.0, 168.0),
-            row_span_metres: (f_far - f_near) / rows as f32,
             live,
             shown: live,
             prev_t: None,
@@ -240,9 +253,17 @@ impl OceanRenderer {
 
         // March from the far row toward the viewer, painting the quad band between
         // the previous row and the current one. Nearer bands draw last (on top).
+        // `prev_f` carries the previous (farther) row's distance so each band's
+        // forward slope uses its *real* world spacing — far bands span hundreds of
+        // metres, near ones a few — instead of one coarse average. That makes the
+        // surface normals (and so the lighting) accurate at every range.
+        let mut prev_f = 0.0;
         let mut j = 0;
         while j <= self.rows {
-            let frac = j as f32 / self.rows as f32;
+            // Bias the depression-angle march toward the far field: small steps near
+            // the horizon (j≈0) pack the distant bands; large steps near the viewer
+            // keep the foreground facets big and chunky.
+            let frac = (j as f32 / self.rows as f32).powf(self.row_bias);
             let th = th_far + (th_near - th_far) * frac;
             let f = BASE_EYE / th.tan();
             for c in 0..self.cols {
@@ -259,11 +280,12 @@ impl OceanRenderer {
             }
 
             if j > 0 {
-                self.paint_band(f, sea, lx, ly, lz);
+                self.paint_band(f, prev_f - f, sea, lx, ly, lz);
             }
 
             std::mem::swap(&mut self.prev_y, &mut self.cur_y);
             std::mem::swap(&mut self.prev_z, &mut self.cur_z);
+            prev_f = f;
             j += 1;
         }
 
@@ -291,8 +313,8 @@ impl OceanRenderer {
     /// Fill the strip of quads between the previous (farther) row and the current
     /// (nearer) row, shading each from its slope against the sun. `f_near_row` is
     /// the current row's distance, used for the depth-based base colour.
-    fn paint_band(&self, f_near_row: f32, sea: f32, lx: f32, ly: f32, lz: f32) {
-        let depth = clamp((f_near_row - self.f_near) / (self.f_far - self.f_near), 0.0, 1.0);
+    fn paint_band(&self, f_near_row: f32, row_df: f32, sea: f32, lx: f32, ly: f32, lz: f32) {
+        let depth = clamp((f_near_row - self.f_near) / (self.depth_far - self.f_near), 0.0, 1.0);
         let [near_r, near_g, near_b] = self.p_near;
         let [mid_r, mid_g, mid_b] = self.p_mid;
         let [far_r, far_g, far_b] = self.p_far;
@@ -330,7 +352,7 @@ impl OceanRenderer {
             let z_l = self.cur_z[c];
             let z_r = self.cur_z[c + 1];
             let slope_lat = (z_r - z_l) / (1e-3_f32).max((self.cur_x_span[c] * f_near_row).abs());
-            let slope_fwd = (self.prev_z[c] - self.cur_z[c]) / (1.0_f32).max(self.row_span_metres);
+            let slope_fwd = (self.prev_z[c] - self.cur_z[c]) / (0.5_f32).max(row_df);
             // Unit surface normal in the camera's (right, fwd, up) frame.
             let inv_n = 1.0 / (slope_lat * slope_lat + slope_fwd * slope_fwd + 1.0).sqrt();
             let nx = -slope_lat * inv_n;
