@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+  <defs>
+    <linearGradient id="r-rock" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9aa0ab"/>
+      <stop offset="1" stop-color="#5f6470"/>
+    </linearGradient>
+  </defs>
+  <!-- left boulder -->
+  <path fill="#5f6470" d="M6,160 C2,116 26,96 50,100 C72,108 70,148 66,160 Z"/>
+  <!-- main boulder -->
+  <path fill="url(#r-rock)" d="M40,160 C34,92 70,58 100,66 C132,80 130,140 124,160 Z"/>
+  <!-- shaded face -->
+  <path fill="#3f4450" fill-opacity="0.5" d="M100,66 C132,80 130,140 124,160 L86,160 Z"/>
+</svg>

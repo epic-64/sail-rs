@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260" viewBox="0 0 260 260">
+  <defs>
+    <linearGradient id="w-wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a06a36"/>
+      <stop offset="1" stop-color="#5c3a1c"/>
+    </linearGradient>
+    <radialGradient id="w-brass" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#f3d488"/>
+      <stop offset="0.6" stop-color="#c9a14a"/>
+      <stop offset="1" stop-color="#8a6a26"/>
+    </radialGradient>
+  </defs>
+
+  <!-- spokes + handles, 8 around -->
+  <g>
+    <g id="spoke">
+      <rect x="124" y="34" width="12" height="96" rx="4" fill="url(#w-wood)"/>
+      <rect x="120" y="12" width="20" height="30" rx="8" fill="url(#w-wood)"/>
+      <circle cx="130" cy="18" r="7" fill="#caa066"/>
+    </g>
+    <use href="#spoke" transform="rotate(45 130 130)"/>
+    <use href="#spoke" transform="rotate(90 130 130)"/>
+    <use href="#spoke" transform="rotate(135 130 130)"/>
+    <use href="#spoke" transform="rotate(180 130 130)"/>
+    <use href="#spoke" transform="rotate(225 130 130)"/>
+    <use href="#spoke" transform="rotate(270 130 130)"/>
+    <use href="#spoke" transform="rotate(315 130 130)"/>
+  </g>
+
+  <!-- rims -->
+  <circle cx="130" cy="130" r="96" fill="none" stroke="url(#w-wood)" stroke-width="18"/>
+  <circle cx="130" cy="130" r="96" fill="none" stroke="#3a2412" stroke-opacity="0.5" stroke-width="2"/>
+  <circle cx="130" cy="130" r="78" fill="none" stroke="#6b4423" stroke-width="6"/>
+
+  <!-- hub -->
+  <circle cx="130" cy="130" r="26" fill="url(#w-brass)" stroke="#7a5a20" stroke-width="2"/>
+  <circle cx="130" cy="130" r="7" fill="#5c4418"/>
+</svg>

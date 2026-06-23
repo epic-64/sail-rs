@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 88" width="100" height="88">
+  <!-- crate body -->
+  <g stroke="#5a3a1c" stroke-width="3" stroke-linejoin="round">
+    <rect x="22" y="22" width="56" height="50" rx="3" fill="#b07a3f"/>
+    <rect x="22" y="22" width="56" height="50" rx="3" fill="url(#crateShade)"/>
+    <path d="M22 22 L78 72 M78 22 L22 72" stroke="#7a521f" stroke-width="4"/>
+    <rect x="22" y="22" width="56" height="50" rx="3" fill="none"/>
+  </g>
+  <defs>
+    <linearGradient id="crateShade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d6a062" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#8a5a28" stop-opacity="0.5"/>
+    </linearGradient>
+  </defs>
+</svg>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <defs>
+    <linearGradient id="v-ash" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b544f"/>
+      <stop offset="0.6" stop-color="#403a37"/>
+      <stop offset="1" stop-color="#2b2624"/>
+    </linearGradient>
+    <linearGradient id="v-beach" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7d756f"/>
+      <stop offset="1" stop-color="#544d49"/>
+    </linearGradient>
+    <radialGradient id="v-shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#06121a" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#06121a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- water-contact shadow -->
+  <ellipse cx="130" cy="172" rx="118" ry="14" fill="url(#v-shadow)"/>
+  <!-- dark ashen beach -->
+  <ellipse cx="130" cy="166" rx="112" ry="18" fill="url(#v-beach)"/>
+  <!-- bare volcanic landmass (the cone itself rises above as a feature) -->
+  <path fill="url(#v-ash)" d="M30,166 C42,124 76,104 130,104 C184,104 218,124 230,166 Z"/>
+  <!-- cooled lava streaks glowing faintly on the slope -->
+  <path fill="#a8401f" fill-opacity="0.45" d="M122,108 L118,166 L130,166 L132,108 Z"/>
+  <path fill="#7a2c14" fill-opacity="0.4" d="M150,116 L158,166 L168,166 L160,116 Z"/>
+  <!-- shaded right flank -->
+  <path fill="#1d1816" fill-opacity="0.5" d="M132,104 C160,108 200,124 230,166 L132,166 Z"/>
+</svg>

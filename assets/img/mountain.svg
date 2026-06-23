@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160" viewBox="0 0 200 160">
+  <defs>
+    <linearGradient id="m-rock" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b8d96"/>
+      <stop offset="0.6" stop-color="#5f6470"/>
+      <stop offset="1" stop-color="#3f4450"/>
+    </linearGradient>
+  </defs>
+  <!-- back peak -->
+  <path fill="#4b5060" d="M120,160 L162,54 L200,160 Z"/>
+  <!-- main peak -->
+  <path fill="url(#m-rock)" d="M4,160 L84,14 L168,160 Z"/>
+  <!-- shaded face -->
+  <path fill="#363b47" fill-opacity="0.55" d="M84,14 L168,160 L96,160 Z"/>
+  <!-- snow cap -->
+  <path fill="#f2f6fb" d="M84,14 L60,58 C72,50 80,54 92,48 C102,56 108,50 110,60 Z"/>
+</svg>
