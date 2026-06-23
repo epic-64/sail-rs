@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <defs>
+    <linearGradient id="g-foliage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#54c074"/>
+      <stop offset="0.6" stop-color="#2f9a52"/>
+      <stop offset="1" stop-color="#1d6e3a"/>
+    </linearGradient>
+    <linearGradient id="g-sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4e6b6"/>
+      <stop offset="1" stop-color="#d8c084"/>
+    </linearGradient>
+    <radialGradient id="g-shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#06303a" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#06303a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- water-contact shadow -->
+  <ellipse cx="130" cy="172" rx="120" ry="14" fill="url(#g-shadow)"/>
+  <!-- sandy shore -->
+  <ellipse cx="130" cy="166" rx="116" ry="20" fill="url(#g-sand)"/>
+  <!-- low grassy landmass (features rise above this) -->
+  <path fill="url(#g-foliage)" d="M30,166 C44,116 84,92 130,92 C176,92 216,116 230,166 Z"/>
+  <!-- shaded right flank -->
+  <path fill="#1d6e3a" fill-opacity="0.35" d="M132,166 C146,114 178,96 206,110 C222,128 226,150 230,166 Z"/>
+</svg>

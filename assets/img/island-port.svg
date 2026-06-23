@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <defs>
+    <linearGradient id="p-foliage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#54c074"/>
+      <stop offset="0.6" stop-color="#2f9a52"/>
+      <stop offset="1" stop-color="#1d6e3a"/>
+    </linearGradient>
+    <linearGradient id="p-sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4e6b6"/>
+      <stop offset="1" stop-color="#d8c084"/>
+    </linearGradient>
+    <radialGradient id="p-shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#06303a" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#06303a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- water-contact shadow -->
+  <ellipse cx="130" cy="172" rx="126" ry="14" fill="url(#p-shadow)"/>
+  <!-- broad, flat sheltered shore (hills, buildings & dock are all features) -->
+  <ellipse cx="130" cy="162" rx="124" ry="24" fill="url(#p-sand)"/>
+  <!-- low flat grassy flat above the sand; no mound — relief comes from hills -->
+  <ellipse cx="130" cy="154" rx="104" ry="16" fill="url(#p-foliage)"/>
+  <!-- soft shaded near edge of the grass -->
+  <ellipse cx="130" cy="158" rx="104" ry="12" fill="#1d6e3a" fill-opacity="0.25"/>
+</svg>

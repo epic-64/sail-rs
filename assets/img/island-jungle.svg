@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="180" viewBox="0 0 260 180">
+  <defs>
+    <linearGradient id="j-foliage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3fae63"/>
+      <stop offset="0.55" stop-color="#218a45"/>
+      <stop offset="1" stop-color="#125c2d"/>
+    </linearGradient>
+    <linearGradient id="j-sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eaddac"/>
+      <stop offset="1" stop-color="#ccb478"/>
+    </linearGradient>
+    <radialGradient id="j-shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#06303a" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#06303a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- water-contact shadow -->
+  <ellipse cx="130" cy="172" rx="122" ry="14" fill="url(#j-shadow)"/>
+  <!-- narrow sandy fringe; the jungle crowds almost to the waterline -->
+  <ellipse cx="130" cy="167" rx="114" ry="16" fill="url(#j-sand)"/>
+  <!-- tall, lumpy jungle landmass (features rise above this) -->
+  <path fill="url(#j-foliage)" d="M22,167
+    C30,120 46,104 64,108 C74,82 96,72 116,82 C126,58 156,58 168,84
+    C188,74 210,92 214,116 C228,128 236,150 240,167 Z"/>
+  <!-- canopy highlights catching the light -->
+  <path fill="#5fc77e" fill-opacity="0.55" d="M116,82 C126,58 156,58 168,84 C150,92 132,92 116,82 Z"/>
+  <path fill="#5fc77e" fill-opacity="0.4" d="M64,108 C74,82 96,72 116,82 C100,96 80,100 64,108 Z"/>
+  <!-- shaded lee flank -->
+  <path fill="#0f5527" fill-opacity="0.45" d="M168,84 C188,74 210,92 214,116 C228,128 236,150 240,167 L168,167 Z"/>
+</svg>

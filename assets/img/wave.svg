@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="90" viewBox="0 0 280 90" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="wbody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.35" stop-color="#bfeef0" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#bfeef0" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- translucent water humps -->
+  <path fill="url(#wbody)"
+        d="M0,40 q35,-20 70,0 q35,20 70,0 q35,-20 70,0 q35,20 70,0 V90 H0 Z"/>
+  <!-- foam crest line -->
+  <path fill="none" stroke="#ffffff" stroke-opacity="0.85" stroke-width="3" stroke-linecap="round"
+        d="M0,40 q35,-20 70,0 q35,20 70,0 q35,-20 70,0 q35,20 70,0"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="130" height="160" viewBox="0 0 130 160">
+  <!-- walls -->
+  <rect x="26" y="78" width="78" height="82" fill="#caa46a"/>
+  <rect x="26" y="78" width="78" height="82" fill="#000" fill-opacity="0.10"/>
+  <!-- roof -->
+  <path fill="#9a4a2c" d="M14,82 L65,30 L116,82 Z"/>
+  <path fill="#7a3620" d="M65,30 L116,82 L82,82 Z"/>
+  <!-- door -->
+  <rect x="54" y="116" width="22" height="44" rx="2" fill="#5e3a1c"/>
+  <!-- window -->
+  <rect x="34" y="96" width="18" height="18" fill="#6fb7c4"/>
+  <rect x="80" y="96" width="18" height="18" fill="#6fb7c4"/>
+</svg>
