@@ -5,18 +5,23 @@
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
 mod geometry;
+mod islands_render;
 mod ocean;
 mod ocean_renderer;
 mod palette;
 mod projection;
+mod rng;
 mod sailing;
+mod world;
 
 use macroquad::prelude::*;
 
 use geometry::{clamp, wrap_angle, Vec2};
 use ocean_renderer::{OceanRenderer, SUN_BEARING};
 use palette::Daytime;
+use projection::MAX_VIEW;
 use sailing::{Helm, Kinematics};
+use world::Island;
 
 fn window_conf() -> Conf {
     Conf {
@@ -122,7 +127,12 @@ fn read_helm() -> Helm {
 async fn main() {
     let mut day = Daytime::Day;
     let mut renderer = OceanRenderer::new(day);
-    let mut kin = Kinematics::still(Vec2::ZERO, 0.0);
+
+    // Build the world and start the captain in the home (centre) cluster's waters,
+    // surrounded by its archipelago.
+    let world = world::generate(1);
+    let start = world.cluster_at(Vec2::ZERO).center;
+    let mut kin = Kinematics::still(start, 0.0);
 
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]
@@ -137,6 +147,9 @@ async fn main() {
         // --- Input -------------------------------------------------------------
         let helm = read_helm();
         kin = sailing::step(kin, helm, dt);
+        // Keep the hull out of every nearby island.
+        let near = world.islands_near(kin.pos, 400.0);
+        kin = sailing::resolve_grounding(kin, &near);
 
         if is_key_down(KeyCode::E) {
             sea = (sea + dt * 0.4).min(1.3);
@@ -173,9 +186,25 @@ async fn main() {
         );
         draw_rectangle(0.0, horizon, w, h - horizon, rgb(far));
 
+        // --- Islands (drawn interleaved with the waves) ------------------------
+        // Visible isles: in front of the camera and within view, sorted farthest-
+        // first by near-shore distance so the wave renderer can slot each in at its
+        // own depth.
+        let key = |i: &Island| kin.pos.distance_to(i.pos) - i.radius;
+        let mut visible: Vec<&Island> = world
+            .islands_near(kin.pos, MAX_VIEW)
+            .into_iter()
+            .filter(|i| {
+                let d = kin.pos.distance_to(i.pos);
+                let rel = wrap_angle(kin.pos.bearing_to(i.pos) - kin.heading_rad);
+                d <= MAX_VIEW && d >= i.radius * 1.1 && rel.abs() <= half_fov_h_view * 1.6
+            })
+            .collect();
+        visible.sort_by(|a, b| key(b).partial_cmp(&key(a)).unwrap());
+
         // --- Waves -------------------------------------------------------------
         let heave = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea).heave;
-        renderer.render(&kin, t, sea, heave, day, storm, w, h);
+        renderer.render(&kin, t, sea, heave, day, storm, w, h, &visible);
 
         // --- HUD ---------------------------------------------------------------
         let knots = kin.speed() / sailing::KNOT;

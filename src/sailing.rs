@@ -6,6 +6,7 @@
 //! rudder authority, yaw inertia) matches the original so the boat handles right.
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::world::Island;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Kinematics {
@@ -86,4 +87,43 @@ pub fn step(kin: Kinematics, helm: Helm, dt: f32) -> Kinematics {
         vel: capped,
         yaw_rate,
     }
+}
+
+/// Metres of open water kept between the hull and an island's shore.
+pub const HULL_CLEARANCE: f32 = 8.0;
+const SCRAPE_LOSS: f32 = 0.06;
+const SCRAPE_RETAIN: f32 = 0.2;
+
+/// Keep the hull out of every island after a step: if the new position crossed
+/// inside an island's keep-out radius, slide it back to the boundary and strip
+/// the inward velocity, so a ship driven at the coast grazes along it and slides
+/// round instead of ploughing through. Remaining along-shore way is bled down by
+/// a *scrape* proportional to how hard the hull struck. Ported from
+/// `Ship.resolveGrounding`.
+pub fn resolve_grounding(kin: Kinematics, islands: &[&Island]) -> Kinematics {
+    let mut k = kin;
+    for isle in islands {
+        let keep_out = isle.radius + HULL_CLEARANCE;
+        let delta = k.pos - isle.pos;
+        let d = delta.length();
+        if d >= keep_out {
+            continue;
+        }
+        let n = if d > 1e-6 {
+            delta * (1.0 / d)
+        } else {
+            Vec2::from_heading(k.heading_rad) * -1.0
+        };
+        let pushed = isle.pos + n * keep_out;
+        let inward = k.vel.dot(n); // < 0 while sailing into the shore
+        if inward >= 0.0 {
+            k.pos = pushed; // already sailing back out — just unstick
+        } else {
+            let tangential = k.vel - n * inward; // strip the shoreward component
+            let retain = clamp(1.0 + SCRAPE_LOSS * inward, SCRAPE_RETAIN, 1.0);
+            k.pos = pushed;
+            k.vel = tangential * retain;
+        }
+    }
+    k
 }
