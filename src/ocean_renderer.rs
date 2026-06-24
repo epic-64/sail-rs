@@ -32,9 +32,6 @@ use crate::world::Island;
 /// the same factor as the sea around it.
 pub const WAVE_GAIN: f32 = 4.6;
 
-/// The bearing the sun sits at on the world chart (`SailingView.sunBearing`).
-pub const SUN_BEARING: f32 = 2.4;
-
 pub struct OceanRenderer {
     // Grid resolution. Columns span the field of view; rows march out to sea.
     cols: usize,
@@ -323,6 +320,9 @@ impl OceanRenderer {
                 light_az.cos() * light_horiz,
                 light_alt,
             ),
+            // Darken the whole isle into the night, never to full black — a moonlit
+            // silhouette keeps a fifth of its daylight so its shape still reads.
+            light: 0.22 + 0.78 * light_strength,
         };
         // Near-shore distance key per island (aligned with `islands`), used to slot
         // each island into the band march. Farthest-first to match the band order.
