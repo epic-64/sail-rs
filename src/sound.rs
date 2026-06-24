@@ -41,15 +41,20 @@ const RACE_LOST_MP3: &[u8] =
     include_bytes!("../assets/sounds/lightyeartraxx-kl-peach-game-over-iii-142453.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
-// ceiling) and the gain of the one-shot cues.
+// ceiling) and the gain of the one-shot cues. These mirror the per-clip volumes
+// the original `SailingView`/`PortView` assigned to each `<audio>` element: the
+// sailing/calm/storm beds at 0.5/0.5/0.6, the flap/wind-shift/coin one-shots at
+// the browser default 1.0, salvage (the old `collect-item` clip) at 0.6, and the
+// race stings toned right down to 0.25 since their clips are mastered hot.
 const SAIL_MAX_VOL: f32 = 0.5;
 const CALM_MAX_VOL: f32 = 0.5;
-const STORM_MAX_VOL: f32 = 0.85;
-const FLAP_VOL: f32 = 0.9;
-const WIND_SHIFT_VOL: f32 = 0.7;
-const COIN_VOL: f32 = 0.8;
-const RACE_WON_VOL: f32 = 0.85;
-const RACE_LOST_VOL: f32 = 0.8;
+const STORM_MAX_VOL: f32 = 0.6;
+const FLAP_VOL: f32 = 1.0;
+const WIND_SHIFT_VOL: f32 = 1.0;
+const COIN_VOL: f32 = 1.0;
+const SALVAGE_VOL: f32 = 0.6;
+const RACE_WON_VOL: f32 = 0.25;
+const RACE_LOST_VOL: f32 = 0.25;
 // The boat speed (knots) at which the sailing bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
@@ -173,13 +178,14 @@ impl SoundBank {
     }
 
     /// A coin *chime* — salvage hauled aboard from the swell. Shares the trade
-    /// chime (the same "gold in the purse" cue), restarted so a rapid run of
-    /// pickups retriggers cleanly rather than piling up.
+    /// chime's clip (the same "gold in the purse" cue) but plays at the original
+    /// `collect-item` level, restarted so a rapid run of pickups retriggers
+    /// cleanly rather than piling up.
     pub fn salvage(&self) {
         stop_sound(&self.coin);
         play_sound(
             &self.coin,
-            PlaySoundParams { looped: false, volume: COIN_VOL },
+            PlaySoundParams { looped: false, volume: SALVAGE_VOL },
         );
     }
 
