@@ -33,6 +33,8 @@ while keeping the game's mechanics and feel.
 | `client/IslandFloorRenderer.scala` + billboards | `src/islands_render.rs` | low-poly islands + features |
 | `client/SailingView.scala` (sky/camera/loop) | `src/main.rs` | scene, input, loop (partial) |
 | `client/SailingView.scala` (deck/rig/sail) | `src/ship_render.rs` | foreground deck + articulating rig |
+| `client/MinimapRenderer.scala` | `src/minimap.rs` | local-cluster chart (HUD + parchment palettes) |
+| `client/SailingView.scala` (logbook spread) | `src/captains_log.rs` | parchment stats panel + chart |
 | `jvm/.../static/{img,sounds}` | `assets/` | copied; SVGs not yet used |
 | `jvm/server/WebServer.scala` (Cask) | — | N/A for native, skip |
 
@@ -92,6 +94,18 @@ while keeping the game's mechanics and feel.
   Tunables (`CAM_*`, `HEEL_GAIN`) sit by the loop; world-anchored fills are
   over-scanned so a rolled/pitched view never reveals background in the corners.
   (`Camera2D::from_display_rect` flips Y to the screen — `zoom.y` is flipped back.)
+- **Minimap** — `minimap.rs`: faithful `MinimapRenderer` port. Frames the local
+  cluster (the ship's current waters) north-up so its isles nearly fill a square
+  chart: land dots (ports brighter), shipyard/contract rings, wind streaks with
+  flow chevrons, and the ship a heading arrow clamped to the frame in open sea.
+  Two ink schemes (`hud` glass / `parchment`). Drawn always-on top-right and inside
+  the log. Wind streaks are Liang–Barsky-clipped to the frame (macroquad has no
+  canvas clip).
+- **Captain's log** — `captains_log.rs`: a parchment panel flipped open with **L**.
+  A "Course & Conditions" page of live readouts (speed, heading+compass, sail,
+  wind quarter, point of sail, weather, time) beside the chart spread (the
+  parchment minimap) captioned with the local waters' name. The vessel/hold/
+  bearings pages from the original wait on the GameState/trade/mission ports.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -113,8 +127,10 @@ Roughly in suggested build order; each is a milestone.
 - **Weather system** (`shared/Weather.scala`): auto-drift calm→storm along adjacent
   states, driving `sea`/`gloom`; wire into the existing storm-blend palette.
 - **Automatic daytime cycle** (`shared/Daytime.scala`): advance dawn→day→dusk→night.
-- **HUD**: speed, heading/compass, wind indicator, sail trim, hull bar, gold, cargo.
-- **Minimap** (`client/MinimapRenderer.scala`): local cluster radar with islands/ports.
+- **HUD**: ✅ live stats live in the **captain's log** (`captains_log.rs`) + the debug
+  line. Still wanting hull bar, gold, cargo — those need the GameState port.
+- **Minimap** (`client/MinimapRenderer.scala`): ✅ done — `minimap.rs`, always-on
+  corner chart + the log's parchment chart.
 - **Audio**: wire the copied `assets/sounds/*` — sailing music, calm/storm ambience,
   sail flap, win / game-over / transition stings (via macroquad audio).
 
@@ -149,7 +165,8 @@ Roughly in suggested build order; each is a milestone.
   debug runs but is choppier).
 - Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Q/E**
   sea-state · **G** storm · **T** daytime · **[ ]** back/veer the wind (dev aid for
-  feeling the points of sail) · **Esc** quit.
+  feeling the points of sail) · **L** open/close the captain's log · **Esc** close
+  the log / quit.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).
 

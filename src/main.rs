@@ -4,9 +4,11 @@
 //! world-anchored wave system, and lets you sail a free camera around the swell.
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
+mod captains_log;
 mod geometry;
 mod isle_features;
 mod islands_render;
+mod minimap;
 mod ocean;
 mod ocean_renderer;
 mod palette;
@@ -195,6 +197,11 @@ async fn main() {
     // captain raises sail to get under way, just like the original.
     let mut sail_mode: usize = 0;
 
+    // Whether the captain's log is flipped open over the scene (toggled with L).
+    let mut log_open = false;
+    // The always-on corner chart's ink scheme.
+    let minimap_pal = minimap::MinimapPalette::hud();
+
     // The prevailing wind. The opening breeze is rolled within a reach of the bow
     // (Wind::favorable) so a fresh captain never spawns in irons; from there it
     // backs/veers to a fresh random quarter every WIND_PERIOD seconds.
@@ -270,8 +277,15 @@ async fn main() {
         if is_key_pressed(KeyCode::T) {
             day = day.next();
         }
+        if is_key_pressed(KeyCode::L) {
+            log_open = !log_open;
+        }
         if is_key_pressed(KeyCode::Escape) {
-            break;
+            if log_open {
+                log_open = false;
+            } else {
+                break;
+            }
         }
 
         // --- Ship motion + camera ride -----------------------------------------
@@ -413,12 +427,32 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail  ·  A/D helm  ·  Q/E sea  ·  G storm  ·  T time  ·  [ ] wind  ·  Esc quit",
+            "W/S sail · A/D helm · Q/E sea · G storm · T time · [ ] wind · L log · Esc quit",
             16.0,
             52.0,
             20.0,
             Color::new(1.0, 1.0, 1.0, 0.7),
         );
+
+        // Always-on corner chart: the local cluster, top-right.
+        let map_size = (h * 0.24).clamp(140.0, 200.0);
+        let map_rect = Rect::new(w - map_size - 16.0, 16.0, map_size, map_size);
+        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &[]);
+
+        // The captain's log, flipped open over the scene.
+        if log_open {
+            captains_log::render(
+                &world,
+                &kin,
+                wind,
+                SAIL_NAMES[sail_mode],
+                day,
+                sea,
+                storm,
+                w,
+                h,
+            );
+        }
 
         next_frame().await
     }
