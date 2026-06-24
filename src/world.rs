@@ -76,6 +76,36 @@ impl World {
             .filter(|i| i.pos.distance_to(p) <= range + i.radius)
             .collect()
     }
+
+    /// The isles belonging to a cluster, in id order. `islands` is in id order
+    /// (index == id), so each id indexes straight in. (`World.clusterIslands`.)
+    pub fn cluster_islands(&self, c: &Cluster) -> Vec<&Island> {
+        c.island_ids
+            .iter()
+            .map(|&id| &self.islands[id as usize])
+            .collect()
+    }
+
+    /// Tight square framing of a cluster's isles: the centre of their bounding box
+    /// and the half-width of its larger axis. Lets a chart fill the frame with the
+    /// isles themselves rather than the cluster's generous (corner-safe) radius.
+    /// (`World.clusterBounds`.)
+    pub fn cluster_bounds(&self, c: &Cluster) -> (Vec2, f32) {
+        let isles = self.cluster_islands(c);
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        for i in &isles {
+            min_x = min_x.min(i.pos.x);
+            max_x = max_x.max(i.pos.x);
+            min_y = min_y.min(i.pos.y);
+            max_y = max_y.max(i.pos.y);
+        }
+        let centre = Vec2::new((min_x + max_x) / 2.0, (min_y + max_y) / 2.0);
+        let half = ((max_x - min_x).max(max_y - min_y)) / 2.0;
+        (centre, half)
+    }
 }
 
 // --- WorldGen constants (match Scala `WorldGen`) -----------------------------
