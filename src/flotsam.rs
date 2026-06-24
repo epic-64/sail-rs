@@ -105,9 +105,10 @@ pub const CULL_DIST: f32 = 3200.0;
 /// float offshore rather than on the beach.
 pub const SHORE_CLEARANCE: f32 = 120.0;
 /// How close the ship must come (m) to scoop a piece aboard — a touch wider than
-/// the hull, so sailing *over* a crate lifts it. (New: the original left the reach
+/// the hull (~24 m bow-to-stern), so sailing *over* a crate lifts it without
+/// hoovering up salvage from a boat-length away. (New: the original left the reach
 /// to the caller; this is the value `main` sweeps with.)
-pub const REACH: f32 = 70.0;
+pub const REACH: f32 = 30.0;
 /// Tries to find open water for one piece before giving up this round.
 const MAX_ATTEMPTS: i32 = 8;
 
