@@ -31,6 +31,7 @@ while keeping the game's mechanics and feel.
 | `shared/{GameState,Goods,Trade,Upgrades,Hull}.scala` | `src/game_state.rs` | voyage state + port economy (markets, trade, upgrades, repair, missions) |
 | `shared/Mission.scala` (`Mission`,`Missions`) | `src/mission.rs` | haulage contracts: board generation, accept/deliver/abandon |
 | `shared/Race.scala` (`Race`) | `src/race.rs`, `src/rival_render.rs` | wager races: offers, accept/win/lose/withdraw, rival helm + billboard |
+| `shared/Flotsam.scala` (`Flotsam`,`FlotsamField`) | `src/flotsam.rs`, `src/flotsam_render.rs` | drifting salvage: weighted kinds, collect-near, replenish + low-poly billboards |
 | `client/PortView.scala` + docking (`SailingView`) | `src/port_view.rs` | docking handshake + Market/Contracts/Shipyard overlay |
 | `shared/Islands.scala` (`IsleFeatures`) | `src/isle_features.rs` | per-island scenery scatter |
 | `client/OceanRenderer.scala` | `src/ocean_renderer.rs` | wave mesh + island depth-interleave |
@@ -144,6 +145,16 @@ while keeping the game's mechanics and feel.
   doubled) or loses (stake forfeit), with a win/loss sting. A standings strip shows
   the gap; the rival is drawn as a low-poly sloop billboard riding the swell, and
   the mark is ringed on every chart.
+- **Flotsam salvage** — `flotsam.rs` + `flotsam_render.rs` + the salvage sweep in
+  `main.rs`: a faithful `shared.Flotsam` port. Crates, barrels and the rare
+  strongbox drift on the swell (weighted `FlotsamKind::pick`, same draw order),
+  topped up to `target` pieces in a spawn ring biased *ahead* of the bow (cubic
+  bearing bias) and never on a shore; stale salvage astern of `cullDist` is
+  forgotten. The captain scoops a piece by sailing within `REACH` of it
+  (`collect_near`): its gold lands in the purse with a coin chime and a fading
+  "+gold" toast naming the find. Each piece is a flat-shaded billboard (planked
+  crate / hooped cask / brass-bound chest) riding the local wave and depth-sorted
+  into the wave march like the rival, so nearer crests and islands occlude it.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -188,8 +199,9 @@ Roughly in suggested build order; each is a milestone.
   standings banner.
 - **Hull & rations** (`Hull.scala`): hull integrity worn by storms/starvation, slow
   when battered; food eaten per daytime.
-- **Flotsam salvage** (`Flotsam.scala`): collectible crates/barrels/chests drifting on
-  the swell, scooped by sailing over them (`barrel/crate/chest.svg`).
+- **Flotsam salvage** (`Flotsam.scala`): ✅ done — `flotsam.rs` + `flotsam_render.rs`.
+  Drifting crates/barrels/chests scooped by sailing over them, rebuilt as low-poly
+  billboards (not the `barrel/crate/chest.svg` sprites) + a coin chime and pickup toast.
 
 ### Screens / flow
 - **Title / splash** (`client/TitleView.scala`, `SplashRenderer.scala`).
