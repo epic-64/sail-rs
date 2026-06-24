@@ -3,14 +3,16 @@
 //!
 //! Sail a port within its dock range with the bow pointed at it and the sails
 //! struck, press **Space**, and the captain ties up: the world keeps running
-//! underneath while a parchment board opens over it. The board has two tabs:
+//! underneath while a parchment board opens over it. The board has three tabs:
 //!
 //!   - **Market** — buy and sell the seven goods at this port's deterministic
 //!     prices (Buy/Fill/Dump/Sell).
+//!   - **Contracts** — accept haulage jobs out of this port, hand in deliveries
+//!     owed here, and abandon reserved cargo (see [`crate::mission`]).
 //!   - **Shipyard** / **Drydock** — mend the hull, and (at shipyard ports) buy
 //!     sail and hold upgrades.
 //!
-//! The original's Contracts and Racing tabs wait on the Mission/Race ports.
+//! The original's Racing tab waits on the Race port.
 //!
 //! Fully keyboard-driven: the cursor sits on the tab bar or on a row. Left/Right
 //! switch tabs (or, on a commodity row, choose Buy/Fill/Dump/Sell); Up/Down move
@@ -21,6 +23,7 @@ use macroquad::prelude::*;
 use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, UpgradeKind};
 use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
+use crate::mission;
 use crate::sailing::{Kinematics, Wind};
 use crate::sound::SoundBank;
 use crate::world::{Island, World};
@@ -97,16 +100,22 @@ impl Harbor {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Market,
+    Contracts,
     Yard,
 }
 
-/// What the keyboard cursor rests on.
+/// What the keyboard cursor rests on. Contracts and deliveries are keyed by
+/// mission id (not list index) so the cursor survives the list reshuffling when
+/// one is accepted, delivered, or abandoned.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
     TabBar,
     Good(usize),
     Repair,
     Upgrade(UpgradeKind),
+    Contract(i32),
+    Delivery(i32),
+    Manifest(i32),
 }
 
 pub struct PortScreen {
@@ -116,7 +125,7 @@ pub struct PortScreen {
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
 }
 
-const TABS: [Tab; 2] = [Tab::Market, Tab::Yard];
+const TABS: [Tab; 3] = [Tab::Market, Tab::Contracts, Tab::Yard];
 const LAST_COLUMN: usize = 3;
 
 impl PortScreen {
@@ -134,10 +143,18 @@ impl PortScreen {
     }
 
     /// The navigable rows of the active tab, top to bottom (the tab bar is its
-    /// own focus, above these).
-    fn rows_of(&self, world: &World, tab: Tab) -> Vec<Focus> {
+    /// own focus, above these). Derived from the live state so it always matches
+    /// what's on screen as contracts come and go.
+    fn rows_of(&self, gs: &GameState, world: &World, tab: Tab) -> Vec<Focus> {
         match tab {
             Tab::Market => (0..Good::ALL.len()).map(Focus::Good).collect(),
+            Tab::Contracts => {
+                let mut v = Vec::new();
+                v.extend(mission::offered_at(gs, world).iter().map(|m| Focus::Contract(m.id)));
+                v.extend(mission::deliverable_at(gs, world).iter().map(|m| Focus::Delivery(m.id)));
+                v.extend(mission::reserved_at(gs, world).iter().map(|m| Focus::Manifest(m.id)));
+                v
+            }
             Tab::Yard => {
                 let mut v = vec![Focus::Repair];
                 if self.is_shipyard(world) {
@@ -149,25 +166,25 @@ impl PortScreen {
         }
     }
 
-    fn enter_rows(&mut self, world: &World) {
-        if let Some(&first) = self.rows_of(world, self.tab).first() {
+    fn enter_rows(&mut self, gs: &GameState, world: &World) {
+        if let Some(&first) = self.rows_of(gs, world, self.tab).first() {
             self.focus = first;
         }
     }
 
     /// Up/Down within the active tab; from the tab bar, Down enters the rows;
     /// from the topmost row, Up returns to the tab bar.
-    fn move_cursor(&mut self, world: &World, delta: i32) {
+    fn move_cursor(&mut self, gs: &GameState, world: &World, delta: i32) {
         match self.focus {
             Focus::TabBar => {
                 if delta > 0 {
-                    self.enter_rows(world);
+                    self.enter_rows(gs, world);
                 }
             }
             here => {
-                let list = self.rows_of(world, self.tab);
+                let list = self.rows_of(gs, world, self.tab);
                 match list.iter().position(|f| *f == here) {
-                    None => self.enter_rows(world),
+                    None => self.enter_rows(gs, world),
                     Some(0) if delta < 0 => self.focus = Focus::TabBar,
                     Some(i) => {
                         let j = (i as i32 + delta).clamp(0, list.len() as i32 - 1) as usize;
@@ -187,12 +204,12 @@ impl PortScreen {
 
     /// Switch to the adjacent tab but stay down in its rows (Left/Right paging
     /// once the cursor runs off the end of a row).
-    fn slide_tab(&mut self, world: &World, delta: i32) {
+    fn slide_tab(&mut self, gs: &GameState, world: &World, delta: i32) {
         let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
         let n = TABS.len() as i32;
         self.tab = TABS[((i as i32 + delta).rem_euclid(n)) as usize];
         self.focus = self
-            .rows_of(world, self.tab)
+            .rows_of(gs, world, self.tab)
             .first()
             .copied()
             .unwrap_or(Focus::TabBar);
@@ -206,7 +223,7 @@ impl PortScreen {
         sounds: &SoundBank,
     ) {
         match self.focus {
-            Focus::TabBar => self.enter_rows(world),
+            Focus::TabBar => self.enter_rows(gs, world),
             Focus::Good(i) => {
                 let good = Good::ALL[i];
                 let done = match self.column {
@@ -229,6 +246,28 @@ impl PortScreen {
                     sounds.transaction();
                 }
             }
+            // Contract actions reshuffle the rows. Keep the cursor at the same
+            // vertical slot — the acted-on row has vanished, so we land on
+            // whatever took its place (or the tab bar if the tab emptied out).
+            here @ (Focus::Contract(_) | Focus::Delivery(_) | Focus::Manifest(_)) => {
+                let before = self.rows_of(gs, world, self.tab);
+                let slot = before.iter().position(|f| *f == here).unwrap_or(0);
+                let done = match here {
+                    Focus::Contract(id) => gs.accept(world, id),
+                    Focus::Delivery(id) => gs.deliver(world, id),
+                    Focus::Manifest(id) => gs.abandon(world, id),
+                    _ => unreachable!(),
+                };
+                if done.is_ok() {
+                    sounds.transaction();
+                    let after = self.rows_of(gs, world, self.tab);
+                    self.focus = if after.is_empty() {
+                        Focus::TabBar
+                    } else {
+                        after[slot.min(after.len() - 1)]
+                    };
+                }
+            }
         }
     }
 
@@ -248,23 +287,23 @@ impl PortScreen {
             self.cycle_tab(if back { -1 } else { 1 });
         }
         if is_key_pressed(KeyCode::Up) {
-            self.move_cursor(world, -1);
+            self.move_cursor(gs, world, -1);
         }
         if is_key_pressed(KeyCode::Down) {
-            self.move_cursor(world, 1);
+            self.move_cursor(gs, world, 1);
         }
         if is_key_pressed(KeyCode::Left) {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(-1),
                 Focus::Good(_) if self.column > 0 => self.column -= 1,
-                _ => self.slide_tab(world, -1),
+                _ => self.slide_tab(gs, world, -1),
             }
         }
         if is_key_pressed(KeyCode::Right) {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(1),
                 Focus::Good(_) if self.column < LAST_COLUMN => self.column += 1,
-                _ => self.slide_tab(world, 1),
+                _ => self.slide_tab(gs, world, 1),
             }
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
@@ -321,6 +360,7 @@ impl PortScreen {
         let tab_y = bar_y + 12.0;
         let mut tx = x0 + pad;
         tx = self.tab_button("Market", Tab::Market, tx, tab_y, on_bar);
+        tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
         let _ = self.tab_button(yard_label, Tab::Yard, tx, tab_y, on_bar);
 
         // --- Body: chart on the left, the active board on the right ----------
@@ -328,7 +368,11 @@ impl PortScreen {
         let chart_size = (ph - (body_top - y0) - pad).min(pw * 0.34);
         let chart = Rect::new(x0 + pad, body_top, chart_size, chart_size);
         let cpal = MinimapPalette::parchment();
-        minimap::render(world, kin, wind, chart, &cpal, &[]);
+        // Mark every accepted contract's destination, and draw a dashed route from
+        // this port out to the highlighted contract's other port.
+        let marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        let route = self.route_line(gs, world);
+        minimap::render(world, kin, wind, chart, &cpal, &marks, route);
         // Name the local waters under the chart.
         let waters = &world.cluster_at(kin.pos).name;
         let cd = measure_text(waters, None, 18, 1.0);
@@ -344,6 +388,7 @@ impl PortScreen {
         let board_w = x0 + pw - pad - board_x;
         match self.tab {
             Tab::Market => self.render_market(gs, market, board_x, body_top, board_w),
+            Tab::Contracts => self.render_contracts(gs, world, board_x, body_top, board_w),
             Tab::Yard => self.render_yard(gs, world, board_x, body_top, board_w),
         }
 
@@ -485,6 +530,119 @@ impl PortScreen {
                 dim_ink(),
             );
         }
+    }
+
+    /// The dashed route the chart should draw: from this port to the other port
+    /// of the highlighted contract (its destination), delivery (its origin), or
+    /// manifest row (its destination). `None` with the cursor anywhere else.
+    fn route_line(&self, gs: &GameState, world: &World) -> Option<(Vec2, Vec2)> {
+        let here = world.islands[self.island_id as usize].pos;
+        let other_id = match self.focus {
+            Focus::Contract(id) => mission::offered_at(gs, world)
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.target_id),
+            Focus::Delivery(id) => gs
+                .active_missions
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.origin_id),
+            Focus::Manifest(id) => gs
+                .active_missions
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.target_id),
+            _ => None,
+        }?;
+        Some((here, world.islands[other_id as usize].pos))
+    }
+
+    /// The contracts board: haulage jobs out of this port, the deliveries owed
+    /// here, and the reserved cargo riding in the hold bound elsewhere.
+    fn render_contracts(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
+        let fs = 18;
+        let row_h = 30.0;
+        let mut ry = y;
+
+        // --- Cargo Contracts (jobs offered here) -----------------------------
+        draw_text("Cargo Contracts", x, ry, 20.0, ink());
+        ry += 18.0;
+        draw_text("Cargo", x, ry, fs as f32, dim_ink());
+        draw_text("To", x + w * 0.27, ry, fs as f32, dim_ink());
+        right_text("Deposit", x + w * 0.585, ry, fs);
+        right_text("Reward", x + w * 0.73, ry, fs);
+        draw_line(x, ry + 8.0, x + w, ry + 8.0, 1.0, dim_ink());
+        ry += 30.0;
+
+        let offered = mission::offered_at(gs, world);
+        if offered.is_empty() {
+            draw_text("No contracts on the board.", x, ry, fs as f32, dim_ink());
+            ry += row_h;
+        } else {
+            for m in &offered {
+                let to = world.islands[m.target_id as usize].name.clone();
+                let active = self.focus == Focus::Contract(m.id);
+                self.contract_line(m, &to, true, "Accept", active, x, ry, w, row_h);
+                ry += row_h;
+            }
+        }
+
+        // --- Deliveries owed at this very port -------------------------------
+        let deliveries = mission::deliverable_at(gs, world);
+        if !deliveries.is_empty() {
+            ry += 12.0;
+            draw_text("Deliveries Awaiting", x, ry, 20.0, ink());
+            ry += 24.0;
+            for m in &deliveries {
+                let from = format!("from {}", world.islands[m.origin_id as usize].name);
+                let active = self.focus == Focus::Delivery(m.id);
+                self.contract_line(m, &from, true, "Deliver", active, x, ry, w, row_h);
+                ry += row_h;
+            }
+        }
+
+        // --- Reserved cargo bound elsewhere (the hold manifest) --------------
+        let reserved = mission::reserved_at(gs, world);
+        if !reserved.is_empty() {
+            ry += 12.0;
+            draw_text("Reserved Cargo · Hold Manifest", x, ry, 20.0, ink());
+            ry += 24.0;
+            for m in &reserved {
+                let to = format!("-> {}", world.islands[m.target_id as usize].name);
+                let active = self.focus == Focus::Manifest(m.id);
+                self.contract_line(m, &to, false, "Abandon", active, x, ry, w, row_h);
+                ry += row_h;
+            }
+        }
+    }
+
+    /// One contract/delivery/manifest row: cargo, the other port, optionally the
+    /// deposit & reward, and the action chip.
+    #[allow(clippy::too_many_arguments)]
+    fn contract_line(
+        &self,
+        m: &mission::Mission,
+        to_text: &str,
+        show_money: bool,
+        chip: &str,
+        active: bool,
+        x: f32,
+        ry: f32,
+        w: f32,
+        row_h: f32,
+    ) {
+        let fs = 18;
+        if active {
+            draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
+        }
+        draw_text(&format!("{} {}", m.quantity, m.good.label()), x, ry, fs as f32, ink());
+        draw_text(to_text, x + w * 0.27, ry, fs as f32, ink());
+        if show_money {
+            right_text(&m.deposit.to_string(), x + w * 0.585, ry, fs);
+            right_text(&m.reward.to_string(), x + w * 0.73, ry, fs);
+        }
+        let action_x = x + w * 0.77;
+        button(action_x, ry - 16.0, x + w - action_x, 24.0, chip, active);
     }
 }
 

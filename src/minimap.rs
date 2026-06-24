@@ -103,8 +103,31 @@ fn clip_segment(x0: f32, y0: f32, x1: f32, y1: f32, r: Rect) -> Option<(f32, f32
     Some((x0 + u0 * dx, y0 + u0 * dy, x0 + u1 * dx, y0 + u1 * dy))
 }
 
-/// Paint the chart into the square `rect` (screen space). `mission_targets` ring
-/// any isles that hold an active contract's destination (empty until missions land).
+/// Draw a dashed line from (x0,y0) to (x1,y1) — macroquad only draws solid lines,
+/// so we lay down `dash`-long segments separated by `gap`.
+fn draw_dashed_line(x0: f32, y0: f32, x1: f32, y1: f32, thick: f32, dash: f32, gap: f32, color: Color) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= 0.0 {
+        return;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let step = dash + gap;
+    let mut d = 0.0;
+    while d < len {
+        let a = d;
+        let b = (d + dash).min(len);
+        draw_line(x0 + ux * a, y0 + uy * a, x0 + ux * b, y0 + uy * b, thick, color);
+        d += step;
+    }
+}
+
+/// Paint the chart into the square `rect` (screen space). `mission_targets` mark
+/// the isles that hold an active contract's destination — a yellow ring with an
+/// "M" (empty until missions land). `route`, if set, draws a dashed rhumb line
+/// between two world points (the docked port and a highlighted contract's other
+/// port) so the captain can weigh a haul against the wind before taking it.
 pub fn render(
     world: &World,
     kin: &Kinematics,
@@ -112,6 +135,7 @@ pub fn render(
     rect: Rect,
     pal: &MinimapPalette,
     mission_targets: &[i32],
+    route: Option<(Vec2, Vec2)>,
 ) {
     // Panel + frame. (Parchment's panel is opaque beige; the HUD's is dark glass.)
     if pal.panel.a > 0.0 {
@@ -178,8 +202,18 @@ pub fn render(
         }
     }
 
-    // The isles of the local cluster: a dot each (ports brighter), shipyards and
-    // contract destinations ringed.
+    // A dashed rhumb line between the docked port and the highlighted contract's
+    // other port, drawn under the island dots so the markers sit on top.
+    if let Some((from, to)) = route {
+        if let Some((ax, ay, bx, by)) =
+            clip_segment(sx(from), sy(from), sx(to), sy(to), rect)
+        {
+            draw_dashed_line(ax, ay, bx, by, 1.6, 6.0 * s, 4.0 * s, pal.mission_mark);
+        }
+    }
+
+    // The isles of the local cluster: a dot each (ports brighter), shipyards ringed.
+    // A mission destination gets a yellow ring with an "M" over it, on top of all.
     for isle in world.cluster_islands(cluster) {
         let x = sx(isle.pos);
         let y = sy(isle.pos);
@@ -189,7 +223,12 @@ pub fn render(
             draw_circle_lines(x, y, 5.4 * s, 1.5, pal.shipyard_ring);
         }
         if mission_targets.contains(&isle.id) {
-            draw_circle_lines(x, y, 5.4 * s, 1.5, pal.mission_mark);
+            let rr = 5.5 * s;
+            draw_circle_lines(x, y, rr, 2.0, pal.mission_mark);
+            // "M" sits just above the ring, clear of it.
+            let fs = (13.0 * s).max(11.0);
+            let dims = measure_text("M", None, fs as u16, 1.0);
+            draw_text("M", x - dims.width / 2.0, y - rr - 3.0 * s, fs, pal.mission_mark);
         }
     }
 

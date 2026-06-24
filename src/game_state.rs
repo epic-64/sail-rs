@@ -5,9 +5,11 @@
 //! land here — gold, the hold's cargo, the rig/hold upgrades bought, the hull's
 //! condition, and where the captain is (sailing or docked). Markets are
 //! deterministic per island+good, so the same seed always offers the same
-//! arbitrage. Missions and races (the original's other port boards) are not yet
-//! ported, so the contract/race state is absent.
+//! arbitrage. Haulage contracts (`shared.Mission`) ride here too — the accepted
+//! contracts and their reserved hold. Races (the original's other port board)
+//! are not yet ported, so the race state is absent.
 
+use crate::mission::{self, Mission};
 use crate::rng::Rng;
 use crate::world::{Island, World};
 
@@ -108,6 +110,8 @@ pub enum TradeError {
     NoShipyard,
     MaxUpgrade,
     HullSound,
+    NoSuchMission,
+    NoDelivery,
 }
 
 /// Which fitting a shipyard upgrade improves.
@@ -277,6 +281,9 @@ pub struct GameState {
     pub location: Location,
     pub sail_level: i32, // rig upgrades bought; drives top speed (see `upgrades`)
     pub hull: i32,       // current hull integrity; worn by storms & starvation
+    /// Accepted haulage contracts riding in the hold until delivered (see
+    /// [`crate::mission`]). Their goods occupy hold space but cannot be sold.
+    pub active_missions: Vec<Mission>,
 }
 
 impl GameState {
@@ -293,6 +300,7 @@ impl GameState {
             location: Location::Sailing,
             sail_level: 0,
             hull: hull::max_hull(0, 0),
+            active_missions: Vec::new(),
         }
     }
 
@@ -302,9 +310,13 @@ impl GameState {
     pub fn cargo_used(&self) -> i32 {
         self.cargo.iter().sum()
     }
-    /// Hold space in use (no mission cargo yet, so == cargo carried).
+    /// Hold taken by mission goods in transit — they ride along until delivered.
+    pub fn mission_hold(&self) -> i32 {
+        self.active_missions.iter().map(|m| m.quantity).sum()
+    }
+    /// Hold space in use: ordinary cargo plus reserved mission cargo.
     pub fn hold_used(&self) -> i32 {
-        self.cargo_used()
+        self.cargo_used() + self.mission_hold()
     }
     pub fn hold_free(&self) -> i32 {
         self.hold_capacity - self.hold_used()
@@ -414,6 +426,63 @@ impl GameState {
         }
         self.gold -= points * REPAIR_COST_PER_HULL;
         self.hull += points;
+        Ok(())
+    }
+
+    // --- Missions (the logic of `shared.Missions`) ---------------------------
+
+    /// Take a contract from the board: pay the deposit and load the goods into
+    /// the hold. (`Missions.accept`.)
+    pub fn accept(&mut self, world: &World, mission_id: i32) -> Result<(), TradeError> {
+        if self.docked_island_id().is_none() {
+            return Err(TradeError::NotDocked);
+        }
+        let mission = mission::offered_at(self, world)
+            .into_iter()
+            .find(|m| m.id == mission_id)
+            .ok_or(TradeError::NoSuchMission)?;
+        if mission.deposit > self.gold {
+            return Err(TradeError::NotEnoughGold);
+        }
+        if mission.quantity > self.hold_free() {
+            return Err(TradeError::NotEnoughHold);
+        }
+        self.gold -= mission.deposit;
+        self.active_missions.push(mission);
+        Ok(())
+    }
+
+    /// Hand in a contract at its destination: return the deposit plus the reward
+    /// and free the hold the goods occupied. (`Missions.deliver`.)
+    pub fn deliver(&mut self, world: &World, mission_id: i32) -> Result<(), TradeError> {
+        let isle_id = self.docked_island(world).ok_or(TradeError::NotDocked)?.id;
+        let mission = self
+            .active_missions
+            .iter()
+            .copied()
+            .find(|m| m.id == mission_id && m.target_id == isle_id)
+            .ok_or(TradeError::NoDelivery)?;
+        self.gold += mission.deposit + mission.reward;
+        self.active_missions.retain(|m| m.id != mission.id);
+        Ok(())
+    }
+
+    /// Abandon an accepted contract: forfeit the deposit and reward, but keep the
+    /// goods — they convert from mission-bound cargo into ordinary, sellable
+    /// cargo. Hold usage is unchanged: the reserved space becomes free cargo.
+    /// (`Missions.abandon`.)
+    pub fn abandon(&mut self, world: &World, mission_id: i32) -> Result<(), TradeError> {
+        if self.docked_island(world).is_none() {
+            return Err(TradeError::NotDocked);
+        }
+        let mission = self
+            .active_missions
+            .iter()
+            .copied()
+            .find(|m| m.id == mission_id)
+            .ok_or(TradeError::NoSuchMission)?;
+        self.active_missions.retain(|m| m.id != mission.id);
+        self.cargo[mission.good.index()] += mission.quantity;
         Ok(())
     }
 }

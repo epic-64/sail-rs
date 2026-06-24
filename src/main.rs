@@ -12,6 +12,7 @@ mod geometry;
 mod isle_features;
 mod islands_render;
 mod minimap;
+mod mission;
 mod ocean;
 mod ocean_renderer;
 mod palette;
@@ -168,8 +169,9 @@ async fn main() {
         .map(|&id| &world.islands[id as usize])
         .find(|i| i.is_shipyard)
         .unwrap_or(&world.islands[home.island_ids[0] as usize]);
-    // Sit to the south of the isle (so the SE sun lights its face) and look north.
-    let start = Vec2::new(start_isle.pos.x, start_isle.pos.y - (start_isle.radius + 360.0));
+    // Sit to the south of the isle (so the SE sun lights its face) and look north,
+    // just inside dock range (radius + 250) so the captain can tie up right away.
+    let start = Vec2::new(start_isle.pos.x, start_isle.pos.y - (start_isle.radius + 200.0));
     let mut kin = Kinematics::still(start, start.bearing_to(start_isle.pos));
 
     // The persisted voyage: gold, cargo, the hold, the hull, and where we are.
@@ -515,10 +517,13 @@ async fn main() {
         let purse = format!("Gold {}  ·  Hold {}/{}", gs.gold, gs.hold_used(), gs.hold_capacity);
         draw_text(&purse, 16.0, 76.0, 22.0, Color::new(1.0, 0.92, 0.6, 1.0));
 
+        // The destinations of every accepted contract, marked on the charts.
+        let mission_targets: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+
         // Always-on corner chart: the local cluster, top-right.
         let map_size = (h * 0.24).clamp(140.0, 200.0);
         let map_rect = Rect::new(w - map_size - 16.0, 16.0, map_size, map_size);
-        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &[]);
+        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &mission_targets, None);
 
         // The captain's log, flipped open over the scene.
         if log_open {
@@ -530,6 +535,7 @@ async fn main() {
                 day,
                 sea,
                 storm,
+                &mission_targets,
                 w,
                 h,
             );
