@@ -28,8 +28,9 @@ while keeping the game's mechanics and feel.
 | `shared/Sailing.scala` (`Kinematics`,`Ship`,`Projection`) | `src/sailing.rs`, `src/projection.rs` | physics + camera constants |
 | `shared/Daytime.scala` + sea/sky palettes | `src/palette.rs` | time-of-day colour |
 | `shared/World.scala` (`WorldGen`) | `src/world.rs` | clusters/islands generation |
-| `shared/{GameState,Goods,Trade,Upgrades,Hull}.scala` | `src/game_state.rs` | voyage state + port economy (markets, trade, upgrades, repair) |
-| `client/PortView.scala` + docking (`SailingView`) | `src/port_view.rs` | docking handshake + Market/Shipyard overlay |
+| `shared/{GameState,Goods,Trade,Upgrades,Hull}.scala` | `src/game_state.rs` | voyage state + port economy (markets, trade, upgrades, repair, missions) |
+| `shared/Mission.scala` (`Mission`,`Missions`) | `src/mission.rs` | haulage contracts: board generation, accept/deliver/abandon |
+| `client/PortView.scala` + docking (`SailingView`) | `src/port_view.rs` | docking handshake + Market/Contracts/Shipyard overlay |
 | `shared/Islands.scala` (`IsleFeatures`) | `src/isle_features.rs` | per-island scenery scatter |
 | `client/OceanRenderer.scala` | `src/ocean_renderer.rs` | wave mesh + island depth-interleave |
 | `client/IslandFloorRenderer.scala` + billboards | `src/islands_render.rs` | low-poly islands + features |
@@ -119,6 +120,16 @@ while keeping the game's mechanics and feel.
   Esc sets sail). The rig's **top speed now scales** with sail upgrades and the
   weight in the hold (`upgrades::speed_scale` → `sailing::step_scaled`), so a
   full hold crawls until the sails are upgraded. Purse + hold shown on the HUD.
+- **Missions** — `mission.rs` + `port_view.rs` Contracts tab: a faithful
+  `shared.Mission`/`Missions` port. Each port deterministically offers 3 haulage
+  contracts (same RNG draw order: seed `world.seed ^ id*GOLDEN ^ 0x5f3759df`, per
+  slot `pick(good)`/`pick(target)`/`between(5,15)`) targeting other ports *in the
+  same cluster*; reward scales with goods value + haul distance, deposit is value
+  +10% (closes the accept-abandon-sell arbitrage). Accepting pays the deposit and
+  loads mission-bound cargo (occupies hold, can't be sold); the Contracts tab also
+  lists deliveries owed at this port (return deposit + reward, free the hold) and
+  the hold manifest of reserved cargo bound elsewhere (Abandon → keep goods as
+  sellable cargo, forfeit deposit/reward). The port chart rings target islands.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -157,8 +168,6 @@ Roughly in suggested build order; each is a milestone.
   top speed; laden-hull speed penalty via `step_scaled`.
 - **Drydock / hull repair** (`Hull.scala`): 🟡 repair UI works at every port, but no
   damage source yet — wire storm/starvation wear so the hull actually wants mending.
-- **Missions** (`Mission.scala`, `client/MissionMapView.scala`): haulage contracts,
-  deposits, delivery, mission-bound cargo. Port board has no Contracts tab yet.
 - **Races** (`Race.scala`): wager races vs a computer rival; rival ship rendering
   (`ship-bow/stern.svg`) + banners.
 - **Hull & rations** (`Hull.scala`): hull integrity worn by storms/starvation, slow
