@@ -113,7 +113,7 @@ const CAM_ROLL_MAX_DEG: f32 = 14.0; // clamp, so the over-scan margin always cov
 // fore-aft pitch (`ocean::pitch_response`), pushed well past a true camera pitch so
 // a swell reads as a drastic glance up the face and a steep plunge down the back.
 const PITCH_LOOK_GAIN: f32 = 650.0; // px the horizon shifts per rad of shaped pitch
-const CAMERA_DIVE_EXTRA: f32 = 1.6; // extra camera-only gain on the downward glance
+const CAMERA_DIVE_EXTRA: f32 = 1.0; // extra camera-only gain on the downward glance (1.0 = symmetric)
 const CAM_PITCH_MAX: f32 = 170.0; // clamp, so the over-scan margin always covers
 const CAM_YAW_PX: f32 = 70.0; // px the view swings per rad of hull yaw
 const CAM_YAW_MAX: f32 = 42.0;
