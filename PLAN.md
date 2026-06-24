@@ -28,6 +28,8 @@ while keeping the game's mechanics and feel.
 | `shared/Sailing.scala` (`Kinematics`,`Ship`,`Projection`) | `src/sailing.rs`, `src/projection.rs` | physics + camera constants |
 | `shared/Daytime.scala` + sea/sky palettes | `src/palette.rs` | time-of-day colour |
 | `shared/World.scala` (`WorldGen`) | `src/world.rs` | clusters/islands generation |
+| `shared/{GameState,Goods,Trade,Upgrades,Hull}.scala` | `src/game_state.rs` | voyage state + port economy (markets, trade, upgrades, repair) |
+| `client/PortView.scala` + docking (`SailingView`) | `src/port_view.rs` | docking handshake + Market/Shipyard overlay |
 | `shared/Islands.scala` (`IsleFeatures`) | `src/isle_features.rs` | per-island scenery scatter |
 | `client/OceanRenderer.scala` | `src/ocean_renderer.rs` | wave mesh + island depth-interleave |
 | `client/IslandFloorRenderer.scala` + billboards | `src/islands_render.rs` | low-poly islands + features |
@@ -106,6 +108,17 @@ while keeping the game's mechanics and feel.
   wind quarter, point of sail, weather, time) beside the chart spread (the
   parchment minimap) captioned with the local waters' name. The vessel/hold/
   bearings pages from the original wait on the GameState/trade/mission ports.
+- **Ports, docking & trade** — `game_state.rs` + `port_view.rs`: a faithful
+  `GameState` (gold, cargo by good, hold capacity, hull, location), deterministic
+  per-island `Market` prices (±45% jitter, same RNG draw order), and `Trade`
+  (buy/fill/dump/sell). Sail in within a port's `dock_range` with the bow pointed
+  at it and the sails struck, press **Space**, and a parchment board opens over
+  the live sea (the world keeps running underneath). Two tabs: **Market**
+  (buy/sell the seven goods) and **Shipyard/Drydock** (mend the hull, and at
+  shipyard ports buy sail/cargo upgrades). Keyboard-driven (arrows + Tab + Enter,
+  Esc sets sail). The rig's **top speed now scales** with sail upgrades and the
+  weight in the hold (`upgrades::speed_scale` → `sailing::step_scaled`), so a
+  full hold crawls until the sails are upgraded. Purse + hold shown on the HUD.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -135,13 +148,17 @@ Roughly in suggested build order; each is a milestone.
   sail flap, win / game-over / transition stings (via macroquad audio).
 
 ### Gameplay systems (logic exists in `shared/`, needs porting + UI)
-- **GameState** (`GameState.scala`): gold, cargo, hold capacity, location, persisted
-  voyage state (separate from per-frame kinematics).
+- **GameState** (`GameState.scala`): ✅ done — `game_state.rs` (gold, cargo, hold,
+  hull, location). Persisted voyage state, separate from per-frame kinematics.
 - **Ports & docking + trade** (`Goods.scala`, `Trade.scala`, `Market`, `client/PortView.scala`):
-  dock within `dock_range`, buy/sell at deterministic per-port prices.
-- **Upgrades** (`Upgrades.scala`): shipyard sail/cargo upgrades; laden-hull speed penalty.
+  ✅ done — `game_state.rs` + `port_view.rs`. Dock within `dock_range`; buy/sell at
+  deterministic per-port prices.
+- **Upgrades** (`Upgrades.scala`): ✅ done — shipyard sail/cargo upgrades wired into
+  top speed; laden-hull speed penalty via `step_scaled`.
+- **Drydock / hull repair** (`Hull.scala`): 🟡 repair UI works at every port, but no
+  damage source yet — wire storm/starvation wear so the hull actually wants mending.
 - **Missions** (`Mission.scala`, `client/MissionMapView.scala`): haulage contracts,
-  deposits, delivery, mission-bound cargo.
+  deposits, delivery, mission-bound cargo. Port board has no Contracts tab yet.
 - **Races** (`Race.scala`): wager races vs a computer rival; rival ship rendering
   (`ship-bow/stern.svg`) + banners.
 - **Hull & rations** (`Hull.scala`): hull integrity worn by storms/starvation, slow
@@ -163,10 +180,11 @@ Roughly in suggested build order; each is a milestone.
 
 - Run: `cargo run --release` (the dense wave mesh wants release for smooth FPS;
   debug runs but is choppier).
-- Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Q/E**
-  sea-state · **G** storm · **T** daytime · **[ ]** back/veer the wind (dev aid for
-  feeling the points of sail) · **L** open/close the captain's log · **Esc** close
-  the log / quit.
+- Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Space**
+  dock at a port in range (sails struck) · **Q/E** sea-state · **G** storm · **T**
+  daytime · **[ ]** back/veer the wind (dev aid for feeling the points of sail) ·
+  **L** open/close the captain's log · **Esc** close the log / quit. In port: arrows
+  move the cursor, **Tab** switches board, **Enter** trades, **Esc** sets sail.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).
 
