@@ -128,11 +128,19 @@ async fn main() {
     let mut day = Daytime::Day;
     let mut renderer = OceanRenderer::new(day);
 
-    // Build the world and start the captain in the home (centre) cluster's waters,
-    // surrounded by its archipelago.
+    // Build the world and start the captain just off the home cluster's shipyard
+    // port, bow pointed at it, so there's land in view from the first frame.
     let world = world::generate(1);
-    let start = world.cluster_at(Vec2::ZERO).center;
-    let mut kin = Kinematics::still(start, 0.0);
+    let home = world.cluster_at(Vec2::ZERO);
+    let start_isle = home
+        .island_ids
+        .iter()
+        .map(|&id| &world.islands[id as usize])
+        .find(|i| i.is_shipyard)
+        .unwrap_or(&world.islands[home.island_ids[0] as usize]);
+    // Sit to the south of the isle (so the SE sun lights its face) and look north.
+    let start = Vec2::new(start_isle.pos.x, start_isle.pos.y - (start_isle.radius + 360.0));
+    let mut kin = Kinematics::still(start, start.bearing_to(start_isle.pos));
 
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]

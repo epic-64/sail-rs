@@ -117,8 +117,10 @@ fn shade(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &IslandV
 pub fn paint_island(isle: &Island, kin: &Kinematics, v: &IslandView) {
     let dist = kin.pos.distance_to(isle.pos);
     let rel = wrap_angle(kin.pos.bearing_to(isle.pos) - kin.heading_rad);
-    // Skip isles faded out, off to the side, or ones we've sailed onto.
-    if dist > MAX_VIEW || dist < isle.radius * 1.1 || rel.abs() > v.half_fov_h_view * SIDE_CULL {
+    // Skip isles faded out, off to the side, or ones we've sailed inside of (the
+    // ring projection degenerates there). Grounding keeps the hull just outside the
+    // shore radius, so culling only strictly-inside keeps big isles visible up close.
+    if dist > MAX_VIEW || dist < isle.radius || rel.abs() > v.half_fov_h_view * SIDE_CULL {
         return;
     }
     let alpha = clamp((1.0 - dist / MAX_VIEW) * 1.5, 0.0, 1.0);
@@ -181,7 +183,6 @@ pub fn paint_island(isle: &Island, kin: &Kinematics, v: &IslandView) {
             let a = ring_w[lvl][i];
             let b = ring_w[lvl][j];
             let c = ring_w[lvl + 1][j];
-            let d = ring_w[lvl + 1][i];
             let sh = shade(a, b, c, v);
             let color = col(base, sh, alpha);
             draw_triangle(
