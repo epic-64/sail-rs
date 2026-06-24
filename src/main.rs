@@ -26,6 +26,7 @@ mod rng;
 mod sailing;
 mod ship_render;
 mod sound;
+mod weather;
 mod world;
 
 use macroquad::prelude::*;
@@ -38,6 +39,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
+use weather::{Weather, WeatherState};
 use world::Island;
 
 fn window_conf() -> Conf {
@@ -198,8 +200,14 @@ async fn main() {
     // state, plus one-shot cues for wind shifts and trades. Loaded once up front.
     let mut sounds = sound::SoundBank::load().await;
 
-    let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
-    let mut storm: f32 = 0.0; // gale fury [0,1]
+    // The weather drifts automatically along a calm→storm ladder, biased toward
+    // calm so fair seas dominate (see weather.rs). It drives the eased sea-state
+    // (wave height + deck roll) and the sky gloom the storm/fury blend reads off.
+    // Seeded off the world so a chart's weather is reproducible; Q/E nudge it a
+    // step. `sea`/`storm` are refreshed from it at the top of every frame.
+    let mut weather = WeatherState::new(Weather::Clear, world.seed ^ 0x57e4_c107);
+    let mut sea: f32; // sea-state scalar (0 glassy … ~1.3 storm), refreshed each frame
+    let mut storm: f32; // gale fury [0,1], refreshed each frame
 
     // Discrete sail setting, set once with W/S and held. Start furled (None) so the
     // captain raises sail to get under way, just like the original.
@@ -269,6 +277,13 @@ async fn main() {
             last_wind_shift = clock;
             sounds.wind_shift();
         }
+
+        // Drift the weather (whether sailing or docked) and ease the sea-state and
+        // sky gloom it drives, so the waves build/lay down and the sky greys/clears
+        // smoothly across a scenario change rather than snapping.
+        weather.update(dt);
+        sea = weather.sea;
+        storm = weather.fury();
 
         // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
         // the moving sun/moon and light, the blended sea palette and sky gradient,
@@ -432,11 +447,13 @@ async fn main() {
                 log_open = false;
             }
 
-            if is_key_down(KeyCode::E) {
-                sea = (sea + dt * 0.4).min(1.3);
+            // Dev aid: nudge the weather a step calmer (Q) / stormier (E); it keeps
+            // auto-drifting from there. The sea/sky then ease to the new scenario.
+            if is_key_pressed(KeyCode::Q) {
+                weather.nudge_calmer();
             }
-            if is_key_down(KeyCode::Q) {
-                sea = (sea - dt * 0.4).max(0.0);
+            if is_key_pressed(KeyCode::E) {
+                weather.nudge_stormier();
             }
             // Skip the clock forward ~3 hours, to jump ahead through the cycle.
             if is_key_pressed(KeyCode::T) {
@@ -456,13 +473,6 @@ async fn main() {
                 }
             }
         }
-        // Storm fury builds while G is held at sea, and decays otherwise.
-        if !harbor.is_open() && is_key_down(KeyCode::G) {
-            storm = (storm + dt * 0.5).min(1.0);
-        } else {
-            storm = (storm - dt * 0.5).max(0.0);
-        }
-
         // Ride the ambient beds to match the boat's speed and the gale's fury.
         sounds.update(dt, harbor.is_open(), kin.speed() / sailing::KNOT, storm);
 
@@ -655,7 +665,7 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail · A/D helm · Space dock · Q/E sea · G storm · T time · [ ] wind · L log · B bloom · Esc quit",
+            "W/S sail · A/D helm · Space dock · Q/E weather · T time · [ ] wind · L log · B bloom · Esc quit",
             16.0,
             52.0,
             20.0,
@@ -744,8 +754,7 @@ async fn main() {
                 wind,
                 SAIL_NAMES[sail_mode],
                 day,
-                sea,
-                storm,
+                weather.weather.label(),
                 &chart_marks,
                 w,
                 h,
