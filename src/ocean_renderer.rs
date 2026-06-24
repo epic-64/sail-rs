@@ -123,7 +123,15 @@ impl OceanRenderer {
         // distance, while the colour ramp uses the nearer `depth_far`.
         let cols = 60;
         let rows = 104;
-        let f_near = 6.0;
+        // Nearest sampled distance (m). In calm water this row runs off-screen
+        // under the deck, but it must reach close to the bow: when a large crest
+        // rears up a few metres ahead, the water on *its near face* (between the
+        // eye and the crest) fills the screen below the crest line. Sample only
+        // out to ~6m and that face is unmeshed — the flat near-water skirt floods
+        // it as a dark, sine-edged silhouette, as if looking *into* the wave.
+        // Reaching in to ~2.5m meshes that face so it renders as shaded,
+        // foam-flecked bands and the flat skirt retreats to the off-screen sliver.
+        let f_near = 2.5;
         let f_far = 2600.0;
         let live = palette::palette_for(start_day);
         OceanRenderer {
