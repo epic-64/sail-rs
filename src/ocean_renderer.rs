@@ -582,10 +582,17 @@ impl OceanRenderer {
                 b += (glint_b - b) * sp;
             }
             if foam > 0.0 {
-                let tf = foam.min(1.0);
-                r += (foam_r - r) * tf;
-                g += (foam_g - g) * tf;
-                b += (foam_b - b) * tf;
+                // Whitecaps fade into the water as the light fails and take on the
+                // active light's tone, so crests glow with the time of day — warm
+                // at dusk, cool by moonlight — instead of staying pure white over a
+                // dark sea. Only the bright midday sea froths fully white.
+                let tf = (foam * (0.15 + 0.85 * self.light_strength)).min(1.0);
+                let fr = foam_r + (sun_r - foam_r) * 0.32;
+                let fg = foam_g + (sun_g - foam_g) * 0.32;
+                let fb = foam_b + (sun_b - foam_b) * 0.32;
+                r += (fr - r) * tf;
+                g += (fg - g) * tf;
+                b += (fb - b) * tf;
             }
             // Glassy crest fade toward transparent, near bands only.
             let crest_top = clamp(
