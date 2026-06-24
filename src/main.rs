@@ -146,7 +146,7 @@ const CAM_YAW_PX: f32 = 70.0; // px the view swings per rad of hull yaw
 const CAM_YAW_MAX: f32 = 42.0;
 // Wind heel: the press of the sails leans the boat away from the wind, hardest on
 // a beam reach (most side-force) and nil dead before the wind or in irons.
-const HEEL_GAIN: f32 = 0.22; // rad of lean at full sail on a hard beam reach
+const HEEL_GAIN: f32 = 0.11; // rad of lean at full sail on a hard beam reach (kept gentle)
 
 /// The rudder demand from the helm keys: A/D (or arrows) held, [-1, 1].
 /// (`SailingView.heldTurn`.)

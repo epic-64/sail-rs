@@ -114,7 +114,11 @@ pub fn ship_motion(pos: Vec2, heading: f32, t: f32, sea: f32) -> ShipMotion {
     let heave =
         (height(helm + right * HALF_BEAM, t, sea) + height(helm - right * HALF_BEAM, t, sea)) / 2.0;
     let pitch = (z_fore - z_aft).atan2(2.0 * HALF_LENGTH);
-    let roll = (z_stbd - z_port).atan2(2.0 * HALF_BEAM);
+    // Side buoyancy: water risen on one beam lifts that side and rolls the ship
+    // *away* from it — a crest on port heels her to starboard, and vice versa. This
+    // matches the pitch convention above (the high side lifts, like a bow over a
+    // crest); the earlier `z_stbd - z_port` rolled her *into* the swell, backwards.
+    let roll = (z_port - z_stbd).atan2(2.0 * HALF_BEAM);
 
     // Yaw torque from the swell's twist: port-starboard slope at the bow vs the
     // stern; their difference slews the bow off course. Halved to keep it gentle.

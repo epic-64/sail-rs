@@ -73,7 +73,21 @@ pub struct OceanRenderer {
     sss_distort: f32,
     sss_power: f32,
     sss_scale: f32,
+    // Always-on translucent inner glow on crests, independent of back-lighting, so
+    // the top of every wave reads as thin lit water rather than only the back-lit
+    // ones — the signature emerald-through-the-crest look.
+    sss_ambient: f32,
     c_glow: (f32, f32, f32),
+
+    // Sky reflection. The Fresnel term now mirrors the live sky *gradient* — the
+    // reflected view ray's elevation picks horizon vs zenith sky — through a Schlick
+    // curve so flat water is near-transparent and grazing facets near-mirror.
+    fresnel_f0: f32,
+    reflect_strength: f32,
+    // The live sky gradient ends (storm-blended), refreshed each frame so reflections
+    // track the painted sky exactly.
+    sky_horizon: [f32; 3],
+    sky_zenith: [f32; 3],
 
     // Eased palette state.
     live: Palette,
@@ -157,9 +171,14 @@ impl OceanRenderer {
             flow_step: 9.0,
             flow_max_steps: 12,
             sss_distort: 0.35,
-            sss_power: 3.0,
-            sss_scale: 0.7,
-            c_glow: (46.0, 222.0, 168.0),
+            sss_power: 2.6,
+            sss_scale: 0.95,
+            sss_ambient: 0.16,
+            c_glow: (40.0, 232.0, 172.0),
+            fresnel_f0: 0.02,
+            reflect_strength: 0.95,
+            sky_horizon: [0.0; 3],
+            sky_zenith: [0.0; 3],
             live,
             shown: live,
             prev_t: None,
@@ -233,6 +252,21 @@ impl OceanRenderer {
         self.p_sun = self.live_col(12);
         self.p_sky = self.live_col(15);
         self.p_glint = self.live_col(18);
+
+        // The live sky gradient the water reflects: the fair-weather sky for this
+        // daytime, blended toward the storm overcast — matching `main::draw_sky` so
+        // the mirrored sky and the painted sky are the same colours.
+        let storm_c = clamp(storm, 0.0, 1.0);
+        let fair = palette::fair_sky(day);
+        let blend = |a: (f32, f32, f32), b: (f32, f32, f32)| {
+            [
+                a.0 + (b.0 - a.0) * storm_c,
+                a.1 + (b.1 - a.1) * storm_c,
+                a.2 + (b.2 - a.2) * storm_c,
+            ]
+        };
+        self.sky_zenith = blend(fair[0], palette::STORM_SKY[0]);
+        self.sky_horizon = blend(fair[2], palette::STORM_SKY[2]);
 
         let horizon = h * 0.54;
         let px_per_rad = h * 0.85;
@@ -371,7 +405,8 @@ impl OceanRenderer {
         let [mid_r, mid_g, mid_b] = self.p_mid;
         let [far_r, far_g, far_b] = self.p_far;
         let [sun_r, sun_g, sun_b] = self.p_sun;
-        let [sky_r, sky_g, sky_b] = self.p_sky;
+        let [skh_r, skh_g, skh_b] = self.sky_horizon;
+        let [skz_r, skz_g, skz_b] = self.sky_zenith;
         let [glint_r, glint_g, glint_b] = self.p_glint;
         let [foam_r, foam_g, foam_b] = self.p_foam;
         let raw_r = {
@@ -435,11 +470,22 @@ impl OceanRenderer {
             } else {
                 0.0
             };
-            // Fresnel: grazing facets pick up the sky.
+            // Fresnel reflection: grazing facets mirror the sky, head-on facets stay
+            // near-clear, on a Schlick curve (F0≈0.02 for water). The *colour* of the
+            // reflection is the live sky gradient sampled by where the reflected view
+            // ray points — facets tilted to bounce the eye toward the zenith show the
+            // deep sky, those that bounce it along the horizon show the bright band —
+            // so the same chunky facet picks up a different sky tone as it rocks.
             let n_dot_v = clamp(nx * vx + ny * vy + nz * vz, 0.0, 1.0);
             let u = 1.0 - n_dot_v;
             let u2 = u * u;
-            let fres = u2 * u2 * u; // (1 - nDotV)^5
+            let fres = self.fresnel_f0 + (1.0 - self.fresnel_f0) * u2 * u2 * u;
+            // Reflected view ray R = 2(N·V)N − V; its up-component is the elevation we
+            // sample the sky band at (downward bounces, rare on water, read as horizon).
+            let r_up = clamp(2.0 * n_dot_v * nz - vz, 0.0, 1.0).sqrt();
+            let sky_r = skh_r + (skz_r - skh_r) * r_up;
+            let sky_g = skh_g + (skz_g - skh_g) * r_up;
+            let sky_b = skh_b + (skz_b - skh_b) * r_up;
             // Whitecaps: foam on the tallest crests and steepest, breaking faces.
             let crest = clamp(mid_z / max_amp, -1.0, 1.0);
             let steep = clamp(slope_fwd * 1.6, 0.0, 1.0);
@@ -450,14 +496,19 @@ impl OceanRenderer {
             })
             .max(steep * 0.5);
 
-            // Subsurface glow: only reared-up crests with the sun behind them.
+            // Subsurface glow. Two parts, both gated on a reared-up crest (thin water
+            // up top transmits light): a back-lit term that flares where the sun sits
+            // behind the wave and shines through it, plus an always-on inner glow so
+            // every crest reads as translucent lit water, not only the back-lit ones.
+            // The crest's height is the stand-in for how thin/lit the water there is.
             let sss = if crest > 0.0 {
                 let lhx = lx + nx * self.sss_distort;
                 let lhy = ly + ny * self.sss_distort;
                 let lhz = lz + nz * self.sss_distort;
                 let lh_i = 1.0 / (lhx * lhx + lhy * lhy + lhz * lhz).sqrt();
                 let back = clamp(-(vx * lhx + vy * lhy + vz * lhz) * lh_i, 0.0, 1.0);
-                back.powf(self.sss_power) * crest * self.sss_scale
+                let lit = back.powf(self.sss_power) * self.sss_scale + self.sss_ambient;
+                (lit * crest).min(0.85)
             } else {
                 0.0
             };
@@ -471,7 +522,7 @@ impl OceanRenderer {
             r += (sun_r - r) * t_lit;
             g += (sun_g - g) * t_lit;
             b += (sun_b - b) * t_lit;
-            let t_sky = 0.40 * fres;
+            let t_sky = self.reflect_strength * fres;
             r += (sky_r - r) * t_sky;
             g += (sky_g - g) * t_sky;
             b += (sky_b - b) * t_sky;
