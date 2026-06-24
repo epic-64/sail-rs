@@ -245,7 +245,7 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
         for c in 0..GRID_COLS {
             let jx = rng.between(0.15, 0.85);
             let jy = rng.between(0.15, 0.85);
-            let radius = rng.between(80.0, 150.0);
+            let radius = rng.between(140.0, 235.0);
             let relief = rng.between(0.28, 0.5);
             let terrain = *rng.pick(&TERRAINS);
             let port_roll = rng.next_f64();
@@ -259,9 +259,9 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
             // the water (low beaches/atolls), while rocky and volcanic isles rear up
             // into proper hills and cones.
             let height = match terrain {
-                IsleKind::Green | IsleKind::Jungle => 8.0 + radius * relief * 0.18,
-                IsleKind::Rocky => 45.0 + radius * relief * 1.15,
-                IsleKind::Volcanic => 60.0 + radius * relief * 1.05,
+                IsleKind::Green | IsleKind::Jungle => 10.0 + radius * relief * 0.26,
+                IsleKind::Rocky => 50.0 + radius * relief * 1.05,
+                IsleKind::Volcanic => 68.0 + radius * relief * 0.95,
             };
             built.push(Island {
                 id: id_offset + idx,
