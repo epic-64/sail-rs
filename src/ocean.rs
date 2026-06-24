@@ -27,6 +27,20 @@ const AMP: [f32; N] = [1.70, 1.05, 0.55, 0.28];
 const SPEED: [f32; N] = [7.5, 5.5, 4.0, 3.0];
 const PHASE: [f32; N] = [0.0, 1.7, 3.1, 5.2];
 
+// As the sea builds, swells grow *longer* as well as taller: a gale rolls in long
+// ridges, not tall chop. The base wavelengths are stretched by this factor, which
+// climbs with the sea state — so calm water keeps its short ripples while a storm
+// rolls in long. (Phase speed `c = omega/k = SPEED` is unchanged, so crests still
+// travel at the same m/s; only the spatial wavelength stretches.) `sea` is spatially
+// uniform, so this never introduces a seam across the surface.
+const WAVELENGTH_SEA_GAIN: f32 = 0.55;
+
+/// The wavelength multiplier for the current sea state (1.0 glassy … ~1.7 storm).
+#[inline]
+fn wavelength_stretch(sea: f32) -> f32 {
+    1.0 + WAVELENGTH_SEA_GAIN * clamp(sea, 0.0, 1.3)
+}
+
 /// The crest height (m) at full sea state — the sum of every swell's amplitude.
 /// Used to normalise foam/lighting against the tallest possible wave.
 pub const MAX_AMPLITUDE: f32 = AMP[0] + AMP[1] + AMP[2] + AMP[3];
@@ -84,9 +98,10 @@ pub fn deck_heave_px(bow_lift: f32) -> f32 {
 #[inline]
 pub fn height(p: Vec2, t: f32, sea: f32) -> f32 {
     let mut acc = 0.0;
+    let stretch = wavelength_stretch(sea);
     let mut i = 0;
     while i < N {
-        let k = TAU / WAVELENGTH[i];
+        let k = TAU / (WAVELENGTH[i] * stretch);
         let omega = SPEED[i] * k;
         acc += AMP[i] * ((p.x * DIR_X[i] + p.y * DIR_Y[i]) * k - omega * t + PHASE[i]).sin();
         i += 1;
