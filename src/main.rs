@@ -125,13 +125,14 @@ const CAM_YAW_MAX: f32 = 42.0;
 const HEEL_GAIN: f32 = 0.11; // rad of lean at full sail on a hard beam reach (kept gentle)
 
 /// The rudder demand from the helm keys: A/D (or arrows) held, [-1, 1].
-/// (`SailingView.heldTurn`.)
-fn read_turn() -> f32 {
+/// (`SailingView.heldTurn`.) While the log is open the arrows turn its pages, so
+/// only A/D steer — the helm stays live so the captain can hold a course mid-read.
+fn read_turn(log_open: bool) -> f32 {
     let mut turn = 0.0;
-    if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
+    if is_key_down(KeyCode::D) || (!log_open && is_key_down(KeyCode::Right)) {
         turn += 1.0;
     }
-    if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
+    if is_key_down(KeyCode::A) || (!log_open && is_key_down(KeyCode::Left)) {
         turn -= 1.0;
     }
     turn
@@ -214,8 +215,10 @@ async fn main() {
     // captain raises sail to get under way, just like the original.
     let mut sail_mode: usize = 0;
 
-    // Whether the captain's log is flipped open over the scene (toggled with L).
+    // Whether the captain's log is flipped open over the scene (toggled with L),
+    // and which two-page spread it is turned to (paged with the arrow keys).
     let mut log_open = false;
+    let mut log_spread: usize = 0;
     // The always-on corner chart's ink scheme.
     let minimap_pal = minimap::MinimapPalette::hud();
 
@@ -341,11 +344,13 @@ async fn main() {
         } else {
             // Sails are set in discrete notches (W raises, S lowers) — set once, the
             // ship keeps going; only the *first* press of a held key steps the sail.
+            // While the log is open the up/down arrows are reserved (alongside
+            // left/right) for the book, so only W/S work the sail.
             let prev_sail = sail_mode;
-            if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
+            if is_key_pressed(KeyCode::W) || (!log_open && is_key_pressed(KeyCode::Up)) {
                 sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
             }
-            if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
+            if is_key_pressed(KeyCode::S) || (!log_open && is_key_pressed(KeyCode::Down)) {
                 sail_mode = sail_mode.saturating_sub(1);
             }
             // A canvas flap only when the sail actually moved a notch (not when a
@@ -356,7 +361,7 @@ async fn main() {
                 sounds.sail_down();
             }
             helm = Helm {
-                turn: read_turn(),
+                turn: read_turn(log_open),
                 throttle: SAIL_FRACTIONS[sail_mode],
             };
 
@@ -473,6 +478,21 @@ async fn main() {
             }
             if is_key_pressed(KeyCode::L) {
                 log_open = !log_open;
+                // Open the book to its first spread each time (the original rewinds
+                // to spread 0 on close).
+                if log_open {
+                    log_spread = 0;
+                }
+            }
+            // Page the open log with the left/right arrows (no mouse to click the
+            // original's nav arrows). Clamped at the covers — no wrap-around.
+            if log_open {
+                if is_key_pressed(KeyCode::Right) {
+                    log_spread = (log_spread + 1).min(captains_log::NUM_SPREADS - 1);
+                }
+                if is_key_pressed(KeyCode::Left) {
+                    log_spread = log_spread.saturating_sub(1);
+                }
             }
             if is_key_pressed(KeyCode::B) {
                 bloom_on = !bloom_on;
@@ -782,12 +802,15 @@ async fn main() {
         if log_open {
             captains_log::render(
                 &world,
+                &gs,
                 &kin,
                 wind,
                 SAIL_NAMES[sail_mode],
                 day,
                 weather.weather.label(),
                 &chart_marks,
+                log_spread,
+                dt,
                 w,
                 h,
             );

@@ -114,11 +114,18 @@ while keeping the game's mechanics and feel.
   Two ink schemes (`hud` glass / `parchment`). Drawn always-on top-right and inside
   the log. Wind streaks are Liang–Barsky-clipped to the frame (macroquad has no
   canvas clip).
-- **Captain's log** — `captains_log.rs`: a parchment panel flipped open with **L**.
-  A "Course & Conditions" page of live readouts (speed, heading+compass, sail,
-  wind quarter, point of sail, weather, time) beside the chart spread (the
-  parchment minimap) captioned with the local waters' name. The vessel/hold/
-  bearings pages from the original wait on the GameState/trade/mission ports.
+- **Captain's log** — `captains_log.rs`: a parchment book flipped open with **L**
+  and paged with the **arrow keys** (no mouse for the original's nav arrows; the
+  helm stays on A/D so the captain can hold course mid-read). Three two-page
+  spreads, faithful to the original's content (the DOM/CSS 3D page-flip theatrics
+  dropped): **0** "Course & Conditions" live readouts (speed, heading+compass,
+  sail, wind quarter, point of sail, weather, time) beside **The Chart** (the
+  parchment minimap, captioned with the local waters); **1** "The Vessel"
+  (gold, hull % inked by condition, food, max speed, sail haul, overload penalty)
+  beside "The Hold" (laden fraction + fill bar with the overload notch, and the
+  cargo/contract manifest); **2** "Bearings" (each contract's mark, the race mark
+  + VMG, and the nearest shipyard — name & distance) beside "Performance" (FPS +
+  frame time). A footer shows spread dots and the page/close hints.
 - **Ports, docking & trade** — `game_state.rs` + `port_view.rs`: a faithful
   `GameState` (gold, cargo by good, hold capacity, hull, location), deterministic
   per-island `Market` prices (±45% jitter, same RNG draw order), and `Trade`
@@ -189,8 +196,9 @@ Roughly in suggested build order; each is a milestone.
 
 ### Rendering / feel
 - **Automatic daytime cycle** (`shared/Daytime.scala`): advance dawn→day→dusk→night.
-- **HUD**: ✅ live stats live in the **captain's log** (`captains_log.rs`) + the debug
-  line. Still wanting hull bar, gold, cargo — those need the GameState port.
+- **HUD**: ✅ full stats live in the **captain's log** (`captains_log.rs`) — course,
+  vessel (gold/hull/food/rig), hold manifest, bearings, performance — plus the
+  corner chart and the gold/hold line on the debug HUD.
 - **Minimap** (`client/MinimapRenderer.scala`): ✅ done — `minimap.rs`, always-on
   corner chart + the log's parchment chart.
 - **Audio**: wire the copied `assets/sounds/*` — sailing music, calm/storm ambience,
@@ -234,7 +242,8 @@ Roughly in suggested build order; each is a milestone.
   dock at a port in range (sails struck) · **Q/E** nudge the weather calmer/stormier
   (it auto-drifts) · **T** daytime · **[ ]** back/veer the wind (dev aid for feeling
   the points of sail) ·
-  **L** open/close the captain's log · **Esc** close the log / quit. In port: arrows
+  **L** open/close the captain's log (**←/→** turn its pages while open) · **Esc**
+  close the log / quit. In port: arrows
   move the cursor, **Tab** switches board, **Enter** trades, **Esc** sets sail.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).
