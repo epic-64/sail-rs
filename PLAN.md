@@ -93,8 +93,17 @@ while keeping the game's mechanics and feel.
   cloth panels. The whole assembly sways as a rigid body with the swell (heave/
   pitch/roll/yaw, deck-share split, roll/yaw low-passed), and the **rig
   articulates**: the yard braces about the mast, the sail bellies into a parabolic
-  draft, and luffs (a travelling flog) when starved of wind. Rebuilt as geometry,
-  *not* the original's `deck*.png` + CSS `perspective()`/`rotateY` transforms.
+  draft, and luffs (a travelling flog) when starved of wind. The chosen sail notch
+  (None/Half/Full) is **eased visually** (`ShipRenderer::set`/`SET_EASE`) so the
+  canvas furls/unfurls smoothly instead of teleporting; the physics throttle still
+  steps at once. Rebuilt as geometry, *not* the original's `deck*.png` + CSS
+  `perspective()`/`rotateY` transforms.
+- **Bow spray** — `spray.rs`: screen-space foam particles flung up off the stem and
+  the two bow shoulders, drawn over the deck so they sit in front of the bow. A small
+  xorshift RNG jitters each droplet; they launch up/outward, arc under gravity and
+  fade. Emission strengthens with **speed** (the standing bow wave) and **bursts**
+  on a wave slam — frontal (the bow's downward heave rate, `SLAM_REF`) or side (a
+  hard, fast roll throws extra off the lee shoulder). A new feature, not in the original.
 - **Camera ride + wind heel** — `main.rs`: the whole world (sky, sun, waves,
   islands) is drawn through a `Camera2D` that *rides* the swell — it tilts the
   horizon opposite the hull's lean (the sea stays level while the captain heels),

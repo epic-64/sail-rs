@@ -27,6 +27,7 @@ mod rng;
 mod sailing;
 mod ship_render;
 mod sound;
+mod spray;
 mod trader;
 mod weather;
 mod world;
@@ -41,6 +42,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
+use spray::{Spray, SprayInput};
 use weather::{Weather, WeatherState};
 use world::Island;
 
@@ -245,6 +247,15 @@ async fn main() {
     const ROLL_EASE: f32 = 2.2;
     const PITCH_EASE: f32 = 2.6;
     const HEEL_EASE: f32 = 1.1; // the boat leans into / out of the heel gradually
+
+    // Bow spray: foam off the stem and shoulders, stronger with speed and bursting
+    // when the bow slams into a sea. `prev_bow_lift`/`prev_lean` give the frame-to-
+    // frame rates that read as a frontal / side wave impact (`SLAM_REF` = m/s of
+    // bow drop that counts as a full frontal slam).
+    let mut spray = Spray::new();
+    let mut prev_bow_lift: f32 = 0.0;
+    let mut prev_lean: f32 = 0.0;
+    const SLAM_REF: f32 = 7.0;
 
     // The racing rival's live kinematics once it is on the water (`None` = no race
     // afoot or not yet cast off). The race runs in two stages so the rival never
@@ -553,6 +564,13 @@ async fn main() {
             sea,
         );
         let bow_lift = bow_z - motion.heave;
+        // Frontal slam: how fast the bow is dropping into the sea this frame (m/s of
+        // downward bow travel), normalised — a hard plunge into a wave face bursts
+        // the spray. Only the downward half counts (the bow climbing throws nothing).
+        let dt_safe = dt.max(1.0 / 240.0);
+        let bow_vel = (bow_lift - prev_bow_lift) / dt_safe;
+        prev_bow_lift = bow_lift;
+        let slam = clamp(-bow_vel / SLAM_REF, 0.0, 1.0);
         let wind_rel = wrap_angle(wind.toward_rad - kin.heading_rad);
         // Wind heel: the sails' press leans the boat away from the wind, hardest on
         // a beam reach (most side-force) and nil dead before it or in irons. The sign
@@ -571,6 +589,10 @@ async fn main() {
         // and yaw nod and swing the view. This is the camera "ride" the whole world
         // is drawn through, so sky, sun, waves and islands rock together as one.
         let lean = smooth_roll + smooth_heel;
+        // Side slam: how fast she is rolling this frame (rad/s, signed) — a hard,
+        // quick roll into a sea throws spray off the lee shoulder.
+        let heel_rate = (lean - prev_lean) / dt_safe;
+        prev_lean = lean;
         let cam_roll_deg = clamp(
             -lean.to_degrees() * CAM_ROLL_GAIN,
             -CAM_ROLL_MAX_DEG,
@@ -723,6 +745,23 @@ async fn main() {
             wind_rel,
             bow_lift,
         };
+        // --- Bow spray ---------------------------------------------------------
+        // Foam torn off the bow, drawn *before* the deck so the hull occludes the
+        // droplets behind it — only the spray rising above and outboard of the bow
+        // shows. Strengthens with speed (the standing bow wave) and bursts on a
+        // frontal slam or a hard roll into a sea.
+        spray.render(
+            &SprayInput {
+                speed_frac: clamp(kin.speed() / sailing::MAX_SPEED, 0.0, 1.0),
+                slam,
+                heel_rate,
+                day_lit,
+            },
+            dt,
+            w,
+            h,
+        );
+
         ship.render(&rig, dt, t, day_lit, storm, w, h);
 
         // --- HUD ---------------------------------------------------------------
