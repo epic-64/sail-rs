@@ -23,7 +23,7 @@
 use macroquad::prelude::*;
 
 use crate::geometry::clamp;
-use crate::ocean::ShipMotion;
+use crate::ocean::{deck_heave_px, pitch_response, ShipMotion, HEAVE_CAMERA_SHARE};
 use crate::palette::Daytime;
 use crate::sailing::wind_factor_rel;
 
@@ -43,9 +43,6 @@ const WHEEL_EASE: f32 = 5.0; // 1/s the wheel chases the rudder input
 // --- How the swell's sway is split (the deck takes the bulk) ------------------
 const DECK_SHARE: f32 = 0.6;
 const YAW_SWAY_PX: f32 = 180.0; // px of pan per rad of hull yaw
-const PITCH_CLIMB: f32 = 1.3;
-const PITCH_DIVE: f32 = 2.0;
-const PITCH_DIVE_KNEE: f32 = 0.12; // rad of bow-down at which the dive boost is full
 
 // Gentle perspective focal length (px) for the rig's local 3-D, matched to the
 // original's 1600px so the belly and brace stay shallow, not fish-eyed.
@@ -73,6 +70,9 @@ pub struct RigInput {
     pub turn: f32,
     /// Wind bearing relative to the bow: `wrap(toward - heading)`, 0 = tailwind.
     pub wind_rel: f32,
+    /// The bow's lift above the hull's mean this frame (metres) — drives the deck's
+    /// heave bob (`crate::ocean::deck_heave_px`).
+    pub bow_lift: f32,
 }
 
 /// Holds the eased animation state (wheel spin, yard brace) between frames.
@@ -85,14 +85,6 @@ pub struct ShipRenderer {
 fn rgba(c: [f32; 3], shade: f32, a: f32) -> Color {
     Color::new(c[0] / 255.0 * shade, c[1] / 255.0 * shade, c[2] / 255.0 * shade, a)
 }
-
-/// The bow's shaped answer to the swell: it climbs a wave gently but noses down
-/// hard into the trough, eased in with depth so it stays smooth through the crest.
-fn pitch_response(pitch: f32) -> f32 {
-    let dive = clamp(-pitch / PITCH_DIVE_KNEE, 0.0, 1.0);
-    pitch * (PITCH_CLIMB + (PITCH_DIVE - PITCH_CLIMB) * dive)
-}
-
 
 impl ShipRenderer {
     pub fn new() -> Self {
@@ -138,7 +130,11 @@ impl ShipRenderer {
         // pitches through the swell. Heave stays as the only pure vertical slide.
         let pitch_ang = pitch_response(m.pitch) * DECK_SHARE;
         let dx = m.yaw * YAW_SWAY_PX * DECK_SHARE;
-        let dy = m.heave * 6.0 * DECK_SHARE;
+        // The deck's heave bob is the deck's share of the bow's lift above the mean
+        // (the camera cranes the rest — see main.rs). This replaces the old flat
+        // `heave · 6px`, which was far too little and read as the planks flying over
+        // the sea. Bow-up (positive lift) → negative px → the deck rises.
+        let dy = deck_heave_px(rig.bow_lift) * (1.0 - HEAVE_CAMERA_SHARE);
         // Pivot well below the screen so the tall mast arcs as the hull rolls.
         let pvx = w * 0.5;
         let pvy = h * 1.15;
