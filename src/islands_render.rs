@@ -3,33 +3,39 @@
 //! flat-shaded geometry that matches the faceted wave mesh.
 //!
 //! Each island is a floor disc lying on the sea (a foreshortened ellipse, ported
-//! from `IslandFloorRenderer`) plus a faceted "mound" body — concentric rings
-//! from the shore up to a summit, triangulated and flat-shaded against the sun in
-//! world space. Mechanics are unchanged: islands are placed and sized by
-//! `WorldGen`, sit on the waterline at their own distance (so they parallax as
-//! you sail around), and ride the swell by the same heave the sea uses.
+//! from `IslandFloorRenderer`) plus a faceted landmass body. The body is no
+//! longer a single circular cone: it is a polar **heightfield** ([`IsleTerrain`])
+//! whose coastline lumps in and out (lobes, inlets, peninsulas — a more complex
+//! shape than one circle) and whose surface rises into one or several **hills**
+//! (a sum of Gaussian peaks), flat-shaded against the sun in world space.
+//! Mechanics are unchanged: islands are placed and sized by `WorldGen`, sit on
+//! the waterline at their own distance (so they parallax as you sail around), and
+//! ride the swell by the same heave the sea uses. The grounding circle is still
+//! `isle.radius`; the lumpy coast stays inside it, so collision is unaffected.
 //!
 //! Correct wave occlusion is handled by the caller ([`OceanRenderer::render`]),
 //! which draws each island *between* the wave bands by distance — so a near crest
-//! rolls in front of a far island's base while its summit stands clear.
+//! rolls in front of a far island's base while its summit stands clear. Within an
+//! island the mound triangles are depth-sorted, and scenery on the far slopes is
+//! culled where a hill stands between it and the eye.
 
 use macroquad::prelude::*;
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::isle_features::{FeatureKind, IsleFeature};
 use crate::projection::{BASE_EYE, EYE_HEIGHT, MAX_VIEW, SHORE_LIFT};
+use crate::rng::Rng;
 use crate::sailing::Kinematics;
 use crate::world::{Island, IsleKind};
 
-const FLOOR_SEG: usize = 44; // floor ellipse: smooth
-const MOUND_SEG: usize = 22; // landmass body: chunky low-poly facets
+use std::f32::consts::TAU;
+
+const FLOOR_SEG: usize = 48; // floor ellipse: smooth
+const MOUND_SEG: usize = 40; // landmass body: angular facets around the coast
 const SIDE_CULL: f32 = 1.6; // how far off-axis an isle may sit before it's skipped
 const AMBIENT: f32 = 0.45; // floor of the directional shading
 
-// Mound profile: (radius fraction of shore, height fraction of summit). The foot
-// ring sits on the waterline; inner rings climb to the apex.
-const RINGS: [(f32, f32); 3] = [(0.98, 0.0), (0.62, 0.46), (0.32, 0.80)];
-
+const GOLDEN: i64 = 0x9e3779b97f4a7c15u64 as i64;
 const SHADOW: [f32; 3] = [8.0, 40.0, 30.0];
 
 /// Camera/view parameters shared with the wave renderer for one frame.
@@ -47,6 +53,169 @@ pub struct IslandView {
     /// night), multiplied into every facet so the isle darkens to a moonlit
     /// silhouette after dusk.
     pub light: f32,
+}
+
+// --- Terrain heightfield -----------------------------------------------------
+
+/// One Gaussian hill: a bump centred at `off` (m from the island centre) rising
+/// `height` m, with `sigma` the metric width of its skirt.
+#[derive(Clone, Copy)]
+struct Peak {
+    off: Vec2,
+    height: f32,
+    sigma: f32,
+}
+
+/// A deterministic per-island terrain: a lumpy coastline (mean radius modulated
+/// by a few low-frequency lobes) and a height surface that is the sum of one or
+/// more Gaussian hills, faded to sea level at the shore. Built fresh each frame
+/// from the island's id + position, so a given chart always grows the same shape
+/// without threading the world seed through the renderer.
+struct IsleTerrain {
+    center: Vec2,
+    radius: f32,
+    base: f32,
+    lobes: [(f32, f32, f32); 3], // (frequency, amplitude, phase)
+    peaks: Vec<Peak>,
+    /// Surface below this elevation (m) reads as beach/rock rim, above as foliage.
+    beach: f32,
+    /// Radial mesh resolution (ring count from centre to coast).
+    rings: usize,
+}
+
+impl IsleTerrain {
+    fn for_island(isle: &Island) -> IsleTerrain {
+        // Vary the shape by both island id and its (seed-dependent) position, so
+        // different worlds grow different coastlines for the same slot.
+        let bits = (isle.id as i64).wrapping_mul(GOLDEN)
+            ^ (isle.pos.x.to_bits() as i64)
+            ^ ((isle.pos.y.to_bits() as i64) << 21);
+        let mut rng = Rng::from_seed(bits);
+        let r = isle.radius;
+        let h = isle.height;
+        let tau = TAU as f64;
+
+        // Coastline lobes: low frequencies dominate so the outline reads as a few
+        // broad bays and headlands rather than noise. Amplitudes sum below `base`'s
+        // headroom (≈0.18) so the coast never pushes past `radius` (the grounding
+        // circle); the mean pulls in to ~0.82·radius, giving inlets that bite in.
+        let lobes = [
+            (2.0, rng.between(0.06, 0.13) as f32, rng.between(0.0, tau) as f32),
+            (3.0, rng.between(0.04, 0.09) as f32, rng.between(0.0, tau) as f32),
+            (5.0, rng.between(0.02, 0.05) as f32, rng.between(0.0, tau) as f32),
+        ];
+
+        // A small offset near the centre for the main summit, so the peak isn't
+        // dead-centred.
+        let peak = |rng: &mut Rng, rad_lo: f32, rad_hi: f32, height: f32, sig: f32| -> Peak {
+            let a = rng.between(0.0, tau) as f32;
+            let rad = rng.between(rad_lo as f64, rad_hi as f64) as f32 * r;
+            Peak {
+                off: Vec2::new(a.cos() * rad, a.sin() * rad),
+                height,
+                sigma: sig * r,
+            }
+        };
+
+        let mut peaks = Vec::new();
+        match isle.terrain {
+            IsleKind::Volcanic => {
+                // A single steep cone.
+                peaks.push(peak(&mut rng, 0.0, 0.08, h, 0.28));
+                // An optional lower shoulder.
+                if rng.next_f64() < 0.5 {
+                    peaks.push(peak(&mut rng, 0.20, 0.40, h * 0.45, 0.22));
+                }
+            }
+            IsleKind::Rocky => {
+                // A craggy ridge of two to three hills of differing height.
+                peaks.push(peak(&mut rng, 0.0, 0.16, h, 0.34));
+                let extra = rng.int_between(1, 3);
+                for _ in 0..extra {
+                    let hh = rng.between(0.45, 0.78) as f32 * h;
+                    peaks.push(peak(&mut rng, 0.20, 0.46, hh, 0.26));
+                }
+            }
+            IsleKind::Green | IsleKind::Jungle => {
+                // Gentle rolling rises.
+                peaks.push(peak(&mut rng, 0.0, 0.18, h, 0.48));
+                if rng.next_f64() < 0.7 {
+                    let hh = rng.between(0.45, 0.8) as f32 * h;
+                    peaks.push(peak(&mut rng, 0.22, 0.46, hh, 0.4));
+                }
+            }
+        }
+
+        let tall = matches!(isle.terrain, IsleKind::Rocky | IsleKind::Volcanic);
+        IsleTerrain {
+            center: isle.pos,
+            radius: r,
+            base: 0.82,
+            lobes,
+            peaks,
+            beach: (h * 0.06).max(1.4),
+            rings: if tall { 9 } else { 7 },
+        }
+    }
+
+    /// Shore radius (m) in compass-free local angle `a` (atan2(y, x)).
+    #[inline]
+    fn coast_radius(&self, a: f32) -> f32 {
+        let mut s = self.base;
+        for &(f, amp, ph) in &self.lobes {
+            s += amp * (f * a + ph).sin();
+        }
+        self.radius * s.max(0.3)
+    }
+
+    /// Surface elevation (m above sea) at a world point, 0 outside the coast.
+    #[inline]
+    fn elevation_at(&self, p: Vec2) -> f32 {
+        let local = p - self.center;
+        let dist = local.length();
+        let a = local.y.atan2(local.x);
+        let rc = self.coast_radius(a);
+        if dist >= rc {
+            return 0.0;
+        }
+        let mut field = 0.0;
+        for pk in &self.peaks {
+            let dx = local.x - pk.off.x;
+            let dy = local.y - pk.off.y;
+            let d2 = dx * dx + dy * dy;
+            field += pk.height * (-d2 / (2.0 * pk.sigma * pk.sigma)).exp();
+        }
+        // Smooth fade to sea level over the outer fifth so the shore lies flat.
+        let mut edge = ((rc - dist) / (rc * 0.22)).clamp(0.0, 1.0);
+        edge = edge * edge * (3.0 - 2.0 * edge);
+        field * edge
+    }
+
+    /// Is a feature standing at `wp` (foot elevation `foot_z`) hidden behind the
+    /// island's own terrain from the camera at `kin.pos`? Marches a few samples
+    /// along the eye→feature ray (only the part nearer than the feature) and asks
+    /// whether the terrain there projects *above* the feature's foot on screen.
+    /// This replaces the old "tall isle, far hemisphere" heuristic and works for
+    /// flat and hilly islands alike — a hummock can hide scenery just behind it.
+    fn occluded(&self, wp: Vec2, foot_z: f32, kin: &Kinematics, v: &IslandView) -> bool {
+        let foot_y = project(wp, foot_z, false, kin, v).1;
+        let to_cam = kin.pos - wp;
+        const N: usize = 5;
+        for s in 1..=N {
+            let frac = s as f32 / (N as f32 + 1.0);
+            let sp = wp + to_cam * frac;
+            let z = self.elevation_at(sp);
+            if z <= foot_z + 1.0 {
+                continue;
+            }
+            let ty = project(sp, z, false, kin, v).1;
+            // Smaller screen-y is higher up: terrain crests above the foot occludes.
+            if ty < foot_y - 1.5 {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Sand-rim and foliage-interior colours per archetype (matches the original).
@@ -73,19 +242,12 @@ fn col(base: [f32; 3], shade: f32, alpha: f32) -> Color {
 /// waterline eye (so the shore matches the floor disc and the sea); otherwise the
 /// real eye height (so summits sit where the billboards used to).
 #[inline]
-fn project(
-    wp: Vec2,
-    z: f32,
-    waterline: bool,
-    kin: &Kinematics,
-    v: &IslandView,
-) -> (f32, f32) {
+fn project(wp: Vec2, z: f32, waterline: bool, kin: &Kinematics, v: &IslandView) -> (f32, f32) {
     let d = kin.pos.distance_to(wp).max(1.0);
     let rp = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
     let sx = v.w * 0.5 + rp * v.px_per_rad_h;
     let sy = if waterline {
-        v.horizon
-            + (((BASE_EYE + v.eye_rise) / d).atan() - (SHORE_LIFT / d).atan()) * v.px_per_rad
+        v.horizon + (((BASE_EYE + v.eye_rise) / d).atan() - (SHORE_LIFT / d).atan()) * v.px_per_rad
     } else {
         v.horizon - ((z - EYE_HEIGHT - v.eye_rise) / d).atan() * v.px_per_rad
     };
@@ -119,23 +281,16 @@ fn shade(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &IslandV
     AMBIENT + (1.0 - AMBIENT) * diff
 }
 
-/// Surface elevation fraction (0..1 of summit height) at radial distance `t`
-/// (0..1 of shore radius) on the mound — used to stand features on the slope.
-fn mound_h_frac(t: f32) -> f32 {
-    let lerp = |a: f32, b: f32, x: f32| a + (b - a) * x;
-    if t >= 0.98 {
-        0.0
-    } else if t >= 0.62 {
-        lerp(0.0, 0.46, (0.98 - t) / (0.98 - 0.62))
-    } else if t >= 0.32 {
-        lerp(0.46, 0.80, (0.62 - t) / (0.62 - 0.32))
-    } else {
-        lerp(0.80, 1.0, (0.32 - t) / 0.32)
-    }
+/// One ready-to-draw, depth-keyed mound triangle. Screen points are kept as plain
+/// (x, y) tuples (the name `Vec2` here is our world-chart vector, not glam's).
+struct Tri {
+    key: f32, // distance from camera to world centroid (sort key, far → near)
+    p: [(f32, f32); 3],
+    color: Color,
 }
 
-/// Draw one island (floor disc + faceted mound + features), or nothing if out of
-/// view.
+/// Draw one island (floor disc + faceted heightfield + features), or nothing if
+/// out of view.
 pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v: &IslandView) {
     let dist = kin.pos.distance_to(isle.pos);
     let rel = wrap_angle(kin.pos.bearing_to(isle.pos) - kin.heading_rad);
@@ -147,13 +302,15 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     }
     let alpha = clamp((1.0 - dist / MAX_VIEW) * 1.5, 0.0, 1.0);
     let (sand, foliage) = palette(isle);
+    let terrain = IsleTerrain::for_island(isle);
 
-    // --- Floor disc: shadow, sand rim, foliage interior (waterline rings) ----
+    // --- Floor disc: shadow + sand rim, following the lumpy coast -------------
     let mut xs = [0.0f32; FLOOR_SEG];
     let mut ys = [0.0f32; FLOOR_SEG];
-    let mut floor_ring = |r: f32, color: Color| {
+    let mut floor_ring = |scale: f32, color: Color| {
         for i in 0..FLOOR_SEG {
-            let a = i as f32 / FLOOR_SEG as f32 * std::f32::consts::TAU;
+            let a = i as f32 / FLOOR_SEG as f32 * TAU;
+            let r = terrain.coast_radius(a) * scale;
             let wp = Vec2::new(isle.pos.x + a.cos() * r, isle.pos.y + a.sin() * r);
             let (sx, sy) = project(wp, 0.0, true, kin, v);
             xs[i] = sx;
@@ -161,96 +318,85 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
         fill_poly(&xs, &ys, color);
     };
-    floor_ring(isle.radius * 1.06, col(SHADOW, v.light, alpha * 0.45));
-    floor_ring(isle.radius * 0.98, col(sand, v.light, alpha));
-    floor_ring(isle.radius * 0.70, col(foliage, v.light, alpha));
+    floor_ring(1.10, col(SHADOW, v.light, alpha * 0.45));
+    floor_ring(1.0, col(sand, v.light, alpha));
 
-    // --- Faceted mound body --------------------------------------------------
-    let h = isle.height;
-    // Screen + world coords of each ring's vertices, plus the apex.
-    let mut ring_sx = [[0.0f32; MOUND_SEG]; 3];
-    let mut ring_sy = [[0.0f32; MOUND_SEG]; 3];
-    let mut ring_w = [[(0.0f32, 0.0f32, 0.0f32); MOUND_SEG]; 3];
-    for (ri, &(rfrac, hfrac)) in RINGS.iter().enumerate() {
-        let r = isle.radius * rfrac;
-        let z = h * hfrac;
+    // --- Faceted heightfield body --------------------------------------------
+    // Build a polar grid (rings × segments) of world (x, y, z) + screen points,
+    // then triangulate the strips and depth-sort so near facets overlay far ones
+    // without a depth buffer — robust even with several hills.
+    let levels = terrain.rings + 1; // level 0 = centre, level `rings` = coast
+    let mut wpz = vec![[(0.0f32, 0.0f32, 0.0f32); MOUND_SEG]; levels];
+    let mut scr = vec![[(0.0f32, 0.0f32); MOUND_SEG]; levels];
+    for lvl in 0..levels {
+        let t = lvl as f32 / terrain.rings as f32;
         for i in 0..MOUND_SEG {
-            let a = i as f32 / MOUND_SEG as f32 * std::f32::consts::TAU;
+            let a = i as f32 / MOUND_SEG as f32 * TAU;
+            let r = terrain.coast_radius(a) * t;
             let wp = Vec2::new(isle.pos.x + a.cos() * r, isle.pos.y + a.sin() * r);
-            let (sx, sy) = project(wp, z, hfrac == 0.0, kin, v);
-            ring_sx[ri][i] = sx;
-            ring_sy[ri][i] = sy;
-            ring_w[ri][i] = (wp.x, wp.y, z);
+            // Pin the outermost ring to sea level so the shore meets the floor disc.
+            let z = if lvl == levels - 1 {
+                0.0
+            } else {
+                terrain.elevation_at(wp)
+            };
+            wpz[lvl][i] = (wp.x, wp.y, z);
+            scr[lvl][i] = project(wp, z, z < 0.5, kin, v);
         }
     }
-    let (apex_sx, apex_sy) = project(isle.pos, h, false, kin, v);
-    let apex_w = (isle.pos.x, isle.pos.y, h);
 
-    // Painter's order within the island: draw slices back-to-front so the front
-    // facets overlay the far side without any depth buffer.
-    let mut order: [usize; MOUND_SEG] = [0; MOUND_SEG];
-    for (i, slot) in order.iter_mut().enumerate() {
-        *slot = i;
-    }
-    order.sort_by(|&a, &b| {
-        let da = kin.pos.distance_to(Vec2::new(ring_w[0][a].0, ring_w[0][a].1));
-        let db = kin.pos.distance_to(Vec2::new(ring_w[0][b].0, ring_w[0][b].1));
-        db.partial_cmp(&da).unwrap()
-    });
-
-    for &i in order.iter() {
-        let j = (i + 1) % MOUND_SEG;
-        // Bottom strip (shore→ring1): sandy. Upper strip (ring1→ring2): foliage.
-        for (lvl, base) in [(0usize, sand), (1usize, foliage)] {
-            let a = ring_w[lvl][i];
-            let b = ring_w[lvl][j];
-            let c = ring_w[lvl + 1][j];
-            let sh = shade(a, b, c, v);
-            let color = col(base, sh * v.light, alpha);
-            draw_triangle(
-                vec2(ring_sx[lvl][i], ring_sy[lvl][i]),
-                vec2(ring_sx[lvl][j], ring_sy[lvl][j]),
-                vec2(ring_sx[lvl + 1][j], ring_sy[lvl + 1][j]),
-                color,
-            );
-            draw_triangle(
-                vec2(ring_sx[lvl][i], ring_sy[lvl][i]),
-                vec2(ring_sx[lvl + 1][j], ring_sy[lvl + 1][j]),
-                vec2(ring_sx[lvl + 1][i], ring_sy[lvl + 1][i]),
-                color,
-            );
+    let mut tris: Vec<Tri> = Vec::with_capacity(terrain.rings * MOUND_SEG * 2);
+    let mut push = |a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32),
+                    pa: (f32, f32), pb: (f32, f32), pc: (f32, f32)| {
+        // Degenerate triangles (e.g. the collapsed centre) carry no area — skip.
+        let avg_z = (a.2 + b.2 + c.2) / 3.0;
+        let base = if avg_z < terrain.beach { sand } else { foliage };
+        let sh = shade(a, b, c, v);
+        let cx = (a.0 + b.0 + c.0) / 3.0;
+        let cy = (a.1 + b.1 + c.1) / 3.0;
+        tris.push(Tri {
+            key: kin.pos.distance_to(Vec2::new(cx, cy)),
+            p: [pa, pb, pc],
+            color: col(base, sh * v.light, alpha),
+        });
+    };
+    for lvl in 0..levels - 1 {
+        for i in 0..MOUND_SEG {
+            let j = (i + 1) % MOUND_SEG;
+            let a0 = wpz[lvl][i];
+            let b0 = wpz[lvl][j];
+            let a1 = wpz[lvl + 1][i];
+            let b1 = wpz[lvl + 1][j];
+            push(a0, b0, b1, scr[lvl][i], scr[lvl][j], scr[lvl + 1][j]);
+            push(a0, b1, a1, scr[lvl][i], scr[lvl + 1][j], scr[lvl + 1][i]);
         }
-        // Cap (ring2→apex).
-        let sh = shade(ring_w[2][i], ring_w[2][j], apex_w, v);
+    }
+    tris.sort_by(|x, y| y.key.partial_cmp(&x.key).unwrap());
+    for tri in &tris {
         draw_triangle(
-            vec2(ring_sx[2][i], ring_sy[2][i]),
-            vec2(ring_sx[2][j], ring_sy[2][j]),
-            vec2(apex_sx, apex_sy),
-            col(foliage, sh * v.light, alpha),
+            vec2(tri.p[0].0, tri.p[0].1),
+            vec2(tri.p[1].0, tri.p[1].1),
+            vec2(tri.p[2].0, tri.p[2].1),
+            tri.color,
         );
     }
 
     // --- Features ------------------------------------------------------------
-    // Stand each on the mound's surface at its offset and draw back-to-front so
-    // nearer scenery overlays farther.
+    // Stand each on the terrain surface and draw back-to-front so nearer scenery
+    // overlays farther; cull any hidden behind the island's own hills.
     let mut order: Vec<usize> = (0..features.len()).collect();
     order.sort_by(|&a, &b| {
         let da = kin.pos.distance_to(isle.pos + features[a].offset);
         let db = kin.pos.distance_to(isle.pos + features[b].offset);
         db.partial_cmp(&da).unwrap()
     });
-    // On a tall isle the mound (drawn before the features) would otherwise let
-    // far-side scenery show through its peak; cull features beyond the centre.
-    // Flat isles occlude nothing, so they keep every feature.
-    let to_isle = isle.pos - kin.pos;
     for &fi in &order {
         let f = &features[fi];
-        if isle.height > 40.0 && f.offset.dot(to_isle) > 0.0 {
+        let wp = isle.pos + f.offset;
+        let base = terrain.elevation_at(wp);
+        if terrain.occluded(wp, base, kin, v) {
             continue;
         }
-        let wp = isle.pos + f.offset;
-        let t = (f.offset.length() / isle.radius).min(1.0);
-        let base = isle.height * mound_h_frac(t);
         let (fx, fy) = project(wp, base, base < 0.5, kin, v);
         let (_, ty) = project(wp, base + f.height, false, kin, v);
         let h_px = fy - ty;
@@ -267,10 +413,13 @@ fn feature_aspect(kind: FeatureKind) -> f32 {
     match kind {
         FeatureKind::Tree => 0.85,
         FeatureKind::Palm => 0.8,
+        FeatureKind::Pine => 0.55,
+        FeatureKind::Fern => 1.5,
         FeatureKind::Bush => 1.7,
         FeatureKind::Rock => 1.4,
         FeatureKind::Ruin => 1.2,
         FeatureKind::Hut => 1.35,
+        FeatureKind::Cottage => 1.5,
         FeatureKind::Tower => 0.5,
         FeatureKind::Dock => 2.6,
         FeatureKind::Flag => 0.6,
@@ -304,6 +453,10 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
     const CANOPY_DK: [f32; 3] = [34.0, 96.0, 48.0];
     const FROND: [f32; 3] = [60.0, 140.0, 72.0];
     const FROND_DK: [f32; 3] = [40.0, 104.0, 56.0];
+    const PINE: [f32; 3] = [40.0, 102.0, 70.0];
+    const PINE_DK: [f32; 3] = [28.0, 76.0, 52.0];
+    const FERN: [f32; 3] = [72.0, 150.0, 80.0];
+    const FERN_DK: [f32; 3] = [50.0, 116.0, 62.0];
     const BUSH: [f32; 3] = [66.0, 138.0, 72.0];
     const BUSH_DK: [f32; 3] = [46.0, 106.0, 56.0];
     const ROCK: [f32; 3] = [126.0, 122.0, 114.0];
@@ -335,6 +488,19 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
             tri((0.0, 0.55), (0.5, 0.8), (0.28, 0.92), rgba(FROND_DK, alpha));
             tri((0.0, 0.55), (0.2, 0.98), (0.0, 1.0), rgba(FROND_DK, alpha));
         }
+        FeatureKind::Pine => {
+            // A tall conifer: a slim trunk under three stacked skirts.
+            quad(-0.06, 0.0, 0.06, 0.3, rgba(TRUNK, alpha));
+            tri((-0.5, 0.24), (0.5, 0.24), (0.0, 0.58), rgba(PINE_DK, alpha));
+            tri((-0.4, 0.46), (0.4, 0.46), (0.0, 0.78), rgba(PINE, alpha));
+            tri((-0.28, 0.66), (0.28, 0.66), (0.0, 1.0), rgba(PINE, alpha));
+        }
+        FeatureKind::Fern => {
+            // A low spray of fronds fanning from the ground.
+            tri((-0.5, 0.0), (-0.12, 0.0), (-0.34, 1.0), rgba(FERN, alpha));
+            tri((-0.2, 0.0), (0.2, 0.0), (0.0, 1.05), rgba(FERN_DK, alpha));
+            tri((0.12, 0.0), (0.5, 0.0), (0.34, 1.0), rgba(FERN, alpha));
+        }
         FeatureKind::Bush => {
             tri((-0.5, 0.0), (0.5, 0.0), (-0.12, 0.95), rgba(BUSH, alpha));
             tri((0.5, 0.0), (0.12, 0.95), (-0.12, 0.95), rgba(BUSH_DK, alpha));
@@ -359,6 +525,14 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
             quad(0.0, 0.0, 0.4, 0.6, rgba(WALL_DK, alpha));
             tri((-0.5, 0.55), (0.5, 0.55), (-0.05, 1.0), rgba(ROOF, alpha));
             tri((0.5, 0.55), (-0.05, 1.0), (0.05, 1.0), rgba(ROOF_DK, alpha));
+        }
+        FeatureKind::Cottage => {
+            // A larger dwelling: a long body, a gable end, and a chimney.
+            quad(-0.5, 0.0, 0.5, 0.55, rgba(WALL, alpha));
+            quad(0.08, 0.0, 0.5, 0.55, rgba(WALL_DK, alpha));
+            tri((-0.5, 0.5), (0.5, 0.5), (-0.02, 0.92), rgba(ROOF, alpha));
+            tri((0.5, 0.5), (-0.02, 0.92), (0.04, 0.92), rgba(ROOF_DK, alpha));
+            quad(0.28, 0.72, 0.4, 1.0, rgba(STONE_DK, alpha));
         }
         FeatureKind::Tower => {
             quad(-0.26, 0.0, 0.26, 0.82, rgba(STONE, alpha));
