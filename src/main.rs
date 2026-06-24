@@ -55,11 +55,16 @@ fn rgb(c: (f32, f32, f32)) -> Color {
 /// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
 /// toward the storm overcast by `storm`. Drawn as horizontal strips since
 /// macroquad has no built-in gradient.
-fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32) {
+fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32, m: f32) {
     let fair = palette::fair_sky(day);
     let top = lerp3(fair[0], palette::STORM_SKY[0], storm);
     let mid = lerp3(fair[1], palette::STORM_SKY[1], storm);
     let hor = lerp3(fair[2], palette::STORM_SKY[2], storm);
+
+    // Over-scan base: paint the top sky colour across the whole region above the
+    // horizon (and out past every edge) so the camera ride's tilt/translate never
+    // reveals the cleared background above or beside the gradient.
+    draw_rectangle(-m, -m, w + 2.0 * m, horizon + m, rgb(top));
 
     let strips = 96;
     let strip_h = horizon / strips as f32;
@@ -71,8 +76,8 @@ fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32) {
             lerp3(mid, hor, (t - 0.5) * 2.0)
         };
         let y = i as f32 * strip_h;
-        // +1px overlap so no seams show between strips.
-        draw_rectangle(0.0, y, w, strip_h + 1.0, rgb(c));
+        // +1px overlap so no seams show between strips; over-scanned sideways.
+        draw_rectangle(-m, y, w + 2.0 * m, strip_h + 1.0, rgb(c));
     }
 }
 
@@ -115,6 +120,22 @@ fn draw_sun(day: Daytime, storm: f32, heading: f32, half_fov_h: f32, w: f32, h: 
 /// (`SailingView.sailFractions` / `sailNames`.)
 const SAIL_FRACTIONS: [f32; 3] = [0.0, 0.5, 1.0];
 const SAIL_NAMES: [&str; 3] = ["None", "Half", "Full"];
+
+// --- Camera "ride": how the viewpoint rocks with the boat ---------------------
+// The whole world (sky, sun, waves, islands) is drawn through a camera that tilts
+// *opposite* the boat's lean (the sea stays level while the captain heels), nods
+// as the bow pitches, and swings as the hull yaws — so sailing reads as motion
+// rather than a static cockpit. All tunable; flip a sign if a motion reads
+// backwards on screen.
+const CAM_ROLL_GAIN: f32 = 0.55; // horizon tilt as a fraction of (swell roll + heel)
+const CAM_ROLL_MAX_DEG: f32 = 14.0; // clamp, so the over-scan margin always covers
+const CAM_PITCH_PX: f32 = 95.0; // px the horizon drops per rad of bow-up pitch
+const CAM_PITCH_MAX: f32 = 52.0;
+const CAM_YAW_PX: f32 = 70.0; // px the view swings per rad of hull yaw
+const CAM_YAW_MAX: f32 = 42.0;
+// Wind heel: the press of the sails leans the boat away from the wind, hardest on
+// a beam reach (most side-force) and nil dead before the wind or in irons.
+const HEEL_GAIN: f32 = 0.22; // rad of lean at full sail on a hard beam reach
 
 /// The rudder demand from the helm keys: A/D (or arrows) held, [-1, 1].
 /// (`SailingView.heldTurn`.)
@@ -183,7 +204,11 @@ async fn main() {
     let mut ship = ShipRenderer::new();
     let mut smooth_roll: f32 = 0.0;
     let mut smooth_yaw: f32 = 0.0;
+    let mut smooth_pitch: f32 = 0.0;
+    let mut smooth_heel: f32 = 0.0;
     const ROLL_EASE: f32 = 2.2;
+    const PITCH_EASE: f32 = 2.6;
+    const HEEL_EASE: f32 = 1.1; // the boat leans into / out of the heel gradually
 
     loop {
         let dt = get_frame_time().min(0.05);
@@ -244,22 +269,66 @@ async fn main() {
             break;
         }
 
-        // --- Scene -------------------------------------------------------------
+        // --- Ship motion + camera ride -----------------------------------------
+        // Sample how the swell throws the hull this frame, then ease the parts that
+        // should rock with the long swell rather than buzz with the chop.
+        let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
+        let wind_rel = wrap_angle(wind.toward_rad - kin.heading_rad);
+        // Wind heel: the sails' press leans the boat away from the wind, hardest on
+        // a beam reach (most side-force) and nil dead before it or in irons. The sign
+        // of sin(wind_rel) picks the side — wind blowing to starboard heels her
+        // starboard (positive roll) — and the drive curve scales it by the press.
+        let heel_target =
+            HEEL_GAIN * helm.throttle * sailing::wind_factor_rel(wind_rel) * wind_rel.sin();
+        let ease = clamp(ROLL_EASE * dt, 0.0, 1.0);
+        smooth_roll += (motion.roll - smooth_roll) * ease;
+        smooth_yaw += (motion.yaw - smooth_yaw) * ease;
+        smooth_pitch += (motion.pitch - smooth_pitch) * clamp(PITCH_EASE * dt, 0.0, 1.0);
+        smooth_heel += (heel_target - smooth_heel) * clamp(HEEL_EASE * dt, 0.0, 1.0);
+
+        // The hull's lean (swell roll + wind heel) tilts the horizon the *other* way
+        // — the sea stays level while the captain leans into it — and the bow's pitch
+        // and yaw nod and swing the view. This is the camera "ride" the whole world
+        // is drawn through, so sky, sun, waves and islands rock together as one.
+        let lean = smooth_roll + smooth_heel;
+        let cam_roll_deg = clamp(
+            -lean.to_degrees() * CAM_ROLL_GAIN,
+            -CAM_ROLL_MAX_DEG,
+            CAM_ROLL_MAX_DEG,
+        );
+        let cam_vert = clamp(CAM_PITCH_PX * smooth_pitch, -CAM_PITCH_MAX, CAM_PITCH_MAX);
+        let cam_sway = clamp(CAM_YAW_PX * smooth_yaw, -CAM_YAW_MAX, CAM_YAW_MAX);
+
+        // --- Scene (drawn through the camera ride) -----------------------------
         let px_per_rad = h * 0.85;
         let half_fov_h_view = projection::MAX_HALF_FOV_H.min((w * 0.5) / px_per_rad);
 
         clear_background(BLACK);
-        draw_sky(day, storm, w, horizon);
+        // The tilted/translated view must never reveal background past the painted
+        // sea and sky, so everything world-anchored is over-scanned past the screen
+        // edges by this much (sized to cover the clamped roll + translate).
+        let overscan = w.max(h) * 0.25 + 60.0;
+        let mut world_cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, w, h));
+        // `from_display_rect` builds its zoom for *render-to-texture*; drawn straight
+        // to the screen it comes out vertically flipped (its clip-space Y is the
+        // negative of macroquad's default screen projection). Flip `zoom.y` back so
+        // the world is upright and matches the screen-space ship/HUD drawn after.
+        world_cam.zoom.y = -world_cam.zoom.y;
+        world_cam.rotation = cam_roll_deg;
+        world_cam.target = vec2(w * 0.5 + cam_sway, h * 0.5 - cam_vert);
+        set_camera(&world_cam);
+
+        draw_sky(day, storm, w, horizon, overscan);
         draw_sun(day, storm, kin.heading_rad, half_fov_h_view, w, h, horizon);
 
-        // Distant-water backdrop behind the wave mesh, so the band between the
-        // horizon and the farthest mesh row reads as deep sea.
+        // Distant-water backdrop behind the wave mesh, over-scanned so a rolled view
+        // still finds deep sea in the corners.
         let far = lerp3(
             (palette::palette_for(day)[6], palette::palette_for(day)[7], palette::palette_for(day)[8]),
             (palette::STORM_PALETTE[6], palette::STORM_PALETTE[7], palette::STORM_PALETTE[8]),
             clamp(storm, 0.0, 1.0) * 0.9,
         );
-        draw_rectangle(0.0, horizon, w, h - horizon, rgb(far));
+        draw_rectangle(-overscan, horizon, w + 2.0 * overscan, h - horizon + overscan, rgb(far));
 
         // --- Islands (drawn interleaved with the waves) ------------------------
         // Visible isles: in front of the camera and within view, sorted farthest-
@@ -279,24 +348,25 @@ async fn main() {
         visible.sort_by(|a, b| key(b.0).partial_cmp(&key(a.0)).unwrap());
 
         // --- Waves -------------------------------------------------------------
-        let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
         renderer.render(&kin, t, sea, motion.heave, day, storm, w, h, &visible);
 
+        // Back to screen space for the foreground + HUD, which stay bolted to the
+        // viewport rather than riding the swell.
+        set_default_camera();
+
         // --- Ship (deck + rig) -------------------------------------------------
-        // Heave and pitch are read straight from the swell, but the roll and yaw
-        // are low-passed so the deck rocks with the long ocean swell, not the chop.
-        let ease = clamp(ROLL_EASE * dt, 0.0, 1.0);
-        smooth_roll += (motion.roll - smooth_roll) * ease;
-        smooth_yaw += (motion.yaw - smooth_yaw) * ease;
+        // The deck leans with the same swell roll *and* wind heel, so she visibly
+        // heels under sail while the horizon tilts the other way; pitch/heave are
+        // read straight off the swell.
         let rig = RigInput {
             motion: ocean::ShipMotion {
-                roll: smooth_roll,
+                roll: smooth_roll + smooth_heel,
                 yaw: smooth_yaw,
                 ..motion
             },
             set: helm.throttle,
             turn: helm.turn,
-            wind_rel: wrap_angle(wind.toward_rad - kin.heading_rad),
+            wind_rel,
         };
         ship.render(&rig, dt, t, day, storm, w, h);
 
