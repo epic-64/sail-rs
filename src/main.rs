@@ -129,8 +129,8 @@ const SAIL_NAMES: [&str; 3] = ["None", "Half", "Full"];
 // backwards on screen.
 const CAM_ROLL_GAIN: f32 = 0.55; // horizon tilt as a fraction of (swell roll + heel)
 const CAM_ROLL_MAX_DEG: f32 = 14.0; // clamp, so the over-scan margin always covers
-const CAM_PITCH_PX: f32 = 95.0; // px the horizon drops per rad of bow-up pitch
-const CAM_PITCH_MAX: f32 = 52.0;
+const CAM_PITCH_PX: f32 = 230.0; // px the horizon drops per rad of bow-up pitch
+const CAM_PITCH_MAX: f32 = 120.0;
 const CAM_YAW_PX: f32 = 70.0; // px the view swings per rad of hull yaw
 const CAM_YAW_MAX: f32 = 42.0;
 // Wind heel: the press of the sails leans the boat away from the wind, hardest on
