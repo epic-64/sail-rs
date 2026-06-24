@@ -28,17 +28,23 @@ const SPEED: [f32; N] = [7.5, 5.5, 4.0, 3.0];
 const PHASE: [f32; N] = [0.0, 1.7, 3.1, 5.2];
 
 // As the sea builds, swells grow *longer* as well as taller: a gale rolls in long
-// ridges, not tall chop. The base wavelengths are stretched by this factor, which
-// climbs with the sea state — so calm water keeps its short ripples while a storm
-// rolls in long. (Phase speed `c = omega/k = SPEED` is unchanged, so crests still
-// travel at the same m/s; only the spatial wavelength stretches.) `sea` is spatially
-// uniform, so this never introduces a seam across the surface.
-const WAVELENGTH_SEA_GAIN: f32 = 0.55;
+// ridges, not tall chop. Naively this means stretching each swell's wavelength with
+// the sea state — but that makes the spatial wavenumber `k` a function of time, and the
+// phase `k·(p·dir) − SPEED·k·t` is evaluated at *world* coordinates and *absolute* time
+// that are both large (the ship sails hundreds of km from the origin; `t` only grows).
+// So while the weather eases and `k` drifts, the phase sweeps wildly — the whole sea
+// appears to race for the few seconds the transition takes, worse the longer you've
+// sailed. Instead we cross-fade between two *fixed* wave trains: a short-wavelength
+// "calm" set and a long-wavelength "storm" set. Each `k` is constant, so neither train
+// ever races; only the blend weight moves with the sea — a pure amplitude morph, always
+// smooth. At `sea = 0` it is the calm train alone, at full storm the long train alone
+// (matching the old extremes); in between the two superpose into natural swell groups.
+const STORM_STRETCH: f32 = 1.71; // long-train wavelength multiplier at full storm
 
-/// The wavelength multiplier for the current sea state (1.0 glassy … ~1.7 storm).
+/// Blend weight (0 = calm/short train … 1 = storm/long train) for the current sea state.
 #[inline]
-fn wavelength_stretch(sea: f32) -> f32 {
-    1.0 + WAVELENGTH_SEA_GAIN * clamp(sea, 0.0, 1.3)
+fn storm_blend(sea: f32) -> f32 {
+    clamp(sea / 1.3, 0.0, 1.0)
 }
 
 /// The crest height (m) at full sea state — the sum of every swell's amplitude.
@@ -98,12 +104,18 @@ pub fn deck_heave_px(bow_lift: f32) -> f32 {
 #[inline]
 pub fn height(p: Vec2, t: f32, sea: f32) -> f32 {
     let mut acc = 0.0;
-    let stretch = wavelength_stretch(sea);
+    let b = storm_blend(sea);
     let mut i = 0;
     while i < N {
-        let k = TAU / (WAVELENGTH[i] * stretch);
-        let omega = SPEED[i] * k;
-        acc += AMP[i] * ((p.x * DIR_X[i] + p.y * DIR_Y[i]) * k - omega * t + PHASE[i]).sin();
+        let phase_pos = p.x * DIR_X[i] + p.y * DIR_Y[i];
+        // Both trains share a crest speed (c = omega/k = SPEED) and phase offset; only
+        // the wavelength differs, so the long train rolls in over the short one as the
+        // sea builds. Each `k` is a compile-time constant — never a function of `t`.
+        let kc = TAU / WAVELENGTH[i];
+        let ks = TAU / (WAVELENGTH[i] * STORM_STRETCH);
+        let calm = (phase_pos * kc - SPEED[i] * kc * t + PHASE[i]).sin();
+        let storm = (phase_pos * ks - SPEED[i] * ks * t + PHASE[i]).sin();
+        acc += AMP[i] * ((1.0 - b) * calm + b * storm);
         i += 1;
     }
     sea * acc
