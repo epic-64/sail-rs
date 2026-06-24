@@ -20,7 +20,7 @@
 
 use macroquad::prelude::*;
 
-use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, UpgradeKind};
+use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, TradeError, UpgradeKind};
 use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
 use crate::mission;
@@ -122,12 +122,38 @@ enum Focus {
     RaceWithdraw,
 }
 
+/// A constraint that an invalid action just bumped against, so the board can
+/// flash it red and jiggle it once. Targets are keyed by the thing on screen
+/// (good index / mission id / rival-port id) so the right cell lights up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlashTarget {
+    Gold,          // the purse in the header (out of coin)
+    Hold,          // the hold tally in the header (out of room)
+    Held(usize),   // a good's held-quantity cell (nothing to sell)
+    Deposit(i32),  // a contract's deposit (can't cover the buy-in)
+    Units(i32),    // a contract's haulage units (won't fit the hold)
+    Stake(i32),    // a rival port's race stake (can't cover the wager)
+}
+
+/// A live red-jiggle on one constraint, started at `start` (seconds, `get_time`).
+struct Flash {
+    target: FlashTarget,
+    start: f64,
+}
+
 pub struct PortScreen {
     island_id: i32,
     tab: Tab,
     focus: Focus,
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
+    /// Constraints currently flashing from a rejected action (see [`FlashTarget`]).
+    flashes: Vec<Flash>,
 }
+
+// Flash timing: a brief red jiggle that decays to nothing.
+const FLASH_DUR: f32 = 0.42; // seconds the jiggle lasts
+const FLASH_AMP: f32 = 4.0; // peak horizontal wobble, px
+const FLASH_FREQ: f32 = 7.0; // wobble oscillations per second
 
 const TABS: [Tab; 4] = [Tab::Market, Tab::Contracts, Tab::Yard, Tab::Race];
 const LAST_COLUMN: usize = 3;
@@ -139,7 +165,32 @@ impl PortScreen {
             tab: Tab::Market,
             focus: Focus::TabBar,
             column: 0,
+            flashes: Vec::new(),
         }
+    }
+
+    /// Start (or restart) a red jiggle on `target`. Drops any expired flashes and
+    /// re-arms a still-running one so a repeated rejected press jiggles afresh.
+    fn flash(&mut self, target: FlashTarget) {
+        let now = get_time();
+        self.flashes
+            .retain(|f| f.target != target && ((now - f.start) as f32) < FLASH_DUR);
+        self.flashes.push(Flash { target, start: now });
+    }
+
+    /// The current jiggle on `target`, if any: a `(dx, redness)` pair where `dx`
+    /// is the horizontal wobble (px) and `redness` (1→0) blends the ink to red.
+    fn flash_of(&self, target: FlashTarget) -> Option<(f32, f32)> {
+        let now = get_time();
+        self.flashes.iter().find(|f| f.target == target).and_then(|f| {
+            let age = (now - f.start) as f32;
+            if age >= FLASH_DUR {
+                return None;
+            }
+            let decay = 1.0 - age / FLASH_DUR;
+            let dx = FLASH_AMP * (age * FLASH_FREQ * std::f32::consts::TAU).sin() * decay;
+            Some((dx, decay))
+        })
     }
 
     fn is_shipyard(&self, world: &World) -> bool {
@@ -243,26 +294,58 @@ impl PortScreen {
             Focus::TabBar => self.enter_rows(gs, world),
             Focus::Good(i) => {
                 let good = Good::ALL[i];
+                // Whether the hold was already full going in tells a failed Fill
+                // (which only reports `NonPositive`) apart from being out of coin.
+                let hold_full = gs.hold_free() <= 0;
+                let buying = self.column <= 1; // Buy / Fill
                 let done = match self.column {
                     0 => gs.buy(market, good, 1),
                     1 => gs.fill(market, good),
                     2 => gs.dump(market, good),
                     _ => gs.sell(market, good, 1),
                 };
-                if done.is_ok() {
-                    sounds.transaction();
+                match done {
+                    Ok(()) => sounds.transaction(),
+                    Err(e) => {
+                        sounds.invalid();
+                        if buying {
+                            // Out of coin lights the purse; out of room lights the
+                            // hold tally. A Fill that bought nothing is one or the
+                            // other depending on which ran out.
+                            match e {
+                                TradeError::NotEnoughHold => self.flash(FlashTarget::Hold),
+                                TradeError::NotEnoughGold => self.flash(FlashTarget::Gold),
+                                TradeError::NonPositive if hold_full => {
+                                    self.flash(FlashTarget::Hold)
+                                }
+                                TradeError::NonPositive => self.flash(FlashTarget::Gold),
+                                _ => {}
+                            }
+                        } else {
+                            // Nothing to sell/dump — light the held-quantity cell.
+                            self.flash(FlashTarget::Held(i));
+                        }
+                    }
                 }
             }
-            Focus::Repair => {
-                if gs.repair().is_ok() {
-                    sounds.transaction();
+            Focus::Repair => match gs.repair() {
+                Ok(()) => sounds.transaction(),
+                Err(e) => {
+                    sounds.invalid();
+                    if e == TradeError::NotEnoughGold {
+                        self.flash(FlashTarget::Gold);
+                    }
                 }
-            }
-            Focus::Upgrade(kind) => {
-                if gs.buy_upgrade(world, kind).is_ok() {
-                    sounds.transaction();
+            },
+            Focus::Upgrade(kind) => match gs.buy_upgrade(world, kind) {
+                Ok(()) => sounds.transaction(),
+                Err(e) => {
+                    sounds.invalid();
+                    if e == TradeError::NotEnoughGold {
+                        self.flash(FlashTarget::Gold);
+                    }
                 }
-            }
+            },
             // Contract actions reshuffle the rows. Keep the cursor at the same
             // vertical slot — the acted-on row has vanished, so we land on
             // whatever took its place (or the tab bar if the tab emptied out).
@@ -275,27 +358,51 @@ impl PortScreen {
                     Focus::Manifest(id) => gs.abandon(world, id),
                     _ => unreachable!(),
                 };
-                if done.is_ok() {
-                    sounds.transaction();
-                    let after = self.rows_of(gs, world, self.tab);
-                    self.focus = if after.is_empty() {
-                        Focus::TabBar
-                    } else {
-                        after[slot.min(after.len() - 1)]
-                    };
+                match done {
+                    Ok(()) => {
+                        sounds.transaction();
+                        let after = self.rows_of(gs, world, self.tab);
+                        self.focus = if after.is_empty() {
+                            Focus::TabBar
+                        } else {
+                            after[slot.min(after.len() - 1)]
+                        };
+                    }
+                    Err(e) => {
+                        sounds.invalid();
+                        // Only accepting a contract has a buy-in to fall short on:
+                        // no coin lights its deposit; no room lights both the hold
+                        // tally and the contract's haulage units.
+                        if let Focus::Contract(id) = here {
+                            match e {
+                                TradeError::NotEnoughGold => self.flash(FlashTarget::Deposit(id)),
+                                TradeError::NotEnoughHold => {
+                                    self.flash(FlashTarget::Hold);
+                                    self.flash(FlashTarget::Units(id));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             // Enter on a rival port books the race outright (charging the stake) —
             // no separate confirm step, mirroring how a contract is accepted. The
             // picker rows then vanish, so land on the new abandon row.
-            Focus::RaceTarget(id) => {
-                if gs.accept_race(world, id).is_ok() {
+            Focus::RaceTarget(id) => match gs.accept_race(world, id) {
+                Ok(()) => {
                     sounds.transaction();
                     self.focus = Focus::RaceWithdraw;
                 }
-            }
-            Focus::RaceWithdraw => {
-                if gs.withdraw_race(world).is_ok() {
+                Err(e) => {
+                    sounds.invalid();
+                    if e == TradeError::NotEnoughGold {
+                        self.flash(FlashTarget::Stake(id));
+                    }
+                }
+            },
+            Focus::RaceWithdraw => match gs.withdraw_race(world) {
+                Ok(()) => {
                     sounds.transaction();
                     self.focus = self
                         .rows_of(gs, world, self.tab)
@@ -303,7 +410,8 @@ impl PortScreen {
                         .copied()
                         .unwrap_or(Focus::TabBar);
                 }
-            }
+                Err(_) => sounds.invalid(),
+            },
         }
     }
 
@@ -381,11 +489,12 @@ impl PortScreen {
         draw_text(eyebrow, x0 + pad, y0 + 34.0, 18.0, dim_ink());
         draw_text(&port.name, x0 + pad, y0 + 62.0, 32.0, ink());
 
-        // Purse, right-aligned in the header.
+        // Purse, right-aligned in the header. Either lights red and jiggles when an
+        // action runs out of coin (the purse) or out of hold room (the tally).
         let gold = format!("Gold {}", gs.gold);
         let hold = format!("Hold {}/{}", gs.hold_used(), gs.hold_capacity);
-        right_text(&gold, x0 + pw - pad, y0 + 40.0, 24);
-        right_text(&hold, x0 + pw - pad, y0 + 64.0, 20);
+        right_text_flash(&gold, x0 + pw - pad, y0 + 40.0, 24, self.flash_of(FlashTarget::Gold));
+        right_text_flash(&hold, x0 + pw - pad, y0 + 64.0, 20, self.flash_of(FlashTarget::Hold));
 
         let bar_y = y0 + 86.0;
         draw_line(x0 + pad, bar_y, x0 + pw - pad, bar_y, 1.0, dim_ink());
@@ -487,7 +596,14 @@ impl PortScreen {
             }
             draw_text(good.label(), name_x, ry, fs as f32, ink());
             right_text(&market.price(*good).to_string(), price_r, ry, fs);
-            right_text(&gs.quantity_of(*good).to_string(), held_r, ry, fs);
+            // The held tally jiggles red on a Sell/Dump with nothing to sell.
+            right_text_flash(
+                &gs.quantity_of(*good).to_string(),
+                held_r,
+                ry,
+                fs,
+                self.flash_of(FlashTarget::Held(i)),
+            );
 
             // Four action chips.
             let chip_w = (x + w - actions_x) / 4.0;
@@ -665,7 +781,14 @@ impl PortScreen {
                 draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
             }
             draw_text(&p.name, x, ry, 18.0, ink());
-            right_text(&race::stake_between(origin, p).to_string(), stake_r, ry, 18);
+            // The stake jiggles red when the purse can't cover the wager.
+            right_text_flash(
+                &race::stake_between(origin, p).to_string(),
+                stake_r,
+                ry,
+                18,
+                self.flash_of(FlashTarget::Stake(p.id)),
+            );
             button(action_x, ry - 16.0, x + w - action_x, 24.0, "Accept", active);
             ry += row_h;
         }
@@ -776,10 +899,25 @@ impl PortScreen {
         if active {
             draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
         }
-        draw_text(&format!("{} {}", m.quantity, m.good.label()), x, ry, fs as f32, ink());
+        // The haulage units jiggle red when accepting would overflow the hold.
+        let (udx, ured) = self.flash_of(FlashTarget::Units(m.id)).unwrap_or((0.0, 0.0));
+        draw_text(
+            &format!("{} {}", m.quantity, m.good.label()),
+            x + udx,
+            ry,
+            fs as f32,
+            flash_ink(ured),
+        );
         draw_text(to_text, x + w * 0.27, ry, fs as f32, ink());
         if show_money {
-            right_text(&m.deposit.to_string(), x + w * 0.585, ry, fs);
+            // The deposit jiggles red when the purse can't cover the buy-in.
+            right_text_flash(
+                &m.deposit.to_string(),
+                x + w * 0.585,
+                ry,
+                fs,
+                self.flash_of(FlashTarget::Deposit(m.id)),
+            );
             right_text(&m.reward.to_string(), x + w * 0.73, ry, fs);
         }
         let action_x = x + w * 0.77;
@@ -916,6 +1054,30 @@ fn row_highlight() -> Color {
 fn right_text(text: &str, right_x: f32, y: f32, fs: u16) {
     let dims = measure_text(text, None, fs, 1.0);
     draw_text(text, right_x - dims.width, y, fs as f32, ink());
+}
+
+/// The alarm red an out-of-bounds constraint flashes toward.
+fn flash_red() -> Color {
+    Color::new(0.80, 0.13, 0.10, 1.0)
+}
+
+/// Ink blended toward the alarm red by `red` (0 = normal ink, 1 = full red).
+fn flash_ink(red: f32) -> Color {
+    let (a, b) = (ink(), flash_red());
+    Color::new(
+        a.r + (b.r - a.r) * red,
+        a.g + (b.g - a.g) * red,
+        a.b + (b.b - a.b) * red,
+        1.0,
+    )
+}
+
+/// Right-aligned text with an optional `(dx, redness)` jiggle: shifted by `dx`
+/// and tinted toward red, so a violated constraint shakes and lights up.
+fn right_text_flash(text: &str, right_x: f32, y: f32, fs: u16, flash: Option<(f32, f32)>) {
+    let (dx, red) = flash.unwrap_or((0.0, 0.0));
+    let dims = measure_text(text, None, fs, 1.0);
+    draw_text(text, right_x - dims.width + dx, y, fs as f32, flash_ink(red));
 }
 
 /// A small action chip: filled when focused, outlined otherwise, label centred.

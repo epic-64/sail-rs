@@ -39,6 +39,9 @@ const COIN_MP3: &[u8] = include_bytes!("../assets/sounds/collect-coin.mp3");
 const RACE_WON_MP3: &[u8] = include_bytes!("../assets/sounds/pw23check-winning-218995.mp3");
 const RACE_LOST_MP3: &[u8] =
     include_bytes!("../assets/sounds/lightyeartraxx-kl-peach-game-over-iii-142453.mp3");
+// A short buzzer when the captain tries something the rules won't allow (no gold
+// for a wager, no room in the hold, nothing to sell, …).
+const INVALID_MP3: &[u8] = include_bytes!("../assets/sounds/invalid-input.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues. These mirror the per-clip volumes
@@ -55,6 +58,8 @@ const COIN_VOL: f32 = 1.0;
 const SALVAGE_VOL: f32 = 0.6;
 const RACE_WON_VOL: f32 = 0.25;
 const RACE_LOST_VOL: f32 = 0.25;
+// The invalid-action buzzer — present enough to register without nagging.
+const INVALID_VOL: f32 = 0.6;
 // The boat speed (knots) at which the sailing bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
@@ -72,6 +77,7 @@ pub struct SoundBank {
     coin: Sound,
     race_won: Sound,
     race_lost: Sound,
+    invalid: Sound,
     sailing_vol: f32,
     calm_vol: f32,
     storm_vol: f32,
@@ -94,6 +100,7 @@ impl SoundBank {
         let coin = load_clip(COIN_MP3).await;
         let race_won = load_clip(RACE_WON_MP3).await;
         let race_lost = load_clip(RACE_LOST_MP3).await;
+        let invalid = load_clip(INVALID_MP3).await;
 
         // Kick off the beds at zero volume so they're already running and in sync;
         // the per-frame update simply opens them up.
@@ -111,6 +118,7 @@ impl SoundBank {
             coin,
             race_won,
             race_lost,
+            invalid,
             sailing_vol: 0.0,
             calm_vol: 0.0,
             storm_vol: 0.0,
@@ -219,6 +227,17 @@ impl SoundBank {
         play_sound(
             &self.race_lost,
             PlaySoundParams { looped: false, volume: RACE_LOST_VOL * self.master },
+        );
+    }
+
+    /// A short buzzer — the captain tried something the rules forbid (no gold for
+    /// the wager, no room in the hold, nothing to sell). Restarted so a flurry of
+    /// rejected key-presses retriggers cleanly rather than piling up.
+    pub fn invalid(&self) {
+        stop_sound(&self.invalid);
+        play_sound(
+            &self.invalid,
+            PlaySoundParams { looped: false, volume: INVALID_VOL * self.master },
         );
     }
 }
@@ -334,6 +353,7 @@ mod tests {
             ("coin", COIN_MP3),
             ("race_won", RACE_WON_MP3),
             ("race_lost", RACE_LOST_MP3),
+            ("invalid", INVALID_MP3),
         ] {
             let wav = decode_mp3_to_wav(mp3);
             assert!(wav.len() > 44, "{name}: no audio decoded");
