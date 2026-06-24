@@ -30,6 +30,7 @@ while keeping the game's mechanics and feel.
 | `shared/World.scala` (`WorldGen`) | `src/world.rs` | clusters/islands generation |
 | `shared/{GameState,Goods,Trade,Upgrades,Hull}.scala` | `src/game_state.rs` | voyage state + port economy (markets, trade, upgrades, repair, missions) |
 | `shared/Mission.scala` (`Mission`,`Missions`) | `src/mission.rs` | haulage contracts: board generation, accept/deliver/abandon |
+| `shared/Race.scala` (`Race`) | `src/race.rs`, `src/rival_render.rs` | wager races: offers, accept/win/lose/withdraw, rival helm + billboard |
 | `client/PortView.scala` + docking (`SailingView`) | `src/port_view.rs` | docking handshake + Market/Contracts/Shipyard overlay |
 | `shared/Islands.scala` (`IsleFeatures`) | `src/isle_features.rs` | per-island scenery scatter |
 | `client/OceanRenderer.scala` | `src/ocean_renderer.rs` | wave mesh + island depth-interleave |
@@ -130,6 +131,19 @@ while keeping the game's mechanics and feel.
   lists deliveries owed at this port (return deposit + reward, free the hold) and
   the hold manifest of reserved cargo bound elsewhere (Abandon → keep goods as
   sellable cargo, forfeit deposit/reward). The port chart rings target islands.
+- **Races** — `race.rs` + `port_view.rs` Racing tab + `rival_render.rs` + the race
+  loop in `main.rs`: a faithful `shared.Race` port. A harbour offers a deterministic
+  card of up to four rival ports (always the nearest and furthest, the rest filled
+  from between) with a distance-fixed stake (`goldPerKm` + a quadratic
+  `bonusPerKmSq`); the Racing tab books one (charging the stake), shows the armed
+  race, or withdraws it. On setting sail the rival draws up alongside; heave to
+  (sails struck, dead slow) within range and raise sail to fire the gun — only then
+  does the rival sail, on a pristine copy of the player's own rig (its sail level,
+  empty hold), beating for the mark but never into the wind's eye (`rivalHelm`/
+  `layHeading`). First to within `finishMargin` of the mark wins (stake back
+  doubled) or loses (stake forfeit), with a win/loss sting. A standings strip shows
+  the gap; the rival is drawn as a low-poly sloop billboard riding the swell, and
+  the mark is ringed on every chart.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -168,8 +182,10 @@ Roughly in suggested build order; each is a milestone.
   top speed; laden-hull speed penalty via `step_scaled`.
 - **Drydock / hull repair** (`Hull.scala`): 🟡 repair UI works at every port, but no
   damage source yet — wire storm/starvation wear so the hull actually wants mending.
-- **Races** (`Race.scala`): wager races vs a computer rival; rival ship rendering
-  (`ship-bow/stern.svg`) + banners.
+- **Races** (`Race.scala`): ✅ done — `race.rs` + `port_view.rs` Racing tab +
+  `rival_render.rs` + the race loop in `main.rs`. Wager races vs a computer rival
+  (rebuilt as a low-poly sloop billboard, not the `ship-*.svg` sprites) + a
+  standings banner.
 - **Hull & rations** (`Hull.scala`): hull integrity worn by storms/starvation, slow
   when battered; food eaten per daytime.
 - **Flotsam salvage** (`Flotsam.scala`): collectible crates/barrels/chests drifting on

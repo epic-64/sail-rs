@@ -6,10 +6,12 @@
 //! condition, and where the captain is (sailing or docked). Markets are
 //! deterministic per island+good, so the same seed always offers the same
 //! arbitrage. Haulage contracts (`shared.Mission`) ride here too — the accepted
-//! contracts and their reserved hold. Races (the original's other port board)
-//! are not yet ported, so the race state is absent.
+//! contracts and their reserved hold. A booked wager race (`shared.Race`) rides
+//! here too — the armed [`Race`] against the rival, settled when the player or the
+//! rival reaches the mark (see [`crate::race`]).
 
 use crate::mission::{self, Mission};
+use crate::race::{self, Race};
 use crate::rng::Rng;
 use crate::world::{Island, World};
 
@@ -112,6 +114,9 @@ pub enum TradeError {
     HullSound,
     NoSuchMission,
     NoDelivery,
+    RaceInProgress,
+    NoSuchRace,
+    NoRace,
 }
 
 /// Which fitting a shipyard upgrade improves.
@@ -284,6 +289,9 @@ pub struct GameState {
     /// Accepted haulage contracts riding in the hold until delivered (see
     /// [`crate::mission`]). Their goods occupy hold space but cannot be sold.
     pub active_missions: Vec<Mission>,
+    /// The wager race booked at a port, if any — armed until the player or the
+    /// rival reaches the mark, or the captain withdraws (see [`crate::race`]).
+    pub race: Option<Race>,
 }
 
 impl GameState {
@@ -301,6 +309,7 @@ impl GameState {
             sail_level: 0,
             hull: hull::max_hull(0, 0),
             active_missions: Vec::new(),
+            race: None,
         }
     }
 
@@ -483,6 +492,61 @@ impl GameState {
             .ok_or(TradeError::NoSuchMission)?;
         self.active_missions.retain(|m| m.id != mission.id);
         self.cargo[mission.good.index()] += mission.quantity;
+        Ok(())
+    }
+
+    // --- Races (the logic of `shared.Race`) ----------------------------------
+
+    /// Book a race: charge the distance-fixed stake up front and arm the race
+    /// against the named target. Refused while at sea, while another race is
+    /// already booked, or without the gold for the wager. (`Race.accept`.)
+    pub fn accept_race(&mut self, world: &World, target_id: i32) -> Result<(), TradeError> {
+        let origin = self.docked_island(world).ok_or(TradeError::NotDocked)?;
+        let origin_id = origin.id;
+        let origin_pos = origin.pos;
+        if self.race.is_some() {
+            return Err(TradeError::RaceInProgress);
+        }
+        let target = race::targets_at(self, world)
+            .into_iter()
+            .find(|p| p.id == target_id)
+            .ok_or(TradeError::NoSuchRace)?;
+        let wager = race::stake_for(origin_pos.distance_to(target.pos));
+        if wager > self.gold {
+            return Err(TradeError::NotEnoughGold);
+        }
+        self.gold -= wager;
+        self.race = Some(Race {
+            origin_id,
+            target_id,
+            stake: wager,
+        });
+        Ok(())
+    }
+
+    /// Settle a race the player has won: hand back the stake doubled (the wager
+    /// plus its match) and clear the race. A no-op when no race runs. (`Race.win`.)
+    pub fn win_race(&mut self) {
+        if let Some(r) = self.race {
+            self.gold += r.stake * 2;
+            self.race = None;
+        }
+    }
+
+    /// Settle a race the player has lost — the stake was already forfeited when the
+    /// race was booked, so this only clears it. (`Race.lose`.)
+    pub fn lose_race(&mut self) {
+        self.race = None;
+    }
+
+    /// Withdraw from a booked race at port, forfeiting the stake. Refused at sea or
+    /// with no race booked. (`Race.withdraw`.)
+    pub fn withdraw_race(&mut self, world: &World) -> Result<(), TradeError> {
+        self.docked_island(world).ok_or(TradeError::NotDocked)?;
+        if self.race.is_none() {
+            return Err(TradeError::NoRace);
+        }
+        self.race = None;
         Ok(())
     }
 }

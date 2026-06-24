@@ -30,8 +30,9 @@ pub struct Wind {
 pub const MAX_BOOST: f32 = 1.0;
 /// Closer to the wind than this (measured off dead-downwind) the sails find no
 /// drive at all — the ship is in irons and must tack. A 30° no-go zone either side
-/// of the wind's eye.
-const DEAD_ANGLE: f32 = 5.0 / 6.0 * PI; // 150° off downwind = 30° off the wind
+/// of the wind's eye. Public so the race's rival helm can beat to the same edge
+/// (`shared.Wind.deadAngle`).
+pub const DEAD_ANGLE: f32 = 5.0 / 6.0 * PI; // 150° off downwind = 30° off the wind
 /// The drive snatched the instant the bow falls off out of irons: the curve jumps
 /// straight to ~10% rather than building from nothing, so a hard beat crawls.
 const FLOOR_DRIVE: f32 = 0.10;
