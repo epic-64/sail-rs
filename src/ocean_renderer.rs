@@ -54,7 +54,14 @@ pub struct OceanRenderer {
     sun_elev: f32,
     shininess: f32,
     base_saturation: f32,
+    // How the facet's own brightness is modelled — the "wave shading" that makes
+    // some quads lighter than their neighbours. `height_shade` lifts crests over
+    // troughs; `slope_shade` lights the swell face turned toward the sun and shades
+    // its lee back (a soft, wrapped Lambert so it rolls rather than snaps);
+    // `sky_shade` lifts facets tilted up to the open sky.
     height_shade: f32,
+    slope_shade: f32,
+    sky_shade: f32,
 
     crest_glass: f32,
     crest_fade_lo: f32,
@@ -158,8 +165,10 @@ impl OceanRenderer {
             depth_far: 850.0,
             sun_elev: 0.55,
             shininess: 90.0,
-            base_saturation: 1.22,
-            height_shade: 0.38,
+            base_saturation: 1.34,
+            height_shade: 0.34,
+            slope_shade: 0.42,
+            sky_shade: 0.16,
             crest_glass: 0.2,
             crest_fade_lo: 0.12,
             crest_fade_hi: 0.42,
@@ -176,7 +185,7 @@ impl OceanRenderer {
             sss_ambient: 0.16,
             c_glow: (40.0, 232.0, 172.0),
             fresnel_f0: 0.02,
-            reflect_strength: 0.95,
+            reflect_strength: 0.72,
             sky_horizon: [0.0; 3],
             sky_zenith: [0.0; 3],
             live,
@@ -445,8 +454,10 @@ impl OceanRenderer {
             let nx = -slope_lat * inv_n;
             let ny = -slope_fwd * inv_n;
             let nz = inv_n;
-            // Diffuse term against the sun (Lambert).
-            let diff = clamp(nx * lx + ny * ly + nz * lz, 0.0, 1.0);
+            // Diffuse term against the sun (Lambert), kept signed so the shading
+            // below can wrap it softly around the back of each swell.
+            let lambert = nx * lx + ny * ly + nz * lz;
+            let diff = lambert.max(0.0);
 
             // View vector from this facet back to the eye.
             let s_mid = (self.cur_x[c] + self.cur_x[c + 1]) * 0.5 * f_near_row;
@@ -513,8 +524,24 @@ impl OceanRenderer {
                 0.0
             };
 
-            // Height shade: troughs sit in shadow, crests catch more light.
-            let shade = clamp(1.0 + crest * self.height_shade, 0.55, 1.6);
+            // Facet luminance — the wave shading that lights some quads over others,
+            // three orientation cues summed about a mid-grey of 1.0:
+            //   • height: crests catch the light, troughs sit in shadow;
+            //   • sun-facing slope: a wrapped Lambert (lambert·½+½, eased) so the face
+            //     of a swell turned toward the sun glows and its lee back falls into
+            //     soft shadow, the brightness rolling up the wave rather than snapping
+            //     at the terminator;
+            //   • sky fill: facets tilted up to the open sky lift, those tipped away dim.
+            let wrapped = clamp(lambert * 0.5 + 0.5, 0.0, 1.0);
+            let sun_face = wrapped * wrapped; // ease: deeper lee shadow, brighter face
+            let sky_face = 0.5 + 0.5 * nz; // up-facing → toward 1, steep faces → toward 0.5
+            let shade = clamp(
+                1.0 + crest * self.height_shade
+                    + (sun_face - 0.5) * self.slope_shade
+                    + (sky_face - 0.5) * self.sky_shade,
+                0.5,
+                1.7,
+            );
             let mut r = base_r * shade;
             let mut g = base_g * shade;
             let mut b = base_b * shade;
