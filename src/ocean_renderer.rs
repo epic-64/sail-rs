@@ -22,7 +22,7 @@ use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::isle_features::IsleFeature;
 use crate::islands_render::{paint_island, IslandView};
 use crate::ocean;
-use crate::palette::{self, Daytime, Palette, PALETTE_LEN};
+use crate::palette::{self, Palette, PALETTE_LEN};
 use crate::projection::BASE_EYE;
 use crate::sailing::Kinematics;
 use crate::world::Island;
@@ -51,7 +51,10 @@ pub struct OceanRenderer {
     // Decoupled from `f_far` so the mesh can reach right out to the horizon without
     // washing the whole sea into the pale far colour.
     depth_far: f32,
-    sun_elev: f32,
+    // How brightly the active light (sun by day, moon by night) burns this frame.
+    // Scales the sun-warmth, specular glint and subsurface glow so the sea dims into
+    // night and lifts again at dawn. Set each frame from the sky clock.
+    light_strength: f32,
     shininess: f32,
     base_saturation: f32,
     // How the facet's own brightness is modelled — the "wave shading" that makes
@@ -135,7 +138,7 @@ fn hash2(ix: i32, iy: i32) -> i32 {
 }
 
 impl OceanRenderer {
-    pub fn new(start_day: Daytime) -> Self {
+    pub fn new(start_tod: f32) -> Self {
         // We keep the original chunky, low-poly *near* look (flat-shaded facets ≈
         // the old 52×36 canvas mesh) but bias the rows hard toward the far field so
         // the distant bands get subdivided instead of stretching into big flat
@@ -154,7 +157,7 @@ impl OceanRenderer {
         // foam-flecked bands and the flat skirt retreats to the off-screen sliver.
         let f_near = 2.5;
         let f_far = 2600.0;
-        let live = palette::palette_for(start_day);
+        let live = palette::sea_palette(start_tod);
         OceanRenderer {
             cols,
             rows,
@@ -163,7 +166,7 @@ impl OceanRenderer {
             f_near,
             f_far,
             depth_far: 850.0,
-            sun_elev: 0.55,
+            light_strength: 1.0,
             shininess: 90.0,
             base_saturation: 1.34,
             height_shade: 0.34,
@@ -225,13 +228,21 @@ impl OceanRenderer {
         [self.shown[o], self.shown[o + 1], self.shown[o + 2]]
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         kin: &Kinematics,
         t: f32,
         sea: f32,
         heave: f32,
-        day: Daytime,
+        // The sea palette for the current clock (already blended across the day),
+        // the fair-weather sky gradient to reflect, and the active light: its world
+        // bearing, sine-altitude and brightness (sun by day, moon by night).
+        target_sea: &Palette,
+        sky_grad: [(f32, f32, f32); 3],
+        light_az: f32,
+        light_alt: f32,
+        light_strength: f32,
         storm: f32,
         w: f32,
         h: f32,
@@ -240,15 +251,16 @@ impl OceanRenderer {
         // bands at its own depth.
         islands: &[(&Island, &[IsleFeature])],
     ) {
-        // Ease the live palette toward the current daytime's target with a slow
-        // cross-fade, then blend toward the cold storm palette by the gale's fury.
+        // Ease the live palette toward the clock's target with a slow cross-fade,
+        // then blend toward the cold storm palette by the gale's fury.
         let dt = match self.prev_t {
             None => 0.0,
             Some(p) => (t - p).min(0.1),
         };
         self.prev_t = Some(t);
+        self.light_strength = light_strength;
         let k = clamp(dt * 0.9, 0.0, 1.0);
-        let target = palette::palette_for(day);
+        let target = *target_sea;
         let storm_blend = clamp(storm, 0.0, 1.0) * 0.9;
         for p in 0..PALETTE_LEN {
             self.live[p] += (target[p] - self.live[p]) * k;
@@ -262,11 +274,11 @@ impl OceanRenderer {
         self.p_sky = self.live_col(15);
         self.p_glint = self.live_col(18);
 
-        // The live sky gradient the water reflects: the fair-weather sky for this
-        // daytime, blended toward the storm overcast — matching `main::draw_sky` so
-        // the mirrored sky and the painted sky are the same colours.
+        // The live sky gradient the water reflects: the clock's fair-weather sky,
+        // blended toward the storm overcast — matching `main::draw_sky` so the
+        // mirrored sky and the painted sky are the same colours.
         let storm_c = clamp(storm, 0.0, 1.0);
-        let fair = palette::fair_sky(day);
+        let fair = sky_grad;
         let blend = |a: (f32, f32, f32), b: (f32, f32, f32)| {
             [
                 a.0 + (b.0 - a.0) * storm_c,
@@ -287,14 +299,18 @@ impl OceanRenderer {
         let fwd = Vec2::from_heading(kin.heading_rad);
         let right = Vec2::new(kin.heading_rad.cos(), -kin.heading_rad.sin());
 
-        // Sun direction in the camera's (right, forward, up) frame.
-        let sun_rel = wrap_angle(SUN_BEARING - kin.heading_rad);
-        let lx = sun_rel.sin() * self.sun_elev.cos();
-        let ly = sun_rel.cos() * self.sun_elev.cos();
-        let lz = self.sun_elev.sin();
+        // Active-light direction in the camera's (right, forward, up) frame. The
+        // altitude is passed as its sine (the vertical component); the horizontal
+        // component is the matching cosine, split across the bearing relative to the
+        // bow. As the sun arcs over and sets, this swings the glitter and shading.
+        let light_horiz = (1.0 - light_alt * light_alt).max(0.0).sqrt();
+        let light_rel = wrap_angle(light_az - kin.heading_rad);
+        let lx = light_rel.sin() * light_horiz;
+        let ly = light_rel.cos() * light_horiz;
+        let lz = light_alt;
 
-        // Island view: same camera, with the sun in *world* space (chart x/y, z up)
-        // so the landmass facets shade consistently as the ship turns.
+        // Island view: same camera, with the light in *world* space (chart x/y, z up)
+        // so the landmass facets shade consistently as the ship turns and the sun moves.
         let view = IslandView {
             w,
             horizon,
@@ -303,9 +319,9 @@ impl OceanRenderer {
             half_fov_h_view,
             eye_rise: heave * WAVE_GAIN,
             sun: (
-                SUN_BEARING.sin() * self.sun_elev.cos(),
-                SUN_BEARING.cos() * self.sun_elev.cos(),
-                self.sun_elev.sin(),
+                light_az.sin() * light_horiz,
+                light_az.cos() * light_horiz,
+                light_alt,
             ),
         };
         // Near-shore distance key per island (aligned with `islands`), used to slot
@@ -545,7 +561,7 @@ impl OceanRenderer {
             let mut r = base_r * shade;
             let mut g = base_g * shade;
             let mut b = base_b * shade;
-            let t_lit = 0.30 * diff;
+            let t_lit = 0.30 * diff * self.light_strength;
             r += (sun_r - r) * t_lit;
             g += (sun_g - g) * t_lit;
             b += (sun_b - b) * t_lit;
@@ -554,14 +570,16 @@ impl OceanRenderer {
             g += (sky_g - g) * t_sky;
             b += (sky_b - b) * t_sky;
             if sss > 0.0 {
-                r += (glow_r - r) * sss;
-                g += (glow_g - g) * sss;
-                b += (glow_b - b) * sss;
+                let ss = sss * self.light_strength;
+                r += (glow_r - r) * ss;
+                g += (glow_g - g) * ss;
+                b += (glow_b - b) * ss;
             }
             if spec > 0.0 {
-                r += (glint_r - r) * spec;
-                g += (glint_g - g) * spec;
-                b += (glint_b - b) * spec;
+                let sp = spec * self.light_strength;
+                r += (glint_r - r) * sp;
+                g += (glint_g - g) * sp;
+                b += (glint_b - b) * sp;
             }
             if foam > 0.0 {
                 let tf = foam.min(1.0);
