@@ -252,8 +252,9 @@ Roughly in suggested build order; each is a milestone.
 - Run: `cargo run --release` (the dense wave mesh wants release for smooth FPS;
   debug runs but is choppier).
 - Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Space**
-  dock at a port in range (sails struck) · **Q/E** nudge the weather calmer/stormier
-  (it auto-drifts) · **T** daytime · **[ ]** back/veer the wind (dev aid for feeling
+  dock at a port in range (sails struck) · **C** (hold) look astern — spins the view
+  180° over the wake, helm unchanged · **Q/E** nudge the weather calmer/stormier
+  (it auto-drifts) · **T/Y** daytime forward/back · **[ ]** back/veer the wind (dev aid for feeling
   the points of sail) ·
   **L** open/close the captain's log (**←/→** turn its pages while open) · **Esc**
   close the log / quit. In port: arrows
