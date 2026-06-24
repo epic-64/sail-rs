@@ -13,6 +13,7 @@ mod palette;
 mod projection;
 mod rng;
 mod sailing;
+mod ship_render;
 mod world;
 
 use macroquad::prelude::*;
@@ -22,6 +23,7 @@ use ocean_renderer::{OceanRenderer, SUN_BEARING};
 use palette::Daytime;
 use projection::MAX_VIEW;
 use sailing::{Helm, Kinematics};
+use ship_render::{RigInput, ShipRenderer};
 use world::Island;
 
 fn window_conf() -> Conf {
@@ -153,6 +155,16 @@ async fn main() {
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]
 
+    // The ship's foreground (deck + rig). Roll/yaw are low-passed so the deck
+    // rocks with the long swell rather than buzzing with the chop.
+    let mut ship = ShipRenderer::new();
+    let mut smooth_roll: f32 = 0.0;
+    let mut smooth_yaw: f32 = 0.0;
+    const ROLL_EASE: f32 = 2.2;
+    // Render-only placeholder wind (no physics yet): the bearing it blows *toward*,
+    // steered with [ and ] so the sail's brace/belly/luff can be seen to respond.
+    let mut wind_toward: f32 = std::f32::consts::PI; // a following wind to start
+
     loop {
         let dt = get_frame_time().min(0.05);
         let t = get_time() as f32;
@@ -163,6 +175,12 @@ async fn main() {
         // --- Input -------------------------------------------------------------
         let helm = read_helm();
         kin = sailing::step(kin, helm, dt);
+        if is_key_down(KeyCode::RightBracket) {
+            wind_toward = wrap_angle(wind_toward + dt * 0.8);
+        }
+        if is_key_down(KeyCode::LeftBracket) {
+            wind_toward = wrap_angle(wind_toward - dt * 0.8);
+        }
         // Keep the hull out of every nearby island.
         let near = world.islands_near(kin.pos, 400.0);
         kin = sailing::resolve_grounding(kin, &near);
@@ -220,13 +238,31 @@ async fn main() {
         visible.sort_by(|a, b| key(b.0).partial_cmp(&key(a.0)).unwrap());
 
         // --- Waves -------------------------------------------------------------
-        let heave = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea).heave;
-        renderer.render(&kin, t, sea, heave, day, storm, w, h, &visible);
+        let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
+        renderer.render(&kin, t, sea, motion.heave, day, storm, w, h, &visible);
+
+        // --- Ship (deck + rig) -------------------------------------------------
+        // Heave and pitch are read straight from the swell, but the roll and yaw
+        // are low-passed so the deck rocks with the long ocean swell, not the chop.
+        let ease = clamp(ROLL_EASE * dt, 0.0, 1.0);
+        smooth_roll += (motion.roll - smooth_roll) * ease;
+        smooth_yaw += (motion.yaw - smooth_yaw) * ease;
+        let rig = RigInput {
+            motion: ocean::ShipMotion {
+                roll: smooth_roll,
+                yaw: smooth_yaw,
+                ..motion
+            },
+            set: helm.throttle,
+            turn: helm.turn,
+            wind_rel: wrap_angle(wind_toward - kin.heading_rad),
+        };
+        ship.render(&rig, dt, t, day, storm, w, h);
 
         // --- HUD ---------------------------------------------------------------
         let knots = kin.speed() / sailing::KNOT;
         let hud = format!(
-            "{}  sea {:.2}  storm {:.2}  {:.1} kn   [WASD sail  Q/E sea  G storm  T time]",
+            "{}  sea {:.2}  storm {:.2}  {:.1} kn   [WASD sail  Q/E sea  G storm  T time  [ ] wind]",
             day.label(),
             sea,
             storm,
