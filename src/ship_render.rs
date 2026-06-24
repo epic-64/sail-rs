@@ -132,9 +132,13 @@ impl ShipRenderer {
         let m = rig.motion;
         let roll = m.roll * DECK_SHARE;
         let (sr, cr) = roll.sin_cos();
-        let pitch_px = pitch_response(m.pitch) * 90.0;
+        // Fore-aft nod (radians): the bow climbs gently and dives hard, shared down
+        // by the deck-share. This drives a real *tilt* of the deck plane and the rig
+        // (handled in draw_deck / draw_rig), not a mere vertical bob, so the ship
+        // pitches through the swell. Heave stays as the only pure vertical slide.
+        let pitch_ang = pitch_response(m.pitch) * DECK_SHARE;
         let dx = m.yaw * YAW_SWAY_PX * DECK_SHARE;
-        let dy = (pitch_px + m.heave * 6.0) * DECK_SHARE;
+        let dy = m.heave * 6.0 * DECK_SHARE;
         // Pivot well below the screen so the tall mast arcs as the hull rolls.
         let pvx = w * 0.5;
         let pvy = h * 1.15;
@@ -145,17 +149,21 @@ impl ShipRenderer {
             vec2(pvx + rx + dx, pvy + ry + dy)
         };
 
-        self.draw_deck(&sway, lit, h, w);
-        self.draw_rig(&sway, rig, lit, t, h, w);
+        self.draw_deck(&sway, pitch_ang, lit, h, w);
+        self.draw_rig(&sway, rig, pitch_ang, lit, t, h, w);
     }
 
     /// Deck floor, bulwarks and the ship's wheel — the static woodwork the camera
     /// is bolted to. A planked perspective trapezoid that just sways with the hull.
-    fn draw_deck(&self, sway: &impl Fn(f32, f32) -> Vec2, lit: f32, h: f32, w: f32) {
+    fn draw_deck(&self, sway: &impl Fn(f32, f32) -> Vec2, pitch_ang: f32, lit: f32, h: f32, w: f32) {
         let cx = w * 0.5;
         // Far (toward the bow) and near (under the helm) edges of the deck plank.
-        let far_y = h * 0.70;
-        let near_y = h * 1.08; // off the bottom edge so the deck fills the foreground
+        // The fore-aft nod tilts the plane about mid-deck: bow-up lifts the far edge
+        // and settles the helm, so the deck rocks fore-and-aft through the swell
+        // rather than just sliding up and down.
+        let nod = pitch_ang * h * 0.72;
+        let far_y = h * 0.70 - nod;
+        let near_y = h * 1.08 + nod * 0.3; // off the bottom edge so the deck fills the foreground
         let far_hw = w * 0.16;
         let near_hw = w * 0.62;
 
@@ -246,6 +254,7 @@ impl ShipRenderer {
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,
         rig: &RigInput,
+        pitch_ang: f32,
         lit: f32,
         t: f32,
         h: f32,
@@ -258,11 +267,17 @@ impl ShipRenderer {
         let sail_w = w * 0.46;
         let sail_h = mast_len * 0.50;
 
+        // The fore-aft nod tips the whole rig about its foot: bow-up rocks the
+        // masthead aft (toward the helm/viewer), bow-down throws it forward.
+        let (sp, cp) = pitch_ang.sin_cos();
         // Project a rig-local point (across x, up y, depth z toward viewer) to a
-        // swayed screen point. The mast foot is the local origin on the deck.
+        // swayed screen point. The mast foot is the local origin on the deck; (y, z)
+        // are first rotated by the pitch so the rig nods through the swell.
         let project = |x: f32, y: f32, z: f32| -> Vec2 {
-            let persp = FOCAL / (FOCAL - z);
-            sway(cx + x * persp, foot_y - y * persp)
+            let py = y * cp - z * sp;
+            let pz = y * sp + z * cp;
+            let persp = FOCAL / (FOCAL - pz);
+            sway(cx + x * persp, foot_y - py * persp)
         };
 
         // --- Sail trim --------------------------------------------------------

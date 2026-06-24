@@ -83,12 +83,15 @@ while keeping the game's mechanics and feel.
 - **Camera ride + wind heel** — `main.rs`: the whole world (sky, sun, waves,
   islands) is drawn through a `Camera2D` that *rides* the swell — it tilts the
   horizon opposite the hull's lean (the sea stays level while the captain heels),
-  nods as the bow pitches and swings as it yaws — while the deck leans *with* the
-  lean, so the two read as one heeling ship. The lean is swell-roll plus a **wind
-  heel**: the sails' press leans her away from the wind, hardest on a beam reach
-  and nil before the wind or in irons (`HEEL_GAIN`, eased). Tunables (`CAM_*`,
-  `HEEL_GAIN`) sit by the loop; world-anchored fills are over-scanned so a rolled
-  view never reveals background in the corners.
+  drops/rises as the bow pitches, and swings as it yaws — while the deck leans
+  *with* the lean, so the two read as one heeling ship. The lean is swell-roll plus
+  a **wind heel**: the sails' press leans her away from the wind, hardest on a beam
+  reach and nil before the wind or in irons (`HEEL_GAIN`, eased). **Pitch is a real
+  fore-aft nod**, not a bob: the deck plane tilts about mid-deck and the rig rocks
+  about its foot (masthead aft on bow-up), while the horizon travels to match.
+  Tunables (`CAM_*`, `HEEL_GAIN`) sit by the loop; world-anchored fills are
+  over-scanned so a rolled/pitched view never reveals background in the corners.
+  (`Camera2D::from_display_rect` flips Y to the screen — `zoom.y` is flipped back.)
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
