@@ -175,7 +175,7 @@ async fn main() {
     // port, bow pointed at it, so there's land in view from the first frame.
     let world = world::generate(1);
     // A fixed dome of stars, seeded off the world so it's the same each run.
-    let stars = celestial::StarField::new(world.seed ^ 0x5741, 170);
+    let stars = celestial::StarField::new(world.seed ^ 0x5741, 260);
     // Each island's scenery is deterministic; generate it once. `islands` is in id
     // order (index == id), so this Vec aligns by index.
     let features: Vec<Vec<isle_features::IsleFeature>> = world
@@ -281,6 +281,13 @@ async fn main() {
     let mut salvage_flash: f32 = 0.0;
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
+    // A race outcome banner: when the player or the rival reaches the mark, this
+    // holds a win/loss message that flashes centre-screen and fades, so the result
+    // is announced on screen as well as by the win/loss sting.
+    let mut race_result_flash: f32 = 0.0;
+    let mut race_result_msg = String::new();
+    let mut race_result_won = false;
+    const RACE_RESULT_FLASH_TIME: f32 = 4.5;
     // The rival waits this far abeam at the off; the player counts as alongside
     // within `RACE_START_RANGE` and "standing still" at or below `RACE_STILL_SPEED`.
     const RACE_START_GAP: f32 = 90.0;
@@ -465,17 +472,27 @@ async fn main() {
                         let rnear = world.islands_near(stepped.pos, 400.0);
                         rival = Some(sailing::resolve_grounding(stepped, &rnear));
                         if race::reached(&kin, target) {
+                            let payout = r.stake * 2;
                             gs.win_race();
                             rival = None;
                             race_ready = false;
                             race_running = false;
                             sounds.race_won();
+                            race_result_won = true;
+                            race_result_msg =
+                                format!("Race won — first to {}!  Purse: {} gold", target.name, payout);
+                            race_result_flash = RACE_RESULT_FLASH_TIME;
                         } else if rival.map_or(false, |rk| race::reached(&rk, target)) {
+                            let lost = r.stake;
                             gs.lose_race();
                             rival = None;
                             race_ready = false;
                             race_running = false;
                             sounds.race_lost();
+                            race_result_won = false;
+                            race_result_msg =
+                                format!("Race lost — rival reached {} first.  {} gold forfeit", target.name, lost);
+                            race_result_flash = RACE_RESULT_FLASH_TIME;
                         }
                     }
                     Some(rk) => {
@@ -867,6 +884,33 @@ async fn main() {
                 );
                 draw_text(&text, bx, by, fs as f32, Color::new(1.0, 0.92, 0.6, 1.0));
             }
+        }
+
+        // Race outcome banner: a bold win/loss announcement centre-screen that holds
+        // then fades, so the player learns the result (and the gold) — not just the
+        // sting. Green-gold for a win, dull red for a loss.
+        race_result_flash = (race_result_flash - dt).max(0.0);
+        if race_result_flash > 0.0 && !harbor.is_open() && !log_open {
+            // Hold full opacity for most of the window, fading over the last second.
+            let a = (race_result_flash / 1.0).min(1.0);
+            let fs = 40;
+            let dims = measure_text(&race_result_msg, None, fs, 1.0);
+            let bx = w * 0.5 - dims.width / 2.0;
+            let by = h * 0.30;
+            draw_rectangle(
+                bx - 22.0,
+                by - 38.0,
+                dims.width + 44.0,
+                56.0,
+                Color::new(0.08, 0.05, 0.02, 0.66 * a),
+            );
+            let accent = if race_result_won {
+                Color::new(1.0, 0.86, 0.42, a) // gold for a win
+            } else {
+                Color::new(0.95, 0.45, 0.38, a) // dull red for a loss
+            };
+            draw_text(&race_result_msg, bx + 2.0, by + 2.0, fs as f32, Color::new(0.0, 0.0, 0.0, 0.5 * a));
+            draw_text(&race_result_msg, bx, by, fs as f32, accent);
         }
 
         // The captain's log, flipped open over the scene.
