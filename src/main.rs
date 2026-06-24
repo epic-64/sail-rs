@@ -51,6 +51,7 @@ fn window_conf() -> Conf {
         window_title: "sail-rs".to_owned(),
         window_width: 1280,
         window_height: 720,
+        fullscreen: true, // launch full-screen (toggle in the pause menu's Options)
         high_dpi: true,
         sample_count: 4, // MSAA: smooth the wave-quad edges
         ..Default::default()

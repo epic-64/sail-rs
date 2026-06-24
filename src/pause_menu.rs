@@ -54,7 +54,7 @@ impl PauseMenu {
             open: false,
             view: View::Main,
             cursor: 0,
-            fullscreen: false,
+            fullscreen: true, // matches the window launching full-screen (see window_conf)
         }
     }
 
