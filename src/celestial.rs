@@ -241,30 +241,49 @@ pub fn draw(
         draw_body(sky.moon_az, sky.moon_alt, heading, half_fov_h, w, horizon, h * 0.038, (230.0, 234.0, 242.0), vis);
     }
 
-    if sky.sun_alt > -0.06 {
+    // Drawn until the whole disc has dipped below the horizon (the sea, painted
+    // afterwards, hides the submerged part), so it completes its set instead of
+    // vanishing while still half up.
+    if sky.sun_alt > -0.2 {
         let low = clamp(sky.sun_alt, 0.0, 1.0);
+        // How coloured the disc is: 1 right at the horizon, easing to 0 (natural
+        // white) once the sun clears COLOR_SPAN. A small span confines the tint to
+        // the brief sunrise/sunset window and leaves the sun white the rest of its
+        // arc — so it neither reddens too early in the evening nor lingers orange
+        // into the morning.
+        const COLOR_SPAN: f32 = 0.32;
+        let tint = 1.0 - clamp(low / COLOR_SPAN, 0.0, 1.0);
         // Sunrise climbs in the east (azimuth shy of due south); sunset sinks in the
         // west. They get different low-sun tints.
         let rising = sky.sun_az < NOON_AZ;
-        let color = if rising {
-            // Sunrise opens orange — never blood-red — and warms quickly through
-            // yellow to white as it lifts (`powf` front-loads the climb).
-            let warm = low.powf(0.45);
-            if warm < 0.5 {
-                mix((255.0, 150.0, 52.0), (255.0, 224.0, 130.0), warm * 2.0) // orange → yellow
+        let mut color = if rising {
+            // Sunrise opens orange — never blood-red — through yellow to white.
+            if tint > 0.5 {
+                mix((255.0, 224.0, 130.0), (255.0, 150.0, 52.0), (tint - 0.5) * 2.0) // yellow → orange
             } else {
-                mix((255.0, 224.0, 130.0), (255.0, 244.0, 214.0), (warm - 0.5) * 2.0) // yellow → white
+                mix((255.0, 244.0, 214.0), (255.0, 224.0, 130.0), tint * 2.0) // white → yellow
             }
         } else {
-            // The setting sun burns deep blood-red on the horizon and warms to white
-            // at noon. `warm` is held low across the low sun (squared) so the red
-            // lingers through the whole sunset rather than only as it touches down.
-            let warm = low * low;
-            mix((228.0, 48.0, 28.0), (255.0, 244.0, 214.0), warm)
+            // The setting sun burns deep blood-red right on the horizon, warming to
+            // white as it lifts clear.
+            mix((255.0, 244.0, 214.0), (228.0, 48.0, 28.0), tint)
         };
         // A touch smaller than before; still swells a little near the horizon, as it
         // really appears.
         let r = h * (0.045 + 0.022 * (1.0 - low));
-        draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, r, color, dim);
+        // Green flash: as the last sliver of the setting sun slips under the horizon
+        // its top edge flares emerald for an instant (a real atmospheric effect). The
+        // flash peaks the moment the disc's top edge meets the sea line — `set_alt`
+        // is the altitude at which that happens, given the projection's `0.95` scale.
+        let mut vis = dim;
+        if !rising {
+            let set_alt = -r / (horizon * 0.95);
+            let flash = clamp(1.0 - (sky.sun_alt - set_alt).abs() / 0.035, 0.0, 1.0);
+            if flash > 0.0 {
+                color = mix(color, (70.0, 255.0, 130.0), flash);
+                vis = (dim * (1.0 + 0.5 * flash)).min(1.0);
+            }
+        }
+        draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, r, color, vis);
     }
 }
