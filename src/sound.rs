@@ -75,6 +75,9 @@ pub struct SoundBank {
     sailing_vol: f32,
     calm_vol: f32,
     storm_vol: f32,
+    /// Master gain (0..1), set from the options menu, that every clip's own
+    /// volume is multiplied by — the single dial over the whole mix.
+    master: f32,
 }
 
 impl SoundBank {
@@ -111,7 +114,19 @@ impl SoundBank {
             sailing_vol: 0.0,
             calm_vol: 0.0,
             storm_vol: 0.0,
+            master: 1.0,
         }
+    }
+
+    /// The current master gain (0..1), as the options slider shows it.
+    pub fn master(&self) -> f32 {
+        self.master
+    }
+
+    /// Set the master gain (0..1). Beds pick it up on the next [`update`](Self::update);
+    /// one-shots use it the next time they fire.
+    pub fn set_master(&mut self, v: f32) {
+        self.master = v.clamp(0.0, 1.0);
     }
 
     /// Ease the three beds toward the targets the current sea state implies and
@@ -134,9 +149,9 @@ impl SoundBank {
         self.storm_vol += (storm_target - self.storm_vol) * ease;
         self.calm_vol += (calm_target - self.calm_vol) * ease;
 
-        set_sound_volume(&self.sailing, self.sailing_vol);
-        set_sound_volume(&self.storm, self.storm_vol);
-        set_sound_volume(&self.calm, self.calm_vol);
+        set_sound_volume(&self.sailing, self.sailing_vol * self.master);
+        set_sound_volume(&self.storm, self.storm_vol * self.master);
+        set_sound_volume(&self.calm, self.calm_vol * self.master);
     }
 
     /// A canvas *flap* — more sail hauled up, fresh cloth catching the wind.
@@ -154,7 +169,7 @@ impl SoundBank {
     fn flap(&self, clip: &Sound) {
         stop_sound(&self.flap_up);
         stop_sound(&self.flap_down);
-        play_sound(clip, PlaySoundParams { looped: false, volume: FLAP_VOL });
+        play_sound(clip, PlaySoundParams { looped: false, volume: FLAP_VOL * self.master });
     }
 
     /// A transition *whoosh* — the wind has backed/veered to a fresh quarter.
@@ -163,7 +178,7 @@ impl SoundBank {
         stop_sound(&self.wind_shift);
         play_sound(
             &self.wind_shift,
-            PlaySoundParams { looped: false, volume: WIND_SHIFT_VOL },
+            PlaySoundParams { looped: false, volume: WIND_SHIFT_VOL * self.master },
         );
     }
 
@@ -173,7 +188,7 @@ impl SoundBank {
         stop_sound(&self.coin);
         play_sound(
             &self.coin,
-            PlaySoundParams { looped: false, volume: COIN_VOL },
+            PlaySoundParams { looped: false, volume: COIN_VOL * self.master },
         );
     }
 
@@ -185,7 +200,7 @@ impl SoundBank {
         stop_sound(&self.coin);
         play_sound(
             &self.coin,
-            PlaySoundParams { looped: false, volume: SALVAGE_VOL },
+            PlaySoundParams { looped: false, volume: SALVAGE_VOL * self.master },
         );
     }
 
@@ -194,7 +209,7 @@ impl SoundBank {
         stop_sound(&self.race_won);
         play_sound(
             &self.race_won,
-            PlaySoundParams { looped: false, volume: RACE_WON_VOL },
+            PlaySoundParams { looped: false, volume: RACE_WON_VOL * self.master },
         );
     }
 
@@ -203,7 +218,7 @@ impl SoundBank {
         stop_sound(&self.race_lost);
         play_sound(
             &self.race_lost,
-            PlaySoundParams { looped: false, volume: RACE_LOST_VOL },
+            PlaySoundParams { looped: false, volume: RACE_LOST_VOL * self.master },
         );
     }
 }
