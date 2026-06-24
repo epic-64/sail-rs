@@ -157,6 +157,9 @@ impl ShipRenderer {
         let near_y = h * 1.08 + nod * 0.3; // off the bottom edge so the deck fills the foreground
         let far_hw = w * 0.16;
         let near_hw = w * 0.62;
+        // The stem: the bow pinches to a point forward of (above) the far edge so
+        // the hull reads as a pointed prow, not a raft's flat front.
+        let stem_y = far_y - h * 0.13;
 
         let quad = |a: Vec2, b: Vec2, c: Vec2, d: Vec2, col: Color| {
             draw_triangle(a, b, c, col);
@@ -177,6 +180,20 @@ impl ShipRenderer {
             quad(a, b, c, d, rgba(tone, lit, 1.0));
         }
 
+        // Foredeck: the planking carries on past the far edge and pinches to the
+        // stemhead, a fan of converging triangles forming the pointed bow.
+        let stem = sway(cx, stem_y);
+        let fore_planks = 8;
+        for i in 0..fore_planks {
+            let u0 = i as f32 / fore_planks as f32 * 2.0 - 1.0;
+            let u1 = (i + 1) as f32 / fore_planks as f32 * 2.0 - 1.0;
+            let a = sway(cx + u0 * far_hw, far_y);
+            let b = sway(cx + u1 * far_hw, far_y);
+            // Slightly darker than the main deck so the raked foredeck reads apart.
+            let tone = if i % 2 == 0 { DECK_B } else { DECK_A };
+            draw_triangle(a, b, stem, rgba(tone, 0.92 * lit, 1.0));
+        }
+
         // Bulwarks: a raised rail up each side, darker on the inboard face.
         let rail_h = h * 0.10;
         for side in [-1.0f32, 1.0] {
@@ -189,6 +206,59 @@ impl ShipRenderer {
             let fc = sway(cx + side * far_hw * 1.04, far_y - rail_h * 0.5);
             let nc = sway(cx + side * near_hw * 1.02, near_y - rail_h);
             quad(ft, nt, nc, fc, rgba(RAIL_DK, lit, 1.0));
+        }
+
+        // Bow rails: the topside sweeps in from each far corner to the raised
+        // stemhead, closing the prow and giving it a little sheer.
+        let stem_cap = sway(cx, stem_y - rail_h * 0.55);
+        for side in [-1.0f32, 1.0] {
+            let fb = sway(cx + side * far_hw, far_y);
+            let ft = sway(cx + side * far_hw, far_y - rail_h * 0.5);
+            // Outer (lit) face down to the waterline, then the capped top edge.
+            quad(fb, ft, stem_cap, stem, rgba(RAIL, lit, 1.0));
+            draw_triangle(ft, stem_cap, stem, rgba(RAIL_DK, lit, 1.0));
+        }
+
+        // Open railing: stanchions standing along each topside, joined by a cap
+        // rail above the bulwark, so the deck reads as guarded rather than a bare
+        // wall. Drawn far → near so nearer posts overlap the ones behind.
+        let posts = 7;
+        let post_h = rail_h * 0.55;
+        let post_hw = w * 0.006;
+        for side in [-1.0f32, 1.0] {
+            // Sheer line along the bulwark cap, far (0) → near (1).
+            let cap_far = far_y - rail_h * 0.5;
+            let cap_near = near_y - rail_h;
+            let rail_pt = |t: f32| -> (f32, f32) {
+                let hw = far_hw + (near_hw - far_hw) * t;
+                let cap = cap_far + (cap_near - cap_far) * t;
+                (cx + side * hw, cap)
+            };
+            // Cap rail: a thin board riding the tops of the stanchions.
+            let (x0, y0) = rail_pt(0.0);
+            let (x1, y1) = rail_pt(1.0);
+            let band = rail_h * 0.12;
+            quad(
+                sway(x0, y0 - post_h),
+                sway(x1, y1 - post_h),
+                sway(x1, y1 - post_h + band),
+                sway(x0, y0 - post_h + band),
+                rgba(RAIL_DK, lit, 1.0),
+            );
+            // Stanchions: short vertical posts from the cap up to the rail,
+            // fattening a touch as they near the helm (perspective).
+            for i in 0..=posts {
+                let t = i as f32 / posts as f32;
+                let (px, py) = rail_pt(t);
+                let pw = post_hw * (1.0 + t);
+                quad(
+                    sway(px - pw, py),
+                    sway(px + pw, py),
+                    sway(px + pw, py - post_h),
+                    sway(px - pw, py - post_h),
+                    rgba(RAIL, lit, 1.0),
+                );
+            }
         }
 
         self.draw_wheel(sway, lit, h, w);
@@ -254,9 +324,9 @@ impl ShipRenderer {
         let cx = w * 0.5;
         let foot_y = h * 0.78; // mast steps into the deck here
         let mast_len = h * 0.82; // tall enough to tower off the top of the screen
-        let yard_y = mast_len * 0.82; // yard crosses near the masthead
-        let sail_w = w * 0.46;
-        let sail_h = mast_len * 0.50;
+        let yard_y = mast_len * 0.90; // yard crosses near the masthead
+        let sail_w = w * 0.38;
+        let sail_h = mast_len * 0.42;
 
         // The fore-aft nod tips the whole rig about its foot: bow-up rocks the
         // masthead aft (toward the helm/viewer), bow-down throws it forward.
