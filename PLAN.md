@@ -55,7 +55,14 @@ while keeping the game's mechanics and feel.
 - **Scene** — `main.rs`: three-stop sky gradient (per daytime, eases to storm), sun
   disc, far-water backdrop, horizon.
 - **Camera + ship movement** — `sailing.rs`: `Kinematics`, `Helm`, `step` (drag,
-  keel side-slip, rudder authority, yaw inertia). Free-sail with WASD/arrows.
+  keel side-slip, rudder authority, yaw inertia).
+- **Wind & sailing** — `sailing.rs`: faithful `Wind` (`factor` drive curve with the
+  30° no-go zone, `floorDrive` jump, beam-reach peak, run ease-off; `random`/
+  `favorable`; `PointOfSail` for the HUD). Sails are discrete notches (None/Half/
+  Full) set with **W/S** — set once and the ship keeps going; **A/D** is the helm.
+  The wind blows toward a bearing, opens *favorable* and backs/veers to a random
+  quarter every 300 s, so making ground upwind forces tacking. The sail's render
+  belly/luff now reads off the same `Wind::factor` curve (`wind_factor_rel`).
 - **World generation** — `world.rs`: faithful `WorldGen` (5×5 clusters 42 km apart,
   5×5 jittered isles each, names/terrain/ports/shipyards). Positions match the
   original chart for a given seed.
@@ -77,8 +84,6 @@ while keeping the game's mechanics and feel.
 
 ## 🟡 Partial / diverged from original (intentional)
 
-- **Sailing physics** — no wind/sail model yet: `Ship::step` uses `drive = throttle ×
-  thrust` (full ahead), so there is no tacking, no points of sail, no wind-angle boost.
 - **Weather / sea-state** — `sea` and `storm` are **debug toggles** (Q/E, G), not the
   `Weather` calm→storm scenario system that drifts between adjacent states.
 - **Daytime** — cycled manually with **T**, not on an automatic dawn→night clock.
@@ -93,13 +98,6 @@ while keeping the game's mechanics and feel.
 Roughly in suggested build order; each is a milestone.
 
 ### Rendering / feel
-- **Wind & sailing** (`shared/Sailing.scala` `Wind`, sail modes, `Wind.factor`/`maxBoost`):
-  wind direction, sail trim/bend, luffing, tacking — restores the core sailing skill.
-  Note: `ship_render.rs` already brace/belly/luffs the sail from a **render-only
-  placeholder wind** (steered with `[`/`]`, `wind_rel` into `RigInput`); this
-  milestone replaces that placeholder with the real `Wind` model and feeds the same
-  trim values, and folds sail canvas (`set`) into a proper sail-mode control rather
-  than the throttle stand-in.
 - **Weather system** (`shared/Weather.scala`): auto-drift calm→storm along adjacent
   states, driving `sea`/`gloom`; wire into the existing storm-blend palette.
 - **Automatic daytime cycle** (`shared/Daytime.scala`): advance dawn→day→dusk→night.
@@ -137,8 +135,9 @@ Roughly in suggested build order; each is a milestone.
 
 - Run: `cargo run --release` (the dense wave mesh wants release for smooth FPS;
   debug runs but is choppier).
-- Controls: **WASD/arrows** sail · **Q/E** sea-state · **G** storm · **T** daytime ·
-  **[ ]** back/veer the (placeholder) wind to trim the sail · **Esc** quit.
+- Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Q/E**
+  sea-state · **G** storm · **T** daytime · **[ ]** back/veer the wind (dev aid for
+  feeling the points of sail) · **Esc** quit.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).
 
