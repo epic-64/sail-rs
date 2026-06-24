@@ -185,7 +185,7 @@ pub const DRAG: f32 = 0.28; // 1/s water resistance
 pub const KEEL: f32 = 0.9; // 1/s how strongly the keel bleeds side-slip
 pub const MAX_YAW_RATE: f32 = 0.24; // rad/s heading change at full rudder once up to speed
 pub const REF_SPEED: f32 = 7.0; // m/s at which the rudder reaches full bite
-pub const MIN_AUTHORITY: f32 = 0.15; // a sliver of steering even dead in the water
+pub const MIN_AUTHORITY: f32 = 0.4; // steerage even dead in the water — keeps her handy with sails struck / no wind
 pub const YAW_INERTIA: f32 = 0.3; // 1/s how quickly yaw-rate eases toward the rudder's command
 
 /// Advance the ship by `dt` seconds. The helm sets a *rudder* angle (`turn`) and a
