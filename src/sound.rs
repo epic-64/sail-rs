@@ -172,6 +172,17 @@ impl SoundBank {
         );
     }
 
+    /// A coin *chime* — salvage hauled aboard from the swell. Shares the trade
+    /// chime (the same "gold in the purse" cue), restarted so a rapid run of
+    /// pickups retriggers cleanly rather than piling up.
+    pub fn salvage(&self) {
+        stop_sound(&self.coin);
+        play_sound(
+            &self.coin,
+            PlaySoundParams { looped: false, volume: COIN_VOL },
+        );
+    }
+
     /// A triumphant chime — the player took the race.
     pub fn race_won(&self) {
         stop_sound(&self.race_won);

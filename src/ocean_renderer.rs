@@ -257,6 +257,11 @@ impl OceanRenderer {
         // into the night with the rest of the scene.
         rival: Option<Kinematics>,
         rival_light: f32,
+        // Visible floating salvage (position + kind), sorted *descending* by
+        // distance (farthest first) like the islands, so each piece slots into the
+        // march at its own depth and nearer water paints over it. Dimmed by the same
+        // `rival_light` (the scene light).
+        flotsam: &[(Vec2, crate::flotsam::FlotsamKind)],
     ) {
         // Ease the live palette toward the clock's target with a slow cross-fade,
         // then blend toward the cold storm palette by the gale's fury.
@@ -342,6 +347,10 @@ impl OceanRenderer {
         // march descends past it (so every nearer band/island then paints over it).
         let rival_dist = rival.map(|rk| kin.pos.distance_to(rk.pos));
         let mut rival_done = rival.is_none();
+        // Floating salvage marches in alongside the islands: each piece is drawn once
+        // the band march descends past its distance (farthest first), so nearer bands
+        // then paint over it just as they do the islands' bases.
+        let mut flot_idx = 0;
         let mut draw_rival = |f: f32| {
             if rival_done {
                 return;
@@ -410,9 +419,16 @@ impl OceanRenderer {
                 paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
                 isle_idx += 1;
             }
-            // The rival sits among the islands at its own depth, then the band paints
-            // over it just as it does their bases.
+            // The rival and any salvage sit among the islands at their own depths,
+            // then the band paints over them just as it does the islands' bases.
             draw_rival(f);
+            while flot_idx < flotsam.len() && kin.pos.distance_to(flotsam[flot_idx].0) >= f {
+                crate::flotsam_render::draw(
+                    flotsam[flot_idx].0, flotsam[flot_idx].1, kin, t, sea, heave, rival_light,
+                    horizon, px_per_rad, half_fov_h_view, w,
+                );
+                flot_idx += 1;
+            }
 
             if j > 0 {
                 self.paint_band(f, prev_f - f, sea, lx, ly, lz);
@@ -447,6 +463,14 @@ impl OceanRenderer {
         }
         // A rival nearer than the closest band stands in front of all the water.
         draw_rival(0.0);
+        // Any salvage nearer than the closest band floats in front of all the water.
+        while flot_idx < flotsam.len() {
+            crate::flotsam_render::draw(
+                flotsam[flot_idx].0, flotsam[flot_idx].1, kin, t, sea, heave, rival_light, horizon,
+                px_per_rad, half_fov_h_view, w,
+            );
+            flot_idx += 1;
+        }
 
         // Streak the surface flecks on top of the finished wave mesh.
         self.paint_flow(
