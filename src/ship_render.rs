@@ -24,7 +24,6 @@ use macroquad::prelude::*;
 
 use crate::geometry::clamp;
 use crate::ocean::{deck_heave_px, pitch_response, ShipMotion, HEAVE_CAMERA_SHARE};
-use crate::palette::Daytime;
 use crate::sailing::wind_factor_rel;
 
 use std::f32::consts::TAU;
@@ -100,7 +99,9 @@ impl ShipRenderer {
         rig: &RigInput,
         dt: f32,
         t: f32,
-        day: Daytime,
+        // How lit the deck is by the sky right now (1 = full noon, ~0.5 deep night),
+        // tracked continuously off the day/night clock so the ship dims with the sea.
+        day_lit: f32,
         storm: f32,
         w: f32,
         h: f32,
@@ -110,14 +111,8 @@ impl ShipRenderer {
         let target_brace = clamp(-rig.wind_rel, -BRACE_LIMIT, BRACE_LIMIT);
         self.brace_angle += (target_brace - self.brace_angle) * clamp(BRACE_EASE * dt, 0.0, 1.0);
 
-        // Daylight knocks the whole ship down a touch at dusk/night and the storm
-        // drains it toward slate, so the deck sits in the same light as the sea.
-        let day_lit = match day {
-            Daytime::Day => 1.0,
-            Daytime::Dawn => 0.9,
-            Daytime::Dusk => 0.82,
-            Daytime::Night => 0.5,
-        };
+        // The storm drains the deck toward slate, so it sits in the same light as the
+        // sea, on top of the clock's daylight already folded into `day_lit`.
         let lit = day_lit * (1.0 - 0.35 * clamp(storm, 0.0, 1.0));
 
         // --- Rigid sway shared by deck + rig -----------------------------------
