@@ -24,6 +24,7 @@ use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, Upgra
 use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
 use crate::mission;
+use crate::race;
 use crate::sailing::{Kinematics, Wind};
 use crate::sound::SoundBank;
 use crate::world::{Island, World};
@@ -102,6 +103,7 @@ enum Tab {
     Market,
     Contracts,
     Yard,
+    Race,
 }
 
 /// What the keyboard cursor rests on. Contracts and deliveries are keyed by
@@ -116,6 +118,9 @@ enum Focus {
     Contract(i32),
     Delivery(i32),
     Manifest(i32),
+    RaceTarget(i32),
+    RaceChallenge,
+    RaceWithdraw,
 }
 
 pub struct PortScreen {
@@ -123,9 +128,12 @@ pub struct PortScreen {
     tab: Tab,
     focus: Focus,
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
+    /// The Racing tab's working choice: which rival port to wager on. `None` falls
+    /// back to the nearest on the day's card. Only matters until a race is booked.
+    race_choice: Option<i32>,
 }
 
-const TABS: [Tab; 3] = [Tab::Market, Tab::Contracts, Tab::Yard];
+const TABS: [Tab; 4] = [Tab::Market, Tab::Contracts, Tab::Yard, Tab::Race];
 const LAST_COLUMN: usize = 3;
 
 impl PortScreen {
@@ -135,7 +143,15 @@ impl PortScreen {
             tab: Tab::Market,
             focus: Focus::TabBar,
             column: 0,
+            race_choice: None,
         }
+    }
+
+    /// The rival port currently chosen to race (the cursor's pick, or the nearest
+    /// on the card by default). `None` only when there are no ports to race to.
+    fn race_chosen(&self, gs: &GameState, world: &World) -> Option<i32> {
+        self.race_choice
+            .or_else(|| race::offers(gs, world).first().map(|p| p.id))
     }
 
     fn is_shipyard(&self, world: &World) -> bool {
@@ -162,6 +178,20 @@ impl PortScreen {
                     v.push(Focus::Upgrade(UpgradeKind::Cargo));
                 }
                 v
+            }
+            // While a race is booked the tab is just the armed race + a withdraw;
+            // with none booked it is the day's rival ports and the challenge button.
+            Tab::Race => {
+                if gs.race.is_some() {
+                    vec![Focus::RaceWithdraw]
+                } else {
+                    let mut v: Vec<Focus> = race::offers(gs, world)
+                        .iter()
+                        .map(|p| Focus::RaceTarget(p.id))
+                        .collect();
+                    v.push(Focus::RaceChallenge);
+                    v
+                }
             }
         }
     }
@@ -268,6 +298,28 @@ impl PortScreen {
                     };
                 }
             }
+            // Picking a target just arms the chart preview; the challenge books the
+            // race (charging the stake), and withdraw drops a booked one.
+            Focus::RaceTarget(id) => self.race_choice = Some(id),
+            Focus::RaceChallenge => {
+                if let Some(id) = self.race_chosen(gs, world) {
+                    if gs.accept_race(world, id).is_ok() {
+                        sounds.transaction();
+                        // The picker rows are gone; land on the new withdraw row.
+                        self.focus = Focus::RaceWithdraw;
+                    }
+                }
+            }
+            Focus::RaceWithdraw => {
+                if gs.withdraw_race(world).is_ok() {
+                    sounds.transaction();
+                    self.focus = self
+                        .rows_of(gs, world, self.tab)
+                        .first()
+                        .copied()
+                        .unwrap_or(Focus::TabBar);
+                }
+            }
         }
     }
 
@@ -361,16 +413,25 @@ impl PortScreen {
         let mut tx = x0 + pad;
         tx = self.tab_button("Market", Tab::Market, tx, tab_y, on_bar);
         tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
-        let _ = self.tab_button(yard_label, Tab::Yard, tx, tab_y, on_bar);
+        tx = self.tab_button(yard_label, Tab::Yard, tx, tab_y, on_bar);
+        let _ = self.tab_button("Racing", Tab::Race, tx, tab_y, on_bar);
 
         // --- Body: chart on the left, the active board on the right ----------
         let body_top = tab_y + 44.0;
         let chart_size = (ph - (body_top - y0) - pad).min(pw * 0.34);
         let chart = Rect::new(x0 + pad, body_top, chart_size, chart_size);
         let cpal = MinimapPalette::parchment();
-        // Mark every accepted contract's destination, and draw a dashed route from
-        // this port out to the highlighted contract's other port.
-        let marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        // Mark every accepted contract's destination and the race mark (booked, or
+        // the one being eyed on the Racing tab), and draw a dashed route from this
+        // port out to the highlighted contract's or race's other port.
+        let mut marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        if let Some(r) = gs.race {
+            marks.push(r.target_id);
+        } else if self.tab == Tab::Race {
+            if let Some(id) = self.race_chosen(gs, world) {
+                marks.push(id);
+            }
+        }
         let route = self.route_line(gs, world);
         minimap::render(world, kin, wind, chart, &cpal, &marks, route);
         // Name the local waters under the chart.
@@ -390,6 +451,7 @@ impl PortScreen {
             Tab::Market => self.render_market(gs, market, board_x, body_top, board_w),
             Tab::Contracts => self.render_contracts(gs, world, board_x, body_top, board_w),
             Tab::Yard => self.render_yard(gs, world, board_x, body_top, board_w),
+            Tab::Race => self.render_race(gs, world, board_x, body_top, board_w),
         }
 
         // Footer hint.
@@ -532,6 +594,109 @@ impl PortScreen {
         }
     }
 
+    /// The Racing board: wager on beating a computer-helmed rival to another port.
+    /// With no race booked it shows the day's rival ports (each with its stake) and
+    /// a challenge button; with one booked it shows the armed race and a withdraw.
+    fn render_race(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
+        let origin = &world.islands[self.island_id as usize];
+        draw_text("Harbour Race · Wager", x, y, 20.0, ink());
+        let mut ry = y + 30.0;
+
+        // Label (dim, left) + value (right-aligned) line within the board.
+        let line = |label: &str, value: &str, ry: f32| {
+            draw_text(label, x, ry, 18.0, dim_ink());
+            right_text(value, x + w, ry, 18);
+        };
+
+        if let Some(race) = gs.race {
+            let target = &world.islands[race.target_id as usize];
+            draw_text("Race booked", x, ry, 22.0, ink());
+            ry += 32.0;
+            line("Race to", &target.name, ry);
+            ry += 26.0;
+            line("Stake", &race.stake.to_string(), ry);
+            ry += 26.0;
+            line("On winning", &(race.stake * 2).to_string(), ry);
+            ry += 38.0;
+            draw_text(
+                "Set sail and the rival draws up alongside.",
+                x,
+                ry,
+                16.0,
+                dim_ink(),
+            );
+            ry += 20.0;
+            draw_text(
+                "Heave to, then raise sail to start level.",
+                x,
+                ry,
+                16.0,
+                dim_ink(),
+            );
+            ry += 34.0;
+            let focused = self.focus == Focus::RaceWithdraw;
+            button(x, ry, w.min(300.0), 28.0, "Withdraw (forfeit stake)", focused);
+            return;
+        }
+
+        let offers = race::offers(gs, world);
+        if offers.is_empty() {
+            draw_text(
+                "No rival ports in these waters to race to.",
+                x,
+                ry,
+                18.0,
+                dim_ink(),
+            );
+            return;
+        }
+
+        draw_text(
+            "Beat a rival sloop to another port. The stake rises",
+            x,
+            ry,
+            16.0,
+            dim_ink(),
+        );
+        ry += 19.0;
+        draw_text("with the distance of the leg.", x, ry, 16.0, dim_ink());
+        ry += 28.0;
+
+        draw_text("Race to", x, ry, 18.0, dim_ink());
+        right_text("Stake", x + w, ry, 18);
+        draw_line(x, ry + 8.0, x + w, ry + 8.0, 1.0, dim_ink());
+        ry += 32.0;
+
+        let chosen = self.race_chosen(gs, world);
+        let row_h = 30.0;
+        for p in &offers {
+            let active = self.focus == Focus::RaceTarget(p.id);
+            if active {
+                draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
+            }
+            let is_chosen = chosen == Some(p.id);
+            let name = if is_chosen {
+                format!("{}  (chosen)", p.name)
+            } else {
+                p.name.clone()
+            };
+            draw_text(&name, x, ry, 18.0, ink());
+            right_text(&race::stake_between(origin, p).to_string(), x + w, ry, 18);
+            ry += row_h;
+        }
+
+        ry += 12.0;
+        let focused = self.focus == Focus::RaceChallenge;
+        let label = match chosen {
+            Some(id) => {
+                let port = &world.islands[id as usize];
+                format!("Challenge to {} · {}", port.name, race::stake_between(origin, port))
+            }
+            None => "Challenge".to_string(),
+        };
+        button(x, ry, w.min(420.0), 30.0, &label, focused);
+    }
+
     /// The dashed route the chart should draw: from this port to the other port
     /// of the highlighted contract (its destination), delivery (its origin), or
     /// manifest row (its destination). `None` with the cursor anywhere else.
@@ -552,6 +717,8 @@ impl PortScreen {
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| m.target_id),
+            Focus::RaceTarget(id) => Some(id),
+            Focus::RaceWithdraw => gs.race.map(|r| r.target_id),
             _ => None,
         }?;
         Some((here, world.islands[other_id as usize].pos))

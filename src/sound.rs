@@ -32,9 +32,13 @@ const STORM_MP3: &[u8] = include_bytes!("../assets/sounds/thunderstorm-cut.mp3")
 const FLAP_UP_MP3: &[u8] = include_bytes!("../assets/sounds/flap1.mp3");
 const FLAP_DOWN_MP3: &[u8] = include_bytes!("../assets/sounds/flap2.mp3");
 const WIND_SHIFT_MP3: &[u8] = include_bytes!("../assets/sounds/universfield-transition-02-141076.mp3");
-// The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`). The
-// `pw23check-winning` clip is the original's *race-won* jingle, not this cue.
+// The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`).
 const COIN_MP3: &[u8] = include_bytes!("../assets/sounds/collect-coin.mp3");
+// Race result one-shots: a triumphant chime on a win, a glum jingle on a loss
+// (`SailingView.raceWonSound` / `raceLostSound`).
+const RACE_WON_MP3: &[u8] = include_bytes!("../assets/sounds/pw23check-winning-218995.mp3");
+const RACE_LOST_MP3: &[u8] =
+    include_bytes!("../assets/sounds/lightyeartraxx-kl-peach-game-over-iii-142453.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues.
@@ -44,6 +48,8 @@ const STORM_MAX_VOL: f32 = 0.85;
 const FLAP_VOL: f32 = 0.9;
 const WIND_SHIFT_VOL: f32 = 0.7;
 const COIN_VOL: f32 = 0.8;
+const RACE_WON_VOL: f32 = 0.85;
+const RACE_LOST_VOL: f32 = 0.8;
 // The boat speed (knots) at which the sailing bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
@@ -59,6 +65,8 @@ pub struct SoundBank {
     flap_down: Sound,
     wind_shift: Sound,
     coin: Sound,
+    race_won: Sound,
+    race_lost: Sound,
     sailing_vol: f32,
     calm_vol: f32,
     storm_vol: f32,
@@ -76,6 +84,8 @@ impl SoundBank {
         let flap_down = load_clip(FLAP_DOWN_MP3).await;
         let wind_shift = load_clip(WIND_SHIFT_MP3).await;
         let coin = load_clip(COIN_MP3).await;
+        let race_won = load_clip(RACE_WON_MP3).await;
+        let race_lost = load_clip(RACE_LOST_MP3).await;
 
         // Kick off the beds at zero volume so they're already running and in sync;
         // the per-frame update simply opens them up.
@@ -91,6 +101,8 @@ impl SoundBank {
             flap_down,
             wind_shift,
             coin,
+            race_won,
+            race_lost,
             sailing_vol: 0.0,
             calm_vol: 0.0,
             storm_vol: 0.0,
@@ -157,6 +169,24 @@ impl SoundBank {
         play_sound(
             &self.coin,
             PlaySoundParams { looped: false, volume: COIN_VOL },
+        );
+    }
+
+    /// A triumphant chime — the player took the race.
+    pub fn race_won(&self) {
+        stop_sound(&self.race_won);
+        play_sound(
+            &self.race_won,
+            PlaySoundParams { looped: false, volume: RACE_WON_VOL },
+        );
+    }
+
+    /// A glum jingle — the rival reached the mark first.
+    pub fn race_lost(&self) {
+        stop_sound(&self.race_lost);
+        play_sound(
+            &self.race_lost,
+            PlaySoundParams { looped: false, volume: RACE_LOST_VOL },
         );
     }
 }
@@ -270,6 +300,8 @@ mod tests {
             ("flap_down", FLAP_DOWN_MP3),
             ("wind_shift", WIND_SHIFT_MP3),
             ("coin", COIN_MP3),
+            ("race_won", RACE_WON_MP3),
+            ("race_lost", RACE_LOST_MP3),
         ] {
             let wav = decode_mp3_to_wav(mp3);
             assert!(wav.len() > 44, "{name}: no audio decoded");

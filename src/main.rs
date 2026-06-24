@@ -18,6 +18,8 @@ mod ocean_renderer;
 mod palette;
 mod port_view;
 mod projection;
+mod race;
+mod rival_render;
 mod rng;
 mod sailing;
 mod ship_render;
@@ -130,6 +132,16 @@ fn read_turn() -> f32 {
     turn
 }
 
+/// A short distance readout for the race standings: kilometres past 1 km, metres
+/// below it. (`SailingView.formatDist`.)
+fn format_dist(m: f32) -> String {
+    if m >= 1000.0 {
+        format!("{:.1} km", m / 1000.0)
+    } else {
+        format!("{} m", m.round() as i32)
+    }
+}
+
 /// 8-point compass label for a bearing (radians, 0 = N, CW).
 fn compass(bearing_rad: f32) -> &'static str {
     const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -216,6 +228,20 @@ async fn main() {
     const PITCH_EASE: f32 = 2.6;
     const HEEL_EASE: f32 = 1.1; // the boat leans into / out of the heel gradually
 
+    // The racing rival's live kinematics once it is on the water (`None` = no race
+    // afoot or not yet cast off). The race runs in two stages so the rival never
+    // gets a head start: while *waiting* it sits at the line and the player must
+    // draw up alongside and heave to (`race_ready`); raising sail then fires the gun
+    // (`race_running`) and only then does the rival begin to sail.
+    let mut rival: Option<Kinematics> = None;
+    let mut race_ready = false;
+    let mut race_running = false;
+    // The rival waits this far abeam at the off; the player counts as alongside
+    // within `RACE_START_RANGE` and "standing still" at or below `RACE_STILL_SPEED`.
+    const RACE_START_GAP: f32 = 90.0;
+    const RACE_START_RANGE: f32 = 220.0;
+    const RACE_STILL_SPEED: f32 = 0.6;
+
     loop {
         let dt = get_frame_time().min(0.05);
         let t = get_time() as f32;
@@ -259,6 +285,17 @@ async fn main() {
                     .unwrap_or(true);
                 if set_sail {
                     harbor.set_sail(&mut gs);
+                    // A booked race begins the instant the player sets sail: bring the
+                    // rival up alongside now. Idempotent — a re-dock won't respawn one
+                    // already out.
+                    if let Some(r) = gs.race {
+                        if rival.is_none() {
+                            let target = &world.islands[r.target_id as usize];
+                            rival = Some(race::rival_start(&kin, target, RACE_START_GAP));
+                            race_ready = false;
+                            race_running = false;
+                        }
+                    }
                 }
             } else {
                 harbor.set_sail(&mut gs);
@@ -301,6 +338,58 @@ async fn main() {
             // Keep the hull out of every nearby island.
             let near = world.islands_near(kin.pos, 400.0);
             kin = sailing::resolve_grounding(kin, &near);
+
+            // --- Race ----------------------------------------------------------
+            // While waiting the rival sits dead at the line; the start is armed once
+            // the player draws up alongside and heaves to (sails struck, dead slow),
+            // and the gun fires the moment they raise sail. Once running the rival
+            // sails the very same physics — a pristine rig of the player's own boat
+            // (its sail level, an empty hold) — beating for the mark but never into
+            // the wind's eye, and the race settles the instant either reaches it.
+            if let Some(r) = gs.race {
+                let target = &world.islands[r.target_id as usize];
+                match rival {
+                    Some(rk) if race_running => {
+                        let scale = upgrades::speed_scale(gs.sail_level, 0);
+                        let rhelm = race::rival_helm(&rk, target.pos, wind);
+                        let stepped = sailing::step_scaled(rk, rhelm, wind, dt, scale);
+                        let rnear = world.islands_near(stepped.pos, 400.0);
+                        rival = Some(sailing::resolve_grounding(stepped, &rnear));
+                        if race::reached(&kin, target) {
+                            gs.win_race();
+                            rival = None;
+                            race_ready = false;
+                            race_running = false;
+                            sounds.race_won();
+                        } else if rival.map_or(false, |rk| race::reached(&rk, target)) {
+                            gs.lose_race();
+                            rival = None;
+                            race_ready = false;
+                            race_running = false;
+                            sounds.race_lost();
+                        }
+                    }
+                    Some(rk) => {
+                        let alongside = kin.pos.distance_to(rk.pos) <= RACE_START_RANGE;
+                        if !race_ready {
+                            if alongside && sail_mode == 0 && kin.speed() <= RACE_STILL_SPEED {
+                                race_ready = true;
+                            }
+                        } else if !alongside {
+                            race_ready = false;
+                        }
+                        if race_ready && sail_mode > 0 {
+                            race_running = true;
+                        }
+                    }
+                    None => {}
+                }
+            } else if rival.is_some() {
+                // Race cleared (e.g. withdrawn at a port mid-voyage): retire the rival.
+                rival = None;
+                race_ready = false;
+                race_running = false;
+            }
 
             // Offer the port the bow is pointed at; tie up on Space, sails struck.
             harbor.update_dockable(&world, &kin);
@@ -465,6 +554,23 @@ async fn main() {
             &visible,
         );
 
+        // The racing rival rides the same sea, drawn on top of the wave mesh inside
+        // the world camera so it heels and heaves with the view like the islands.
+        if let Some(rk) = rival {
+            rival_render::draw(
+                &rk,
+                &kin,
+                t,
+                sea,
+                motion.heave,
+                day_lit,
+                horizon,
+                px_per_rad,
+                half_fov_h_view,
+                w,
+            );
+        }
+
         // Back to screen space for the foreground + HUD, which stay bolted to the
         // viewport rather than riding the swell. With bloom on, this also extracts and
         // blurs the bright parts of the scene texture and composites them to the screen.
@@ -517,13 +623,57 @@ async fn main() {
         let purse = format!("Gold {}  ·  Hold {}/{}", gs.gold, gs.hold_used(), gs.hold_capacity);
         draw_text(&purse, 16.0, 76.0, 22.0, Color::new(1.0, 0.92, 0.6, 1.0));
 
-        // The destinations of every accepted contract, marked on the charts.
-        let mission_targets: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        // The destinations marked on the charts: every accepted contract, plus the
+        // race mark while one is booked.
+        let mut chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        if let Some(r) = gs.race {
+            chart_marks.push(r.target_id);
+        }
 
         // Always-on corner chart: the local cluster, top-right.
         let map_size = (h * 0.24).clamp(140.0, 200.0);
         let map_rect = Rect::new(w - map_size - 16.0, 16.0, map_size, map_size);
-        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &mission_targets, None);
+        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &chart_marks, None);
+
+        // Race standings strip: the mark and how far the player and rival each have
+        // still to sail (or the instructions to get the race under way), shown top-
+        // centre while a rival is on the water and the helm is live.
+        if !harbor.is_open() && !log_open {
+            if let (Some(rk), Some(r)) = (rival, gs.race) {
+                let target = &world.islands[r.target_id as usize];
+                let text = if race_running {
+                    let you = kin.pos.distance_to(target.pos);
+                    let them = rk.pos.distance_to(target.pos);
+                    let lead = if you <= them { "you lead" } else { "rival leads" };
+                    format!(
+                        "RACE -> {}    you {}    rival {}    ({})",
+                        target.name,
+                        format_dist(you),
+                        format_dist(them),
+                        lead,
+                    )
+                } else if race_ready {
+                    "Alongside the rival — raise sail to start the race!".to_string()
+                } else {
+                    format!(
+                        "Heave to alongside the rival to start  ·  {} away",
+                        format_dist(kin.pos.distance_to(rk.pos)),
+                    )
+                };
+                let fs = 24;
+                let dims = measure_text(&text, None, fs, 1.0);
+                let bx = w * 0.5 - dims.width / 2.0;
+                let by = h * 0.14;
+                draw_rectangle(
+                    bx - 16.0,
+                    by - 26.0,
+                    dims.width + 32.0,
+                    38.0,
+                    Color::new(0.10, 0.06, 0.02, 0.6),
+                );
+                draw_text(&text, bx, by, fs as f32, Color::new(1.0, 0.92, 0.6, 1.0));
+            }
+        }
 
         // The captain's log, flipped open over the scene.
         if log_open {
@@ -535,7 +685,7 @@ async fn main() {
                 day,
                 sea,
                 storm,
-                &mission_targets,
+                &chart_marks,
                 w,
                 h,
             );
