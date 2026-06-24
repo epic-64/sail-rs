@@ -19,6 +19,7 @@
 use macroquad::prelude::*;
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::isle_features::IsleFeature;
 use crate::islands_render::{paint_island, IslandView};
 use crate::ocean;
 use crate::palette::{self, Daytime, Palette, PALETTE_LEN};
@@ -198,9 +199,10 @@ impl OceanRenderer {
         storm: f32,
         w: f32,
         h: f32,
-        // Visible islands, sorted *descending* by near-shore distance (farthest
-        // first), so we can draw each between the wave bands at its own depth.
-        islands: &[&Island],
+        // Visible islands paired with their features, sorted *descending* by near-
+        // shore distance (farthest first), so we can draw each between the wave
+        // bands at its own depth.
+        islands: &[(&Island, &[IsleFeature])],
     ) {
         // Ease the live palette toward the current daytime's target with a slow
         // cross-fade, then blend toward the cold storm palette by the gale's fury.
@@ -309,8 +311,8 @@ impl OceanRenderer {
             // crest rolls in front of a far island while its summit stands clear.
             // (At j=0, f = f_far: this also flushes isles beyond the mesh, behind
             // all the waves.)
-            while isle_idx < islands.len() && isle_key(islands[isle_idx]) >= f {
-                paint_island(islands[isle_idx], kin, &view);
+            while isle_idx < islands.len() && isle_key(islands[isle_idx].0) >= f {
+                paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
                 isle_idx += 1;
             }
 
@@ -342,7 +344,7 @@ impl OceanRenderer {
         // Any remaining islands are nearer than the closest band: draw them in
         // front of all the water.
         while isle_idx < islands.len() {
-            paint_island(islands[isle_idx], kin, &view);
+            paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
             isle_idx += 1;
         }
 

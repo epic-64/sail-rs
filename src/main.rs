@@ -5,6 +5,7 @@
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
 mod geometry;
+mod isle_features;
 mod islands_render;
 mod ocean;
 mod ocean_renderer;
@@ -131,6 +132,13 @@ async fn main() {
     // Build the world and start the captain just off the home cluster's shipyard
     // port, bow pointed at it, so there's land in view from the first frame.
     let world = world::generate(1);
+    // Each island's scenery is deterministic; generate it once. `islands` is in id
+    // order (index == id), so this Vec aligns by index.
+    let features: Vec<Vec<isle_features::IsleFeature>> = world
+        .islands
+        .iter()
+        .map(|i| isle_features::generate(world.seed, i))
+        .collect();
     let home = world.cluster_at(Vec2::ZERO);
     let start_isle = home
         .island_ids
@@ -199,16 +207,17 @@ async fn main() {
         // first by near-shore distance so the wave renderer can slot each in at its
         // own depth.
         let key = |i: &Island| kin.pos.distance_to(i.pos) - i.radius;
-        let mut visible: Vec<&Island> = world
-            .islands_near(kin.pos, MAX_VIEW)
-            .into_iter()
+        let mut visible: Vec<(&Island, &[isle_features::IsleFeature])> = world
+            .islands
+            .iter()
             .filter(|i| {
                 let d = kin.pos.distance_to(i.pos);
                 let rel = wrap_angle(kin.pos.bearing_to(i.pos) - kin.heading_rad);
-                d <= MAX_VIEW && d >= i.radius * 1.1 && rel.abs() <= half_fov_h_view * 1.6
+                d <= MAX_VIEW && d >= i.radius && rel.abs() <= half_fov_h_view * 1.6
             })
+            .map(|i| (i, features[i.id as usize].as_slice()))
             .collect();
-        visible.sort_by(|a, b| key(b).partial_cmp(&key(a)).unwrap());
+        visible.sort_by(|a, b| key(b.0).partial_cmp(&key(a.0)).unwrap());
 
         // --- Waves -------------------------------------------------------------
         let heave = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea).heave;
