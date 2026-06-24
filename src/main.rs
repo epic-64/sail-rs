@@ -18,6 +18,7 @@ mod mission;
 mod ocean;
 mod ocean_renderer;
 mod palette;
+mod pause_menu;
 mod port_view;
 mod projection;
 mod race;
@@ -197,6 +198,9 @@ async fn main() {
     // a starting purse and larder, free to sail in and dock.
     let mut gs = GameState::start();
     let mut harbor = Harbor::new();
+    // The pause menu (Esc in open water): freezes the voyage and offers
+    // Resume / Options (master volume) / Quit.
+    let mut pause = pause_menu::PauseMenu::new();
 
     // The audio bed: three ambient loops (sailing/calm/storm) cross-faded by sea
     // state, plus one-shot cues for wind shifts and trades. Loaded once up front.
@@ -280,30 +284,50 @@ async fn main() {
         let horizon = h * 0.54;
 
         // --- Input -------------------------------------------------------------
-        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds
-        // whether sailing or docked, so the chart's breeze keeps drifting.
-        clock += dt;
-        if clock - last_wind_shift >= WIND_PERIOD {
-            wind = Wind::random(&mut wind_rng);
-            last_wind_shift = clock;
-            sounds.wind_shift();
+        // While the pause menu is up the voyage is frozen: handle only its input
+        // (Resume / Options / Quit) and skip every world-advancing update below.
+        // Capture the state at frame start so a resume *this* frame still counts as
+        // paused for the rest of it — otherwise the Esc that resumes would be seen
+        // again by the helm's own Esc handler and reopen the menu the same frame.
+        let paused = pause.open;
+        if paused {
+            match pause.handle_input(&mut sounds) {
+                pause_menu::PauseAction::Resume => pause.open = false,
+                pause_menu::PauseAction::Quit => break,
+                pause_menu::PauseAction::None => {}
+            }
         }
 
-        // Drift the weather (whether sailing or docked) and ease the sea-state and
-        // sky gloom it drives, so the waves build/lay down and the sky greys/clears
-        // smoothly across a scenario change rather than snapping.
-        weather.update(dt);
+        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds
+        // whether sailing or docked, so the chart's breeze keeps drifting.
+        if !paused {
+            clock += dt;
+            if clock - last_wind_shift >= WIND_PERIOD {
+                wind = Wind::random(&mut wind_rng);
+                last_wind_shift = clock;
+                sounds.wind_shift();
+            }
+
+            // Drift the weather (whether sailing or docked) and ease the sea-state and
+            // sky gloom it drives, so the waves build/lay down and the sky greys/clears
+            // smoothly across a scenario change rather than snapping.
+            weather.update(dt);
+        }
         sea = weather.sea;
         storm = weather.fury();
 
         // Sail the local traders along their circuits (whether the player is at sea
         // or docked), re-spawning the fleet if the ship has crossed into new waters.
-        traders.update(&world, kin.pos, wind, dt);
+        if !paused {
+            traders.update(&world, kin.pos, wind, dt);
+        }
 
         // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
         // the moving sun/moon and light, the blended sea palette and sky gradient,
         // a nearest discrete phase for the HUD/log, and how lit the deck is.
-        tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
+        if !paused {
+            tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
+        }
         let sky = celestial::sky_state(tod);
         let sea_pal = palette::sea_palette(tod);
         let sky_grad = palette::sky_gradient(tod);
@@ -313,7 +337,14 @@ async fn main() {
         // While docked the trading board owns input and the ship lies parked;
         // otherwise the helm and sail are live and we may dock a port in range.
         let mut helm = Helm::IDLE;
-        if harbor.is_open() {
+        if paused {
+            // Frozen: no input, no physics. Keep the rig trimmed to the current
+            // sail so the static scene still reads as a boat under way.
+            helm = Helm {
+                turn: 0.0,
+                throttle: SAIL_FRACTIONS[sail_mode],
+            };
+        } else if harbor.is_open() {
             sail_mode = 0;
             kin.vel = Vec2::ZERO;
             kin.yaw_rate = 0.0;
@@ -501,7 +532,8 @@ async fn main() {
                 if log_open {
                     log_open = false;
                 } else {
-                    break;
+                    // No other menu up: heave to and raise the pause menu.
+                    pause.open();
                 }
             }
         }
@@ -708,7 +740,7 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail · A/D helm · Space dock · Q/E weather · T time · [ ] wind · L log · B bloom · Esc quit",
+            "W/S sail · A/D helm · Space dock · Q/E weather · T time · [ ] wind · L log · B bloom · Esc menu",
             16.0,
             52.0,
             20.0,
@@ -755,6 +787,7 @@ async fn main() {
             &race_marks,
             None,
             &traders.positions(),
+            rival.map(|r| (r.pos, r.heading_rad)),
         );
 
         // Race standings strip: the mark and how far the player and rival each have
@@ -825,6 +858,11 @@ async fn main() {
                     screen.render(&gs, &world, &market, &kin, wind, w, h);
                 }
             }
+        }
+
+        // The pause menu sits over everything (it only opens in open water).
+        if pause.open {
+            pause.render(&sounds, w, h);
         }
 
         next_frame().await
