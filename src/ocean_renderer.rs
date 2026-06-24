@@ -62,6 +62,10 @@ pub struct OceanRenderer {
     height_shade: f32,
     slope_shade: f32,
     sky_shade: f32,
+    // How hard the wave *tops* shift toward the bright, saturated crest tone (the
+    // subsurface "lit thin water" read large), giving strong colour variation
+    // through the body of the swell on top of the multiplicative height shade.
+    crest_brighten: f32,
 
     crest_glass: f32,
     crest_fade_lo: f32,
@@ -165,10 +169,11 @@ impl OceanRenderer {
             depth_far: 850.0,
             light_strength: 1.0,
             shininess: 90.0,
-            base_saturation: 1.34,
-            height_shade: 0.34,
+            base_saturation: 1.55,
+            height_shade: 0.5,
             slope_shade: 0.42,
             sky_shade: 0.16,
+            crest_brighten: 0.6,
             crest_glass: 0.2,
             crest_fade_lo: 0.12,
             crest_fade_hi: 0.42,
@@ -455,6 +460,18 @@ impl OceanRenderer {
         let glow_r = self.c_glow.0 + (sun_r - self.c_glow.0) * 0.30;
         let glow_g = self.c_glow.1 + (sun_g - self.c_glow.1) * 0.30;
         let glow_b = self.c_glow.2 + (sun_b - self.c_glow.2) * 0.30;
+        // The bright tone the wave tops glow toward: the horizon-bright water warmed
+        // a touch toward the sun, then pushed hard-saturated so the crests pop. Held
+        // independent of the sun's strength so the night sea still lifts cyan crests
+        // over black troughs. Troughs simply keep the dark depth-ramp base, so the
+        // swell body runs dark-deep → bright-lit from trough to crest.
+        let cr_r = far_r + (sun_r - far_r) * 0.26;
+        let cr_g = far_g + (sun_g - far_g) * 0.26;
+        let cr_b = far_b + (sun_b - far_b) * 0.26;
+        let cr_lum = cr_r * 0.299 + cr_g * 0.587 + cr_b * 0.114;
+        let crest_r = clamp(cr_lum + (cr_r - cr_lum) * 1.5, 0.0, 255.0);
+        let crest_g = clamp(cr_lum + (cr_g - cr_lum) * 1.5, 0.0, 255.0);
+        let crest_b = clamp(cr_lum + (cr_b - cr_lum) * 1.5, 0.0, 255.0);
 
         let nearness = 1.0 - depth;
         let max_amp = (0.4_f32).max(ocean::MAX_AMPLITUDE * sea);
@@ -555,12 +572,22 @@ impl OceanRenderer {
                 1.0 + crest * self.height_shade
                     + (sun_face - 0.5) * self.slope_shade
                     + (sky_face - 0.5) * self.sky_shade,
-                0.5,
-                1.7,
+                0.38,
+                1.8,
             );
             let mut r = base_r * shade;
             let mut g = base_g * shade;
             let mut b = base_b * shade;
+            // Shift the wave tops toward the bright, saturated crest tone (eased so
+            // only the upper third of the swell lifts), leaving troughs on the dark
+            // deep-water base. This is the main colour variation through the body.
+            let up = clamp(crest, 0.0, 1.0);
+            if up > 0.0 {
+                let tc = up * up * self.crest_brighten;
+                r += (crest_r - r) * tc;
+                g += (crest_g - g) * tc;
+                b += (crest_b - b) * tc;
+            }
             let t_lit = 0.30 * diff * self.light_strength;
             r += (sun_r - r) * t_lit;
             g += (sun_g - g) * t_lit;
