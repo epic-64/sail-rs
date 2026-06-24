@@ -30,9 +30,8 @@ use crate::world::{Island, World};
 // does not (`SailingView.dockFacingArc`).
 const DOCK_FACING_ARC: f32 = std::f32::consts::PI / 3.0;
 
-/// The port a captain may enter right now: a port within dock range with the bow
-/// pointed at it. `armed` gates the prompt so leaving port (or passing a
-/// neighbour) doesn't instantly re-prompt — it re-arms once back in open water.
+/// A port within dock range of `pos`, if any. The bow-facing check that decides
+/// whether it can actually be entered lives in [`Harbor::update_dockable`].
 pub fn port_at<'w>(world: &'w World, pos: Vec2) -> Option<&'w Island> {
     world
         .islands
@@ -43,7 +42,6 @@ pub fn port_at<'w>(world: &'w World, pos: Vec2) -> Option<&'w Island> {
 
 /// Manages the docking handshake and owns the open overlay, if any.
 pub struct Harbor {
-    armed: bool,
     /// The port in range and ahead this frame, eligible to dock (id).
     pub dockable: Option<i32>,
     /// The open trading board, while docked.
@@ -53,7 +51,6 @@ pub struct Harbor {
 impl Harbor {
     pub fn new() -> Harbor {
         Harbor {
-            armed: true,
             dockable: None,
             screen: None,
         }
@@ -63,29 +60,23 @@ impl Harbor {
         self.screen.is_some()
     }
 
-    /// Recompute the dockable port for this frame. Called while sailing.
+    /// Recompute the dockable port for this frame. Called while sailing. A port is
+    /// dockable whenever it is in range and off the bow — so the prompt appears the
+    /// moment the captain faces a port in range, and disappears the moment they turn
+    /// away or sail clear. (Leaving the board hands the helm straight back, so a
+    /// captain who casts off and at once faces the port can tie up again right away.)
     pub fn update_dockable(&mut self, world: &World, kin: &Kinematics) {
-        // Re-arm once we've cleared open water, so leaving port doesn't re-prompt.
-        if !self.armed && port_at(world, kin.pos).is_none() {
-            self.armed = true;
-        }
-        self.dockable = if !self.armed {
-            None
-        } else {
-            port_at(world, kin.pos)
-                .filter(|port| {
-                    wrap_angle(kin.pos.bearing_to(port.pos) - kin.heading_rad).abs()
-                        <= DOCK_FACING_ARC
-                })
-                .map(|p| p.id)
-        };
+        self.dockable = port_at(world, kin.pos)
+            .filter(|port| {
+                wrap_angle(kin.pos.bearing_to(port.pos) - kin.heading_rad).abs() <= DOCK_FACING_ARC
+            })
+            .map(|p| p.id);
     }
 
     /// Tie up at the dockable port (Space, sails struck). Returns true if docked.
     pub fn try_dock(&mut self, gs: &mut GameState) -> bool {
         if let Some(id) = self.dockable {
             gs.location = Location::Docked(id);
-            self.armed = false;
             self.dockable = None;
             self.screen = Some(PortScreen::new(id));
             true
@@ -98,7 +89,6 @@ impl Harbor {
     pub fn set_sail(&mut self, gs: &mut GameState) {
         gs.location = Location::Sailing;
         self.screen = None;
-        // Stay disarmed until we've sailed clear, so we don't re-dock instantly.
     }
 }
 
@@ -523,6 +513,86 @@ pub fn render_prompt(harbor: &Harbor, world: &World, sail_struck: bool, w: f32, 
         Color::new(0.0, 0.0, 0.0, 0.55),
     );
     draw_text(&msg, bx, by, fs as f32, WHITE);
+}
+
+#[cfg(test)]
+mod dock_cycle_tests {
+    use super::*;
+    use crate::world::{Cluster, IsleKind};
+
+    fn one_port_world() -> World {
+        let isle = Island {
+            id: 0,
+            name: "Test Port".into(),
+            pos: Vec2::new(0.0, 0.0),
+            radius: 100.0,
+            height: 20.0,
+            terrain: IsleKind::Green,
+            is_port: true,
+            is_shipyard: true,
+        };
+        World {
+            seed: 1,
+            islands: vec![isle],
+            clusters: vec![Cluster {
+                id: 0,
+                name: "C".into(),
+                center: Vec2::ZERO,
+                radius: 1000.0,
+                island_ids: vec![0],
+            }],
+        }
+    }
+
+    // Park the ship `dist` metres due south of the port, bow swung to `heading`
+    // (0 = north, straight at the port). Drives `update_dockable` for one frame.
+    fn at(harbor: &mut Harbor, world: &World, dist: f32, heading: f32) {
+        let kin = Kinematics::still(Vec2::new(0.0, -dist), heading);
+        harbor.update_dockable(world, &kin);
+    }
+
+    // The bug: after docking and leaving, the port could not be re-entered. Casting
+    // off and at once facing the port (in range) must let the captain tie up again.
+    #[test]
+    fn can_re_enter_a_port_right_after_casting_off() {
+        let world = one_port_world();
+        let mut harbor = Harbor::new();
+        let mut gs = GameState::start();
+
+        // Approach within range, bow on the port — the prompt is offered.
+        at(&mut harbor, &world, 300.0, 0.0);
+        assert!(harbor.dockable.is_some(), "approach should offer the dock");
+
+        // Dock, then cast off. Still in range with the bow on the port, the prompt
+        // is back at once — the captain can re-enter right away.
+        assert!(harbor.try_dock(&mut gs));
+        harbor.set_sail(&mut gs);
+        at(&mut harbor, &world, 300.0, 0.0);
+        assert!(
+            harbor.dockable.is_some(),
+            "facing the port in range should offer the dock again immediately"
+        );
+        assert!(harbor.try_dock(&mut gs), "and the captain can re-enter");
+    }
+
+    // The prompt is gone only when the bow is off the port, or it is out of range.
+    #[test]
+    fn no_prompt_when_facing_away_or_out_of_range() {
+        let world = one_port_world();
+        let mut harbor = Harbor::new();
+
+        // In range but bow pointed away — no prompt.
+        at(&mut harbor, &world, 300.0, std::f32::consts::PI);
+        assert!(harbor.dockable.is_none(), "no prompt while pointed away");
+
+        // Bow on the port but out of dock range — no prompt.
+        at(&mut harbor, &world, 1000.0, 0.0);
+        assert!(harbor.dockable.is_none(), "no prompt out of range");
+
+        // In range and facing it — prompt.
+        at(&mut harbor, &world, 300.0, 0.0);
+        assert!(harbor.dockable.is_some(), "in range and facing offers the dock");
+    }
 }
 
 // --- Small drawing helpers ----------------------------------------------------
