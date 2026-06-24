@@ -160,6 +160,15 @@ fn project(az: f32, alt: f32, heading: f32, half_fov_h: f32, w: f32, horizon: f3
     Some((x, y))
 }
 
+/// Linear blend between two RGB triples (0–255 components), `t` in [0, 1].
+fn mix(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
+    (
+        a.0 + (b.0 - a.0) * t,
+        a.1 + (b.1 - a.1) * t,
+        a.2 + (b.2 - a.2) * t,
+    )
+}
+
 /// Draw a soft glowing disc (sun or moon) with a faint halo.
 #[allow(clippy::too_many_arguments)]
 fn draw_body(
@@ -227,23 +236,35 @@ pub fn draw(
     }
 
     if sky.moon_alt > -0.03 {
-        let vis = clamp(sky.moon_alt * 2.0, 0.0, 1.0) * dim;
-        draw_body(sky.moon_az, sky.moon_alt, heading, half_fov_h, w, horizon, h * 0.045, (230.0, 234.0, 242.0), vis);
+        // A touch dimmer than before, so the moon glows softly rather than glaring.
+        let vis = clamp(sky.moon_alt * 2.0, 0.0, 1.0) * dim * 0.7;
+        draw_body(sky.moon_az, sky.moon_alt, heading, half_fov_h, w, horizon, h * 0.038, (230.0, 234.0, 242.0), vis);
     }
 
     if sky.sun_alt > -0.06 {
-        // The setting sun burns deep blood-red on the horizon and warms to white at
-        // noon. `warm` is held low across the low sun (squared) so the red lingers
-        // through the whole sunset rather than only at the instant it touches down.
-        let warm = clamp(sky.sun_alt, 0.0, 1.0);
-        let warm = warm * warm;
-        let color = (
-            228.0 + (255.0 - 228.0) * warm,
-            48.0 + (244.0 - 48.0) * warm,
-            28.0 + (214.0 - 28.0) * warm,
-        );
-        // The low sun also swells larger near the horizon, as it really appears.
-        let r = h * (0.055 + 0.03 * (1.0 - warm));
+        let low = clamp(sky.sun_alt, 0.0, 1.0);
+        // Sunrise climbs in the east (azimuth shy of due south); sunset sinks in the
+        // west. They get different low-sun tints.
+        let rising = sky.sun_az < NOON_AZ;
+        let color = if rising {
+            // Sunrise opens orange — never blood-red — and warms quickly through
+            // yellow to white as it lifts (`powf` front-loads the climb).
+            let warm = low.powf(0.45);
+            if warm < 0.5 {
+                mix((255.0, 150.0, 52.0), (255.0, 224.0, 130.0), warm * 2.0) // orange → yellow
+            } else {
+                mix((255.0, 224.0, 130.0), (255.0, 244.0, 214.0), (warm - 0.5) * 2.0) // yellow → white
+            }
+        } else {
+            // The setting sun burns deep blood-red on the horizon and warms to white
+            // at noon. `warm` is held low across the low sun (squared) so the red
+            // lingers through the whole sunset rather than only as it touches down.
+            let warm = low * low;
+            mix((228.0, 48.0, 28.0), (255.0, 244.0, 214.0), warm)
+        };
+        // A touch smaller than before; still swells a little near the horizon, as it
+        // really appears.
+        let r = h * (0.045 + 0.022 * (1.0 - low));
         draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, r, color, dim);
     }
 }
