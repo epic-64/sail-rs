@@ -221,7 +221,7 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
     let chart_x = p.x + (p.col_w - chart_size) / 2.0;
     let chart = Rect::new(chart_x, chart_top, chart_size, chart_size);
     let pal = MinimapPalette::parchment();
-    minimap::render(world, kin, wind, chart, &pal, chart_marks, race_marks, None, &[]);
+    minimap::render(world, kin, wind, chart, &pal, chart_marks, race_marks, None, &[], None);
 
     // Name the local waters under the chart.
     let cluster = world.cluster_at(kin.pos);

@@ -150,6 +150,11 @@ pub fn render(
     // marks so the captain can spot the traffic crossing the bay. Empty on the
     // charts that don't track them (the log, the port board).
     traders: &[Vec2],
+    // The racing rival's live world position and heading while a race is afoot,
+    // drawn as a red heading-arrow (a twin of the player's) so the captain can see
+    // where his opponent has got to and which way it's pointed. `None` off the
+    // water (no race) and on the charts that don't track it (the log, the board).
+    rival: Option<(Vec2, f32)>,
 ) {
     // Panel + frame. (Parchment's panel is opaque beige; the HUD's is dark glass.)
     if pal.panel.a > 0.0 {
@@ -269,18 +274,33 @@ pub fn render(
         }
     }
 
-    // The ship: an arrow along the current heading, clamped to the frame so it
-    // stays on the chart while crossing open sea between clusters.
-    let px = sx(kin.pos).clamp(rect.x + pad, rect.x + size - pad);
-    let py = sy(kin.pos).clamp(rect.y + pad, rect.y + size - pad);
-    let fx = kin.heading_rad.sin(); // forward dir on the map (north up)
-    let fy = -kin.heading_rad.cos();
-    let rx = -fy; // right = forward rotated 90°
-    let ry = fx;
-    draw_triangle(
-        vec2(px + fx * 6.0 * s, py + fy * 6.0 * s),
-        vec2(px - fx * 4.0 * s + rx * 4.0 * s, py - fy * 4.0 * s + ry * 4.0 * s),
-        vec2(px - fx * 4.0 * s - rx * 4.0 * s, py - fy * 4.0 * s - ry * 4.0 * s),
-        pal.ship,
-    );
+    // Draw a heading-arrow for a vessel at world `pos` pointing along `heading`,
+    // clamped to the frame so it stays on the chart while crossing open sea. The
+    // triangle is long and narrow (a slim spike) so its bearing reads clearly.
+    let arrow = |pos: Vec2, heading: f32, col: Color| {
+        let px = sx(pos).clamp(rect.x + pad, rect.x + size - pad);
+        let py = sy(pos).clamp(rect.y + pad, rect.y + size - pad);
+        let fx = heading.sin(); // forward dir on the map (north up)
+        let fy = -heading.cos();
+        let rx = -fy; // right = forward rotated 90°
+        let ry = fx;
+        let nose = 8.0 * s; // tip reach ahead
+        let tail = 4.5 * s; // base set back
+        let half = 2.4 * s; // half-width at the base (narrow → clear bearing)
+        draw_triangle(
+            vec2(px + fx * nose, py + fy * nose),
+            vec2(px - fx * tail + rx * half, py - fy * tail + ry * half),
+            vec2(px - fx * tail - rx * half, py - fy * tail - ry * half),
+            col,
+        );
+    };
+
+    // The racing rival, drawn first (under the player) as a red twin of the arrow
+    // so the captain can see which way the one-to-beat is pointed.
+    if let Some((rp, rh)) = rival {
+        arrow(rp, rh, pal.race_mark);
+    }
+
+    // The player's ship, on top.
+    arrow(kin.pos, kin.heading_rad, pal.ship);
 }
