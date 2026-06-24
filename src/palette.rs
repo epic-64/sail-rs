@@ -62,41 +62,45 @@ pub const STORM_PALETTE: Palette = pal(
 /// The target sea palette for a time of day — eased toward in the renderer.
 pub fn palette_for(d: Daytime) -> Palette {
     match d {
-        // Vivid tropical noon: saturated cyan-blue water under a bright sun.
+        // Vivid tropical noon: deep-blue foreground water rising through bright
+        // teal to a luminous near-white horizon band under the high sun.
         Daytime::Day => pal(
-            (10.0, 102.0, 150.0),
-            (20.0, 150.0, 205.0),
-            (64.0, 178.0, 214.0),
+            (12.0, 42.0, 92.0),
+            (26.0, 152.0, 168.0),
+            (214.0, 240.0, 248.0),
             (236.0, 253.0, 255.0),
             (255.0, 246.0, 222.0),
             (200.0, 236.0, 250.0),
             (255.0, 252.0, 240.0),
         ),
-        // Golden dawn: lighter blue water, warm rose-gold light washing over it.
+        // Golden dawn: near-black foreground water lifting through dusky purple to
+        // a warm orange horizon where the sun breaks.
         Daytime::Dawn => pal(
-            (20.0, 92.0, 132.0),
-            (34.0, 138.0, 180.0),
-            (96.0, 168.0, 196.0),
+            (18.0, 12.0, 30.0),
+            (98.0, 50.0, 118.0),
+            (226.0, 124.0, 70.0),
             (248.0, 226.0, 214.0),
             (255.0, 192.0, 142.0),
             (250.0, 198.0, 152.0),
             (255.0, 220.0, 172.0),
         ),
-        // Fiery dusk: deep purple-blue water set alight by a blood-orange sun.
+        // Fiery dusk: black foreground water set alight through deep red-purple to
+        // a blazing orange horizon under the sinking blood-orange sun.
         Daytime::Dusk => pal(
-            (30.0, 60.0, 108.0),
-            (62.0, 98.0, 150.0),
-            (122.0, 130.0, 172.0),
+            (16.0, 8.0, 22.0),
+            (112.0, 30.0, 72.0),
+            (242.0, 98.0, 46.0),
             (252.0, 210.0, 190.0),
             (255.0, 112.0, 60.0),
             (246.0, 120.0, 86.0),
             (255.0, 148.0, 92.0),
         ),
-        // Deep night: dark navy water with cold moonlit highlights.
+        // Deep night: black foreground water deepening through navy blue to a cool
+        // cyan glow along the moonlit horizon.
         Daytime::Night => pal(
-            (6.0, 50.0, 98.0),
-            (10.0, 80.0, 136.0),
-            (30.0, 110.0, 156.0),
+            (5.0, 9.0, 18.0),
+            (16.0, 58.0, 112.0),
+            (42.0, 152.0, 172.0),
             (198.0, 218.0, 236.0),
             (138.0, 170.0, 212.0),
             (90.0, 122.0, 172.0),
