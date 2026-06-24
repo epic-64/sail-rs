@@ -196,8 +196,16 @@ pub const YAW_INERTIA: f32 = 0.3; // 1/s how quickly yaw-rate eases toward the r
 /// reach is fastest, pointing into the eye removes drive entirely, so making ground
 /// upwind forces the player to tack. Ported from `Ship.step`.
 pub fn step(kin: Kinematics, helm: Helm, wind: Wind, dt: f32) -> Kinematics {
+    step_scaled(kin, helm, wind, dt, 1.0)
+}
+
+/// As [`step`], but scaling the rig's top speed by `speed_scale` — the ship's
+/// upgraded rig and the weight of its cargo (see `game_state::upgrades`). A bare
+/// ship within its haulage uses 1.0, so the baseline feel is unchanged.
+pub fn step_scaled(kin: Kinematics, helm: Helm, wind: Wind, dt: f32, speed_scale: f32) -> Kinematics {
     let rudder = clamp(helm.turn, -1.0, 1.0);
     let throttle = clamp(helm.throttle, 0.0, 1.0);
+    let top = MAX_SPEED * speed_scale.max(0.05);
 
     let authority = clamp(kin.speed() / REF_SPEED, MIN_AUTHORITY, 1.0);
     let target_yaw = rudder * MAX_YAW_RATE * authority;
@@ -206,7 +214,7 @@ pub fn step(kin: Kinematics, helm: Helm, wind: Wind, dt: f32) -> Kinematics {
     let fwd = Vec2::from_heading(heading);
 
     // Sails push along the bow, scaled by how much wind the bow's angle harvests.
-    let drive = throttle * (MAX_SPEED * DRAG) * wind.factor(heading);
+    let drive = throttle * (top * DRAG) * wind.factor(heading);
     let thrust_v = kin.vel + fwd * (drive * dt);
     let dragged = thrust_v * (1.0 - DRAG * dt).max(0.0);
     let fwd_comp = fwd.dot(dragged);
@@ -214,7 +222,7 @@ pub fn step(kin: Kinematics, helm: Helm, wind: Wind, dt: f32) -> Kinematics {
     let gripped = dragged - lateral * clamp(KEEL * dt, 0.0, 1.0);
 
     // Full drive on a beam reach = the top speed.
-    let ceiling = MAX_SPEED * MAX_BOOST;
+    let ceiling = top * MAX_BOOST;
     let sp = gripped.length();
     let capped = if sp > ceiling {
         gripped * (ceiling / sp)

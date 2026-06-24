@@ -5,6 +5,7 @@
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
 mod captains_log;
+mod game_state;
 mod geometry;
 mod isle_features;
 mod islands_render;
@@ -12,6 +13,7 @@ mod minimap;
 mod ocean;
 mod ocean_renderer;
 mod palette;
+mod port_view;
 mod projection;
 mod rng;
 mod sailing;
@@ -20,7 +22,9 @@ mod world;
 
 use macroquad::prelude::*;
 
+use game_state::{upgrades, GameState, Market};
 use geometry::{clamp, wrap_angle, Vec2};
+use port_view::Harbor;
 use ocean_renderer::{OceanRenderer, SUN_BEARING};
 use palette::Daytime;
 use projection::MAX_VIEW;
@@ -190,6 +194,12 @@ async fn main() {
     let start = Vec2::new(start_isle.pos.x, start_isle.pos.y - (start_isle.radius + 360.0));
     let mut kin = Kinematics::still(start, start.bearing_to(start_isle.pos));
 
+    // The persisted voyage: gold, cargo, the hold, the hull, and where we are.
+    // The captain starts at sea just off the home shipyard (the view above), with
+    // a starting purse and larder, free to sail in and dock.
+    let mut gs = GameState::start();
+    let mut harbor = Harbor::new();
+
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]
 
@@ -230,62 +240,96 @@ async fn main() {
         let horizon = h * 0.54;
 
         // --- Input -------------------------------------------------------------
-        // Sails are set in discrete notches (W raises, S lowers) — set once, the
-        // ship keeps going; only the *first* press of a held key steps the sail.
-        if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
-            sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
-        }
-        if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
-            sail_mode = sail_mode.saturating_sub(1);
-        }
-        let helm = Helm {
-            turn: read_turn(),
-            throttle: SAIL_FRACTIONS[sail_mode],
-        };
-
-        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds.
+        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds
+        // whether sailing or docked, so the chart's breeze keeps drifting.
         clock += dt;
         if clock - last_wind_shift >= WIND_PERIOD {
             wind = Wind::random(&mut wind_rng);
             last_wind_shift = clock;
         }
-        // Dev aid (not in the original): nudge the wind with [ and ] to feel the
-        // points of sail and tacking on demand.
-        if is_key_down(KeyCode::RightBracket) {
-            wind.toward_rad = wrap_angle(wind.toward_rad + dt * 0.8);
-        }
-        if is_key_down(KeyCode::LeftBracket) {
-            wind.toward_rad = wrap_angle(wind.toward_rad - dt * 0.8);
-        }
 
-        kin = sailing::step(kin, helm, wind, dt);
-        // Keep the hull out of every nearby island.
-        let near = world.islands_near(kin.pos, 400.0);
-        kin = sailing::resolve_grounding(kin, &near);
+        // While docked the trading board owns input and the ship lies parked;
+        // otherwise the helm and sail are live and we may dock a port in range.
+        let mut helm = Helm::IDLE;
+        if harbor.is_open() {
+            sail_mode = 0;
+            kin.vel = Vec2::ZERO;
+            kin.yaw_rate = 0.0;
+            if let Some(id) = gs.docked_island_id() {
+                let market = Market::for_island(&world.islands[id as usize], world.seed);
+                let set_sail = harbor
+                    .screen
+                    .as_mut()
+                    .map(|s| s.handle_input(&mut gs, &world, &market))
+                    .unwrap_or(true);
+                if set_sail {
+                    harbor.set_sail(&mut gs);
+                }
+            } else {
+                harbor.set_sail(&mut gs);
+            }
+        } else {
+            // Sails are set in discrete notches (W raises, S lowers) — set once, the
+            // ship keeps going; only the *first* press of a held key steps the sail.
+            if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
+                sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
+            }
+            if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
+                sail_mode = sail_mode.saturating_sub(1);
+            }
+            helm = Helm {
+                turn: read_turn(),
+                throttle: SAIL_FRACTIONS[sail_mode],
+            };
 
-        if is_key_down(KeyCode::E) {
-            sea = (sea + dt * 0.4).min(1.3);
+            // Dev aid (not in the original): nudge the wind with [ and ] to feel the
+            // points of sail and tacking on demand.
+            if is_key_down(KeyCode::RightBracket) {
+                wind.toward_rad = wrap_angle(wind.toward_rad + dt * 0.8);
+            }
+            if is_key_down(KeyCode::LeftBracket) {
+                wind.toward_rad = wrap_angle(wind.toward_rad - dt * 0.8);
+            }
+
+            // Top speed scales with the rig's upgrades and the weight in the hold:
+            // a stronger rig runs faster, an overladen hull crawls.
+            let scale = upgrades::speed_scale(gs.sail_level, gs.cargo_used());
+            kin = sailing::step_scaled(kin, helm, wind, dt, scale);
+            // Keep the hull out of every nearby island.
+            let near = world.islands_near(kin.pos, 400.0);
+            kin = sailing::resolve_grounding(kin, &near);
+
+            // Offer the port the bow is pointed at; tie up on Space, sails struck.
+            harbor.update_dockable(&world, &kin);
+            if is_key_pressed(KeyCode::Space) && sail_mode == 0 && harbor.try_dock(&mut gs) {
+                log_open = false;
+            }
+
+            if is_key_down(KeyCode::E) {
+                sea = (sea + dt * 0.4).min(1.3);
+            }
+            if is_key_down(KeyCode::Q) {
+                sea = (sea - dt * 0.4).max(0.0);
+            }
+            if is_key_pressed(KeyCode::T) {
+                day = day.next();
+            }
+            if is_key_pressed(KeyCode::L) {
+                log_open = !log_open;
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                if log_open {
+                    log_open = false;
+                } else {
+                    break;
+                }
+            }
         }
-        if is_key_down(KeyCode::Q) {
-            sea = (sea - dt * 0.4).max(0.0);
-        }
-        if is_key_down(KeyCode::G) {
+        // Storm fury builds while G is held at sea, and decays otherwise.
+        if !harbor.is_open() && is_key_down(KeyCode::G) {
             storm = (storm + dt * 0.5).min(1.0);
         } else {
             storm = (storm - dt * 0.5).max(0.0);
-        }
-        if is_key_pressed(KeyCode::T) {
-            day = day.next();
-        }
-        if is_key_pressed(KeyCode::L) {
-            log_open = !log_open;
-        }
-        if is_key_pressed(KeyCode::Escape) {
-            if log_open {
-                log_open = false;
-            } else {
-                break;
-            }
         }
 
         // --- Ship motion + camera ride -----------------------------------------
@@ -427,12 +471,15 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail · A/D helm · Q/E sea · G storm · T time · [ ] wind · L log · Esc quit",
+            "W/S sail · A/D helm · Space dock · Q/E sea · G storm · T time · [ ] wind · L log · Esc quit",
             16.0,
             52.0,
             20.0,
             Color::new(1.0, 1.0, 1.0, 0.7),
         );
+        // Purse + hold, so the captain can read his fortunes from the helm too.
+        let purse = format!("Gold {}  ·  Hold {}/{}", gs.gold, gs.hold_used(), gs.hold_capacity);
+        draw_text(&purse, 16.0, 76.0, 22.0, Color::new(1.0, 0.92, 0.6, 1.0));
 
         // Always-on corner chart: the local cluster, top-right.
         let map_size = (h * 0.24).clamp(140.0, 200.0);
@@ -452,6 +499,17 @@ async fn main() {
                 w,
                 h,
             );
+        }
+
+        // The docking call-to-action (while sailing), then the port board (docked).
+        port_view::render_prompt(&harbor, &world, sail_mode == 0, w, h);
+        if harbor.is_open() {
+            if let Some(id) = gs.docked_island_id() {
+                let market = Market::for_island(&world.islands[id as usize], world.seed);
+                if let Some(screen) = harbor.screen.as_ref() {
+                    screen.render(&gs, &world, &market, &kin, wind, w, h);
+                }
+            }
         }
 
         next_frame().await
