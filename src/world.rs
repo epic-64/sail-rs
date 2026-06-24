@@ -258,10 +258,13 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
             // Summit elevation by terrain: green & jungle shores lie almost flat on
             // the water (low beaches/atolls), while rocky and volcanic isles rear up
             // into proper hills and cones.
+            // Islands are relatively flat by default: green/jungle are low cays a few
+            // metres proud of the water; rocky and volcanic rear up a little more into
+            // modest hills and cones, but nothing towering.
             let height = match terrain {
-                IsleKind::Green | IsleKind::Jungle => 10.0 + radius * relief * 0.26,
-                IsleKind::Rocky => 50.0 + radius * relief * 1.05,
-                IsleKind::Volcanic => 68.0 + radius * relief * 0.95,
+                IsleKind::Green | IsleKind::Jungle => 5.0 + radius * relief * 0.10,
+                IsleKind::Rocky => 14.0 + radius * relief * 0.35,
+                IsleKind::Volcanic => 20.0 + radius * relief * 0.40,
             };
             built.push(Island {
                 id: id_offset + idx,
