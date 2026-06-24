@@ -17,8 +17,6 @@ pub enum Daytime {
 }
 
 impl Daytime {
-    pub const CYCLE: [Daytime; 4] = [Daytime::Dawn, Daytime::Day, Daytime::Dusk, Daytime::Night];
-
     pub fn label(self) -> &'static str {
         match self {
             Daytime::Dawn => "Dawn",
@@ -26,12 +24,6 @@ impl Daytime {
             Daytime::Dusk => "Dusk",
             Daytime::Night => "Night",
         }
-    }
-
-    /// The next daytime in the cycle, wrapping from night back to dawn.
-    pub fn next(self) -> Daytime {
-        let i = Self::CYCLE.iter().position(|&d| d == self).unwrap_or(0);
-        Self::CYCLE[(i + 1) % Self::CYCLE.len()]
     }
 }
 
@@ -126,3 +118,53 @@ pub const STORM_SKY: [(f32, f32, f32); 3] = [
     (45.0, 58.0, 66.0),
     (69.0, 86.0, 92.0),
 ];
+
+// --- Continuous time-of-day -------------------------------------------------
+// The four palettes above are keyframes spaced evenly around a 24-hour ring:
+// midnight sits at phase 0, dawn at ¼, noon at ½, dusk at ¾. A clock value
+// `tod` in [0,1) is blended between the two bracketing keyframes so the sky and
+// sea slide smoothly through the day rather than snapping between four states.
+const RING: [Daytime; 4] = [Daytime::Night, Daytime::Dawn, Daytime::Day, Daytime::Dusk];
+
+/// The two keyframes bracketing `tod` and the smoothed blend factor between them.
+fn ring_blend(tod: f32) -> (Daytime, Daytime, f32) {
+    let s = tod.rem_euclid(1.0) * 4.0;
+    let i = (s.floor() as usize) % 4;
+    let f = s - s.floor();
+    let fs = f * f * (3.0 - 2.0 * f); // smoothstep: ease through each transition
+    (RING[i], RING[(i + 1) % 4], fs)
+}
+
+/// The discrete phase nearest `tod`, for the HUD label and log readout.
+pub fn daytime_at(tod: f32) -> Daytime {
+    let s = (tod.rem_euclid(1.0) * 4.0).round() as usize;
+    RING[s % 4]
+}
+
+/// The sea palette at clock `tod`, blended across the day's keyframes.
+pub fn sea_palette(tod: f32) -> Palette {
+    let (a, b, f) = ring_blend(tod);
+    let pa = palette_for(a);
+    let pb = palette_for(b);
+    let mut out = [0.0; PALETTE_LEN];
+    for i in 0..PALETTE_LEN {
+        out[i] = pa[i] + (pb[i] - pa[i]) * f;
+    }
+    out
+}
+
+/// The fair-weather sky gradient (top, mid, horizon) at clock `tod`, blended.
+pub fn sky_gradient(tod: f32) -> [(f32, f32, f32); 3] {
+    let (a, b, f) = ring_blend(tod);
+    let sa = fair_sky(a);
+    let sb = fair_sky(b);
+    let mut out = [(0.0, 0.0, 0.0); 3];
+    for i in 0..3 {
+        out[i] = (
+            sa[i].0 + (sb[i].0 - sa[i].0) * f,
+            sa[i].1 + (sb[i].1 - sa[i].1) * f,
+            sa[i].2 + (sb[i].2 - sa[i].2) * f,
+        );
+    }
+    out
+}

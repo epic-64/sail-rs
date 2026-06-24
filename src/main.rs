@@ -5,6 +5,7 @@
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
 mod captains_log;
+mod celestial;
 mod game_state;
 mod geometry;
 mod isle_features;
@@ -25,8 +26,7 @@ use macroquad::prelude::*;
 use game_state::{upgrades, GameState, Market};
 use geometry::{clamp, wrap_angle, Vec2};
 use port_view::Harbor;
-use ocean_renderer::{OceanRenderer, SUN_BEARING};
-use palette::Daytime;
+use ocean_renderer::OceanRenderer;
 use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
@@ -59,13 +59,12 @@ fn rgb(c: (f32, f32, f32)) -> Color {
 }
 
 /// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
-/// toward the storm overcast by `storm`. Drawn as horizontal strips since
-/// macroquad has no built-in gradient.
-fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32, m: f32) {
-    let fair = palette::fair_sky(day);
-    let top = lerp3(fair[0], palette::STORM_SKY[0], storm);
-    let mid = lerp3(fair[1], palette::STORM_SKY[1], storm);
-    let hor = lerp3(fair[2], palette::STORM_SKY[2], storm);
+/// toward the storm overcast by `storm`. `sky` is the clock's fair-weather gradient.
+/// Drawn as horizontal strips since macroquad has no built-in gradient.
+fn draw_sky(sky: [(f32, f32, f32); 3], storm: f32, w: f32, horizon: f32, m: f32) {
+    let top = lerp3(sky[0], palette::STORM_SKY[0], storm);
+    let mid = lerp3(sky[1], palette::STORM_SKY[1], storm);
+    let hor = lerp3(sky[2], palette::STORM_SKY[2], storm);
 
     // Over-scan base: paint the top sky colour across the whole region above the
     // horizon (and out past every edge) so the camera ride's tilt/translate never
@@ -85,39 +84,6 @@ fn draw_sky(day: Daytime, storm: f32, w: f32, horizon: f32, m: f32) {
         // +1px overlap so no seams show between strips; over-scanned sideways.
         draw_rectangle(-m, y, w + 2.0 * m, strip_h + 1.0, rgb(c));
     }
-}
-
-/// How visible the sun is at each phase (`SailingView.sunVisibility`).
-fn sun_visibility(d: Daytime) -> f32 {
-    match d {
-        Daytime::Dawn => 0.85,
-        Daytime::Day => 0.95,
-        Daytime::Dusk => 0.55,
-        Daytime::Night => 0.0,
-    }
-}
-
-/// Draw the sun as a soft disc, panning with the helm and fading by daytime/storm.
-fn draw_sun(day: Daytime, storm: f32, heading: f32, half_fov_h: f32, w: f32, h: f32, horizon: f32) {
-    let rel = wrap_angle(SUN_BEARING - heading);
-    let sun_half_fov = half_fov_h * 1.1;
-    if rel.abs() > sun_half_fov {
-        return;
-    }
-    let vis = sun_visibility(day) * (1.0 - clamp(storm, 0.0, 1.0));
-    if vis <= 0.01 {
-        return;
-    }
-    let x = w * 0.5 + (rel / half_fov_h) * (w * 0.5);
-    let y = horizon * 0.42;
-    let r = h * 0.055;
-    // Warm core with a faint halo, tinted by the daytime's sun colour.
-    let sun = palette::palette_for(day);
-    let core = Color::new(sun[12] / 255.0, sun[13] / 255.0, sun[14] / 255.0, vis);
-    let halo = Color::new(sun[12] / 255.0, sun[13] / 255.0, sun[14] / 255.0, vis * 0.18);
-    draw_circle(x, y, r * 2.1, halo);
-    draw_circle(x, y, r * 1.4, halo);
-    draw_circle(x, y, r, core);
 }
 
 /// Discrete sail settings: W raises a notch, S lowers one. Each maps to a sail
@@ -170,12 +136,18 @@ fn compass(bearing_rad: f32) -> &'static str {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut day = Daytime::Day;
-    let mut renderer = OceanRenderer::new(day);
+    // The day/night clock: a value in [0,1) that runs continuously (0 = midnight,
+    // ¼ sunrise, ½ noon, ¾ sunset), wrapping every `DAY_LENGTH` seconds. The sky,
+    // sea, sun, moon and stars are all derived from it.
+    const DAY_LENGTH: f32 = 180.0;
+    let mut tod: f32 = 0.40; // start mid-morning
+    let mut renderer = OceanRenderer::new(tod);
 
     // Build the world and start the captain just off the home cluster's shipyard
     // port, bow pointed at it, so there's land in view from the first frame.
     let world = world::generate(1);
+    // A fixed dome of stars, seeded off the world so it's the same each run.
+    let stars = celestial::StarField::new(world.seed ^ 0x5741, 170);
     // Each island's scenery is deterministic; generate it once. `islands` is in id
     // order (index == id), so this Vec aligns by index.
     let features: Vec<Vec<isle_features::IsleFeature>> = world
@@ -248,6 +220,16 @@ async fn main() {
             last_wind_shift = clock;
         }
 
+        // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
+        // the moving sun/moon and light, the blended sea palette and sky gradient,
+        // a nearest discrete phase for the HUD/log, and how lit the deck is.
+        tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
+        let sky = celestial::sky_state(tod);
+        let sea_pal = palette::sea_palette(tod);
+        let sky_grad = palette::sky_gradient(tod);
+        let day = palette::daytime_at(tod);
+        let day_lit = 0.5 + 0.5 * clamp(sky.sun_alt, 0.0, 1.0);
+
         // While docked the trading board owns input and the ship lies parked;
         // otherwise the helm and sail are live and we may dock a port in range.
         let mut helm = Helm::IDLE;
@@ -311,8 +293,9 @@ async fn main() {
             if is_key_down(KeyCode::Q) {
                 sea = (sea - dt * 0.4).max(0.0);
             }
+            // Skip the clock forward ~3 hours, to jump ahead through the cycle.
             if is_key_pressed(KeyCode::T) {
-                day = day.next();
+                tod = (tod + 0.12).rem_euclid(1.0);
             }
             if is_key_pressed(KeyCode::L) {
                 log_open = !log_open;
@@ -402,13 +385,14 @@ async fn main() {
         world_cam.target = vec2(w * 0.5 + cam_sway, h * 0.5 - cam_vert);
         set_camera(&world_cam);
 
-        draw_sky(day, storm, w, horizon, overscan);
-        draw_sun(day, storm, kin.heading_rad, half_fov_h_view, w, h, horizon);
+        draw_sky(sky_grad, storm, w, horizon, overscan);
+        // Stars, then the moon and sun arcing over on the clock.
+        celestial::draw(&sky, &stars, t, kin.heading_rad, half_fov_h_view, w, h, horizon, storm);
 
         // Distant-water backdrop behind the wave mesh, over-scanned so a rolled view
         // still finds deep sea in the corners.
         let far = lerp3(
-            (palette::palette_for(day)[6], palette::palette_for(day)[7], palette::palette_for(day)[8]),
+            (sea_pal[6], sea_pal[7], sea_pal[8]),
             (palette::STORM_PALETTE[6], palette::STORM_PALETTE[7], palette::STORM_PALETTE[8]),
             clamp(storm, 0.0, 1.0) * 0.9,
         );
@@ -432,7 +416,21 @@ async fn main() {
         visible.sort_by(|a, b| key(b.0).partial_cmp(&key(a.0)).unwrap());
 
         // --- Waves -------------------------------------------------------------
-        renderer.render(&kin, t, sea, motion.heave, day, storm, w, h, &visible);
+        renderer.render(
+            &kin,
+            t,
+            sea,
+            motion.heave,
+            &sea_pal,
+            sky_grad,
+            sky.light_az,
+            sky.light_alt,
+            sky.light_strength,
+            storm,
+            w,
+            h,
+            &visible,
+        );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
         // viewport rather than riding the swell.
@@ -454,7 +452,7 @@ async fn main() {
             wind_rel,
             bow_lift,
         };
-        ship.render(&rig, dt, t, day, storm, w, h);
+        ship.render(&rig, dt, t, day_lit, storm, w, h);
 
         // --- HUD ---------------------------------------------------------------
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
