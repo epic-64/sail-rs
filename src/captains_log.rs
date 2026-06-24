@@ -61,6 +61,7 @@ pub fn render(
     day: Daytime,
     sea: f32,
     storm: f32,
+    mission_targets: &[i32],
     w: f32,
     h: f32,
 ) {
@@ -130,7 +131,7 @@ pub fn render(
     let chart_x = rx + (rw - chart_size) / 2.0;
     let chart = Rect::new(chart_x, chart_top, chart_size, chart_size);
     let pal = MinimapPalette::parchment();
-    minimap::render(world, kin, wind, chart, &pal, &[]);
+    minimap::render(world, kin, wind, chart, &pal, mission_targets, None);
 
     // Name the local waters under the chart.
     let cluster = world.cluster_at(kin.pos);
