@@ -1,7 +1,8 @@
 //! A small top-down chart, ported from `client.MinimapRenderer`.
 //!
 //! The local cluster — the waters the ship is currently in — is drawn zoomed right
-//! out so every island is just a dot (ports a little brighter, shipyards ringed),
+//! out so every island is just a dot (ports a little brighter, shipyards ringed and
+//! lettered "S"),
 //! with the ship a heading arrow at its world position. North is up. Faint wind
 //! streaks (with chevrons) flow across the chart along the wind. When the ship
 //! strays out toward open sea its arrow clamps to the frame edge rather than flying
@@ -241,7 +242,12 @@ pub fn render(
         let r = if isle.is_port { 3.2 } else { 2.4 } * s;
         draw_circle(x, y, r, if isle.is_port { pal.port } else { pal.land });
         if isle.is_shipyard {
-            draw_circle_lines(x, y, 5.4 * s, 1.5, pal.shipyard_ring);
+            let rr = 5.4 * s;
+            draw_circle_lines(x, y, rr, 1.5, pal.shipyard_ring);
+            // An "S" below the ring (clear of the M/R marks, which sit above).
+            let fs = (13.0 * s).max(11.0);
+            let dims = measure_text("S", None, fs as u16, 1.0);
+            draw_text("S", x - dims.width / 2.0, y + rr + fs, fs, pal.shipyard_ring);
         }
         if mission_targets.contains(&isle.id) {
             mark(x, y, "M", pal.mission_mark, 5.5 * s);
