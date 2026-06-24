@@ -33,6 +33,7 @@ pub struct MinimapPalette {
     pub land: Color,
     pub ship: Color,
     pub mission_mark: Color,
+    pub race_mark: Color,
     pub trader: Color,
 }
 
@@ -48,6 +49,7 @@ impl MinimapPalette {
             land: rgba(176, 214, 210, 0.8),
             ship: rgba(255, 255, 255, 0.95),
             mission_mark: rgba(255, 210, 90, 0.95),
+            race_mark: rgba(255, 92, 92, 0.95),
             trader: rgba(120, 220, 188, 0.95),
         }
     }
@@ -64,6 +66,7 @@ impl MinimapPalette {
             land: rgba(42, 32, 24, 0.35),
             ship: rgba(79, 47, 23, 1.0),
             mission_mark: rgba(200, 150, 47, 1.0),
+            race_mark: rgba(168, 40, 30, 1.0),
             trader: rgba(54, 96, 78, 0.9),
         }
     }
@@ -128,9 +131,11 @@ fn draw_dashed_line(x0: f32, y0: f32, x1: f32, y1: f32, thick: f32, dash: f32, g
 
 /// Paint the chart into the square `rect` (screen space). `mission_targets` mark
 /// the isles that hold an active contract's destination — a yellow ring with an
-/// "M" (empty until missions land). `route`, if set, draws a dashed rhumb line
-/// between two world points (the docked port and a highlighted contract's other
-/// port) so the captain can weigh a haul against the wind before taking it.
+/// "M" (empty until missions land); `race_targets` mark the booked race's mark —
+/// a red ring with an "R". `route`, if set, draws a dashed rhumb line between two
+/// world points (the docked port and a highlighted contract's or race's other
+/// port) so the captain can weigh a leg against the wind before taking it.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     world: &World,
     kin: &Kinematics,
@@ -138,6 +143,7 @@ pub fn render(
     rect: Rect,
     pal: &MinimapPalette,
     mission_targets: &[i32],
+    race_targets: &[i32],
     route: Option<(Vec2, Vec2)>,
     // World positions of the local cluster's wandering traders, drawn as small
     // marks so the captain can spot the traffic crossing the bay. Empty on the
@@ -220,7 +226,15 @@ pub fn render(
     }
 
     // The isles of the local cluster: a dot each (ports brighter), shipyards ringed.
-    // A mission destination gets a yellow ring with an "M" over it, on top of all.
+    // A mission destination gets a yellow ring with an "M"; a race mark gets a red
+    // ring with an "R" — both drawn on top of all. A small helper rings the isle and
+    // letters it just above the ring, clear of it.
+    let mark = |x: f32, y: f32, letter: &str, col: Color, rr: f32| {
+        draw_circle_lines(x, y, rr, 2.0, col);
+        let fs = (13.0 * s).max(11.0);
+        let dims = measure_text(letter, None, fs as u16, 1.0);
+        draw_text(letter, x - dims.width / 2.0, y - rr - 3.0 * s, fs, col);
+    };
     for isle in world.cluster_islands(cluster) {
         let x = sx(isle.pos);
         let y = sy(isle.pos);
@@ -230,12 +244,12 @@ pub fn render(
             draw_circle_lines(x, y, 5.4 * s, 1.5, pal.shipyard_ring);
         }
         if mission_targets.contains(&isle.id) {
-            let rr = 5.5 * s;
-            draw_circle_lines(x, y, rr, 2.0, pal.mission_mark);
-            // "M" sits just above the ring, clear of it.
-            let fs = (13.0 * s).max(11.0);
-            let dims = measure_text("M", None, fs as u16, 1.0);
-            draw_text("M", x - dims.width / 2.0, y - rr - 3.0 * s, fs, pal.mission_mark);
+            mark(x, y, "M", pal.mission_mark, 5.5 * s);
+        }
+        // A race mark rings a touch wider so it reads distinctly even when the same
+        // port also holds a contract.
+        if race_targets.contains(&isle.id) {
+            mark(x, y, "R", pal.race_mark, 7.2 * s);
         }
     }
 

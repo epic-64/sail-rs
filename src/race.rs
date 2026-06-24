@@ -345,15 +345,16 @@ mod tests {
     }
 
     #[test]
-    fn withdraw_drops_a_booked_race_forfeiting_the_stake() {
+    fn withdraw_drops_a_booked_race_and_refunds_the_stake() {
         let world = race_world();
         let mut gs = flush_docked();
         let target = targets_at(&gs, &world)[0];
+        let before = gs.gold;
         gs.accept_race(&world, target.id).unwrap();
-        let gold = gs.gold;
+        assert!(gs.gold < before, "booking charges the stake up front");
         gs.withdraw_race(&world).unwrap();
         assert_eq!(gs.race, None);
-        assert_eq!(gs.gold, gold);
+        assert_eq!(gs.gold, before, "abandoning before the off refunds the stake in full");
     }
 
     #[test]

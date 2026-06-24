@@ -119,7 +119,6 @@ enum Focus {
     Delivery(i32),
     Manifest(i32),
     RaceTarget(i32),
-    RaceChallenge,
     RaceWithdraw,
 }
 
@@ -128,9 +127,6 @@ pub struct PortScreen {
     tab: Tab,
     focus: Focus,
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
-    /// The Racing tab's working choice: which rival port to wager on. `None` falls
-    /// back to the nearest on the day's card. Only matters until a race is booked.
-    race_choice: Option<i32>,
 }
 
 const TABS: [Tab; 4] = [Tab::Market, Tab::Contracts, Tab::Yard, Tab::Race];
@@ -143,15 +139,7 @@ impl PortScreen {
             tab: Tab::Market,
             focus: Focus::TabBar,
             column: 0,
-            race_choice: None,
         }
-    }
-
-    /// The rival port currently chosen to race (the cursor's pick, or the nearest
-    /// on the card by default). `None` only when there are no ports to race to.
-    fn race_chosen(&self, gs: &GameState, world: &World) -> Option<i32> {
-        self.race_choice
-            .or_else(|| race::offers(gs, world).first().map(|p| p.id))
     }
 
     fn is_shipyard(&self, world: &World) -> bool {
@@ -179,18 +167,17 @@ impl PortScreen {
                 }
                 v
             }
-            // While a race is booked the tab is just the armed race + a withdraw;
-            // with none booked it is the day's rival ports and the challenge button.
+            // While a race is booked the tab is just the armed race + an abandon;
+            // with none booked it is the day's rival ports, each accepted by pressing
+            // Enter on it — the same flow as accepting a contract.
             Tab::Race => {
                 if gs.race.is_some() {
                     vec![Focus::RaceWithdraw]
                 } else {
-                    let mut v: Vec<Focus> = race::offers(gs, world)
+                    race::offers(gs, world)
                         .iter()
                         .map(|p| Focus::RaceTarget(p.id))
-                        .collect();
-                    v.push(Focus::RaceChallenge);
-                    v
+                        .collect()
                 }
             }
         }
@@ -298,16 +285,13 @@ impl PortScreen {
                     };
                 }
             }
-            // Picking a target just arms the chart preview; the challenge books the
-            // race (charging the stake), and withdraw drops a booked one.
-            Focus::RaceTarget(id) => self.race_choice = Some(id),
-            Focus::RaceChallenge => {
-                if let Some(id) = self.race_chosen(gs, world) {
-                    if gs.accept_race(world, id).is_ok() {
-                        sounds.transaction();
-                        // The picker rows are gone; land on the new withdraw row.
-                        self.focus = Focus::RaceWithdraw;
-                    }
+            // Enter on a rival port books the race outright (charging the stake) —
+            // no separate confirm step, mirroring how a contract is accepted. The
+            // picker rows then vanish, so land on the new abandon row.
+            Focus::RaceTarget(id) => {
+                if gs.accept_race(world, id).is_ok() {
+                    sounds.transaction();
+                    self.focus = Focus::RaceWithdraw;
                 }
             }
             Focus::RaceWithdraw => {
@@ -421,19 +405,14 @@ impl PortScreen {
         let chart_size = (ph - (body_top - y0) - pad).min(pw * 0.34);
         let chart = Rect::new(x0 + pad, body_top, chart_size, chart_size);
         let cpal = MinimapPalette::parchment();
-        // Mark every accepted contract's destination and the race mark (booked, or
-        // the one being eyed on the Racing tab), and draw a dashed route from this
-        // port out to the highlighted contract's or race's other port.
-        let mut marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
-        if let Some(r) = gs.race {
-            marks.push(r.target_id);
-        } else if self.tab == Tab::Race {
-            if let Some(id) = self.race_chosen(gs, world) {
-                marks.push(id);
-            }
-        }
+        // Mark every accepted contract's destination ("M") and the booked race's
+        // mark ("R"), and draw a dashed route from this port out to the highlighted
+        // contract's or race's other port (so a rival port eyed on the Racing tab
+        // previews its leg before it is booked, just as a contract does).
+        let marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
         let route = self.route_line(gs, world);
-        minimap::render(world, kin, wind, chart, &cpal, &marks, route, &[]);
+        minimap::render(world, kin, wind, chart, &cpal, &marks, &race_marks, route, &[]);
         // Name the local waters under the chart.
         let waters = &world.cluster_at(kin.pos).name;
         let cd = measure_text(waters, None, 18, 1.0);
@@ -635,7 +614,7 @@ impl PortScreen {
             );
             ry += 34.0;
             let focused = self.focus == Focus::RaceWithdraw;
-            button(x, ry, w.min(300.0), 28.0, "Withdraw (forfeit stake)", focused);
+            button(x, ry, w.min(320.0), 28.0, "Abandon race (stake refunded)", focused);
             return;
         }
 
@@ -659,42 +638,37 @@ impl PortScreen {
             dim_ink(),
         );
         ry += 19.0;
-        draw_text("with the distance of the leg.", x, ry, 16.0, dim_ink());
+        draw_text(
+            "with the distance of the leg. Enter to take one on.",
+            x,
+            ry,
+            16.0,
+            dim_ink(),
+        );
         ry += 28.0;
 
+        // Columns: port name, the stake right-aligned, then an Accept chip — the
+        // same shape as a contract row.
+        let stake_r = x + w * 0.70;
+        let action_x = x + w * 0.74;
         draw_text("Race to", x, ry, 18.0, dim_ink());
-        right_text("Stake", x + w, ry, 18);
+        right_text("Stake", stake_r, ry, 18);
         draw_line(x, ry + 8.0, x + w, ry + 8.0, 1.0, dim_ink());
         ry += 32.0;
 
-        let chosen = self.race_chosen(gs, world);
+        // Each rival port is its own row: highlight it and Enter (or the Accept
+        // chip) books the race — none is marked until then, the same as contracts.
         let row_h = 30.0;
         for p in &offers {
             let active = self.focus == Focus::RaceTarget(p.id);
             if active {
                 draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
             }
-            let is_chosen = chosen == Some(p.id);
-            let name = if is_chosen {
-                format!("{}  (chosen)", p.name)
-            } else {
-                p.name.clone()
-            };
-            draw_text(&name, x, ry, 18.0, ink());
-            right_text(&race::stake_between(origin, p).to_string(), x + w, ry, 18);
+            draw_text(&p.name, x, ry, 18.0, ink());
+            right_text(&race::stake_between(origin, p).to_string(), stake_r, ry, 18);
+            button(action_x, ry - 16.0, x + w - action_x, 24.0, "Accept", active);
             ry += row_h;
         }
-
-        ry += 12.0;
-        let focused = self.focus == Focus::RaceChallenge;
-        let label = match chosen {
-            Some(id) => {
-                let port = &world.islands[id as usize];
-                format!("Challenge to {} · {}", port.name, race::stake_between(origin, port))
-            }
-            None => "Challenge".to_string(),
-        };
-        button(x, ry, w.min(420.0), 30.0, &label, focused);
     }
 
     /// The dashed route the chart should draw: from this port to the other port

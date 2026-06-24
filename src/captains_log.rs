@@ -98,6 +98,7 @@ pub fn render(
     day: Daytime,
     weather_label: &str,
     chart_marks: &[i32],
+    race_marks: &[i32],
     spread: usize,
     frame_dt: f32,
     w: f32,
@@ -143,7 +144,7 @@ pub fn render(
     match spread {
         0 => {
             page_course(&left, kin, wind, sail_name, day, weather_label);
-            page_chart(&right, world, kin, wind, chart_marks, y0, ph, pad);
+            page_chart(&right, world, kin, wind, chart_marks, race_marks, y0, ph, pad);
         }
         1 => {
             page_vessel(&left, gs);
@@ -209,7 +210,7 @@ fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Day
 /// **The Chart** — the parchment minimap of the local waters (the opening right
 /// page, unchanged).
 #[allow(clippy::too_many_arguments)]
-fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks: &[i32], y0: f32, ph: f32, pad: f32) {
+fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks: &[i32], race_marks: &[i32], y0: f32, ph: f32, pad: f32) {
     heading(p, "The Chart");
 
     // The chart square fills the page below the heading, leaving room for a
@@ -220,7 +221,7 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
     let chart_x = p.x + (p.col_w - chart_size) / 2.0;
     let chart = Rect::new(chart_x, chart_top, chart_size, chart_size);
     let pal = MinimapPalette::parchment();
-    minimap::render(world, kin, wind, chart, &pal, chart_marks, None, &[]);
+    minimap::render(world, kin, wind, chart, &pal, chart_marks, race_marks, None, &[]);
 
     // Name the local waters under the chart.
     let cluster = world.cluster_at(kin.pos);
