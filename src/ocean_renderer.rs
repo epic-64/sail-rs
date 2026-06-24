@@ -252,6 +252,11 @@ impl OceanRenderer {
         // shore distance (farthest first), so we can draw each between the wave
         // bands at its own depth.
         islands: &[(&Island, &[IsleFeature])],
+        // The racing rival, if one is on the water, slotted into the same depth
+        // march so nearer wave crests and islands occlude it. `rival_light` dims it
+        // into the night with the rest of the scene.
+        rival: Option<Kinematics>,
+        rival_light: f32,
     ) {
         // Ease the live palette toward the clock's target with a slow cross-fade,
         // then blend toward the cold storm palette by the gale's fury.
@@ -333,6 +338,24 @@ impl OceanRenderer {
         // each island into the band march. Farthest-first to match the band order.
         let isle_key = |isle: &Island| kin.pos.distance_to(isle.pos) - isle.radius;
         let mut isle_idx = 0;
+        // The rival is slotted in at its straight-line distance, drawn once the
+        // march descends past it (so every nearer band/island then paints over it).
+        let rival_dist = rival.map(|rk| kin.pos.distance_to(rk.pos));
+        let mut rival_done = rival.is_none();
+        let mut draw_rival = |f: f32| {
+            if rival_done {
+                return;
+            }
+            if let (Some(rk), Some(d)) = (rival, rival_dist) {
+                if d >= f {
+                    crate::rival_render::draw(
+                        &rk, kin, t, sea, heave, rival_light, horizon, px_per_rad,
+                        half_fov_h_view, w,
+                    );
+                    rival_done = true;
+                }
+            }
+        };
 
         // Even screen-row spacing: linear in the depression angle of the flat sea.
         let th_far = (BASE_EYE / self.f_far).atan();
@@ -387,6 +410,9 @@ impl OceanRenderer {
                 paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
                 isle_idx += 1;
             }
+            // The rival sits among the islands at its own depth, then the band paints
+            // over it just as it does their bases.
+            draw_rival(f);
 
             if j > 0 {
                 self.paint_band(f, prev_f - f, sea, lx, ly, lz);
@@ -419,6 +445,8 @@ impl OceanRenderer {
             paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
             isle_idx += 1;
         }
+        // A rival nearer than the closest band stands in front of all the water.
+        draw_rival(0.0);
 
         // Streak the surface flecks on top of the finished wave mesh.
         self.paint_flow(

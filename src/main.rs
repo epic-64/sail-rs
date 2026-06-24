@@ -552,24 +552,11 @@ async fn main() {
             w,
             h,
             &visible,
+            // The racing rival rides the same sea, depth-sorted into the wave march
+            // so nearer crests and islands occlude it like any other world object.
+            rival,
+            day_lit,
         );
-
-        // The racing rival rides the same sea, drawn on top of the wave mesh inside
-        // the world camera so it heels and heaves with the view like the islands.
-        if let Some(rk) = rival {
-            rival_render::draw(
-                &rk,
-                &kin,
-                t,
-                sea,
-                motion.heave,
-                day_lit,
-                horizon,
-                px_per_rad,
-                half_fov_h_view,
-                w,
-            );
-        }
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
         // viewport rather than riding the swell. With bloom on, this also extracts and

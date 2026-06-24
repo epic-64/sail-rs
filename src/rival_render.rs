@@ -10,7 +10,7 @@
 
 use macroquad::prelude::*;
 
-use crate::geometry::{clamp, wrap_angle};
+use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
 use crate::projection::{BASE_EYE, MAX_VIEW};
@@ -66,16 +66,33 @@ pub fn draw(
     let rel = wrap_angle(rk.heading_rad - kin.pos.bearing_to(rk.pos));
     let flip = if rel.sin() < 0.0 { -1.0 } else { 1.0 };
 
-    draw_sloop(sx, foot_y, height, flip, alpha, light);
+    // Heel her with the local swell so she rides the waves rather than standing
+    // bolt upright on them: sample the sea a few metres to each beam (across our
+    // line of sight) and tilt toward the lower side, by the same gain the mesh uses.
+    let dir = (rk.pos - kin.pos) * (1.0 / d);
+    let beam = Vec2::new(dir.y, -dir.x);
+    let span = 7.0;
+    let z_r = ocean::height(rk.pos + beam * span, t, sea);
+    let z_l = ocean::height(rk.pos - beam * span, t, sea);
+    let roll = clamp(((z_r - z_l) * WAVE_GAIN / (2.0 * span)).atan() * 0.7, -0.4, 0.4);
+
+    draw_sloop(sx, foot_y, height, flip, roll, alpha, light);
 }
 
 /// A stylised square-rigged sloop in a local space where x ∈ [-0.5, 0.5] (bow to
 /// the right before mirroring) and y ∈ [0, 1] (0 = waterline foot, 1 = masthead),
 /// mapped to screen at (cx + flip·lx·w, foot − ly·h). Two-tone to imply a bellied
 /// sail and a rounded hull, matching the faceted low-poly look of the isles.
-fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, alpha: f32, light: f32) {
+fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, light: f32) {
     let w = h * 0.92;
-    let p = |lx: f32, ly: f32| vec2(cx + flip * lx * w, foot - ly * h);
+    // Local (lx, ly) → an offset from the foot, rotated by the swell heel, then
+    // anchored at the foot point on the wave so she rocks about her waterline.
+    let (sr, cr) = roll.sin_cos();
+    let p = |lx: f32, ly: f32| {
+        let dx = flip * lx * w;
+        let dy = -ly * h;
+        vec2(cx + dx * cr - dy * sr, foot + dx * sr + dy * cr)
+    };
     let tri = |a: (f32, f32), b: (f32, f32), c: (f32, f32), col: Color| {
         draw_triangle(p(a.0, a.1), p(b.0, b.1), p(c.0, c.1), col);
     };
