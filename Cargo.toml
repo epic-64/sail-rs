@@ -4,4 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-macroquad = "0.4.15"
+# `audio` is off in macroquad's default features; without it the audio calls
+# compile to silent no-ops, so it must be opted in explicitly.
+macroquad = { version = "0.4.15", features = ["audio"] }
+# macroquad's bundled mixer (quad-snd → audrey) decodes only WAV/OGG, but the
+# shipped clips are MP3. symphonia (pure Rust, no C toolchain) decodes them to
+# PCM at load; see `sound.rs`. Only the MP3 codec/demuxer is pulled in.
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+
+# MP3 decoding is far too slow unoptimized — a debug build would stall for several
+# seconds decoding the clips at startup. Optimize just the decoder crates so the
+# dev `cargo run` starts promptly; the game's own crate stays debug for fast
+# incremental rebuilds. (These deps compile once.)
+[profile.dev.package.symphonia-core]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3

@@ -20,6 +20,7 @@ mod projection;
 mod rng;
 mod sailing;
 mod ship_render;
+mod sound;
 mod world;
 
 use macroquad::prelude::*;
@@ -177,6 +178,10 @@ async fn main() {
     let mut gs = GameState::start();
     let mut harbor = Harbor::new();
 
+    // The audio bed: three ambient loops (sailing/calm/storm) cross-faded by sea
+    // state, plus one-shot cues for wind shifts and trades. Loaded once up front.
+    let mut sounds = sound::SoundBank::load().await;
+
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]
 
@@ -223,6 +228,7 @@ async fn main() {
         if clock - last_wind_shift >= WIND_PERIOD {
             wind = Wind::random(&mut wind_rng);
             last_wind_shift = clock;
+            sounds.wind_shift();
         }
 
         // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
@@ -247,7 +253,7 @@ async fn main() {
                 let set_sail = harbor
                     .screen
                     .as_mut()
-                    .map(|s| s.handle_input(&mut gs, &world, &market))
+                    .map(|s| s.handle_input(&mut gs, &world, &market, &sounds))
                     .unwrap_or(true);
                 if set_sail {
                     harbor.set_sail(&mut gs);
@@ -258,11 +264,19 @@ async fn main() {
         } else {
             // Sails are set in discrete notches (W raises, S lowers) — set once, the
             // ship keeps going; only the *first* press of a held key steps the sail.
+            let prev_sail = sail_mode;
             if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
                 sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
             }
             if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
                 sail_mode = sail_mode.saturating_sub(1);
+            }
+            // A canvas flap only when the sail actually moved a notch (not when a
+            // key is pressed at the end stops). (`SailingView` flapUp/flapDown.)
+            if sail_mode > prev_sail {
+                sounds.sail_up();
+            } else if sail_mode < prev_sail {
+                sounds.sail_down();
             }
             helm = Helm {
                 turn: read_turn(),
@@ -322,6 +336,9 @@ async fn main() {
         } else {
             storm = (storm - dt * 0.5).max(0.0);
         }
+
+        // Ride the ambient beds to match the boat's speed and the gale's fury.
+        sounds.update(dt, harbor.is_open(), kin.speed() / sailing::KNOT, storm);
 
         // --- Ship motion + camera ride -----------------------------------------
         // Sample how the swell throws the hull this frame, then ease the parts that
