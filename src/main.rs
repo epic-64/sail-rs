@@ -22,7 +22,8 @@ use geometry::{clamp, wrap_angle, Vec2};
 use ocean_renderer::{OceanRenderer, SUN_BEARING};
 use palette::Daytime;
 use projection::MAX_VIEW;
-use sailing::{Helm, Kinematics};
+use rng::Rng;
+use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
 use world::Island;
 
@@ -108,22 +109,31 @@ fn draw_sun(day: Daytime, storm: f32, heading: f32, half_fov_h: f32, w: f32, h: 
     draw_circle(x, y, r, core);
 }
 
-fn read_helm() -> Helm {
+/// Discrete sail settings: W raises a notch, S lowers one. Each maps to a sail
+/// fraction (the throttle) the hull accelerates toward — it sets a *target* speed,
+/// never the speed itself, so you set sail once and the ship keeps going.
+/// (`SailingView.sailFractions` / `sailNames`.)
+const SAIL_FRACTIONS: [f32; 3] = [0.0, 0.5, 1.0];
+const SAIL_NAMES: [&str; 3] = ["None", "Half", "Full"];
+
+/// The rudder demand from the helm keys: A/D (or arrows) held, [-1, 1].
+/// (`SailingView.heldTurn`.)
+fn read_turn() -> f32 {
     let mut turn = 0.0;
-    let mut throttle = 0.0;
-    if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) {
-        throttle = 1.0;
-    }
-    if is_key_down(KeyCode::S) || is_key_down(KeyCode::Down) {
-        throttle = 0.0; // no reverse; brake by easing off
-    }
     if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
         turn += 1.0;
     }
     if is_key_down(KeyCode::A) || is_key_down(KeyCode::Left) {
         turn -= 1.0;
     }
-    Helm { turn, throttle }
+    turn
+}
+
+/// 8-point compass label for a bearing (radians, 0 = N, CW).
+fn compass(bearing_rad: f32) -> &'static str {
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    let deg = (bearing_rad.to_degrees().rem_euclid(360.0) + 22.5) / 45.0;
+    POINTS[(deg as usize) % 8]
 }
 
 #[macroquad::main(window_conf)]
@@ -155,15 +165,25 @@ async fn main() {
     let mut sea: f32 = 0.6; // sea-state scalar (0 glassy … ~1.3 storm)
     let mut storm: f32 = 0.0; // gale fury [0,1]
 
+    // Discrete sail setting, set once with W/S and held. Start furled (None) so the
+    // captain raises sail to get under way, just like the original.
+    let mut sail_mode: usize = 0;
+
+    // The prevailing wind. The opening breeze is rolled within a reach of the bow
+    // (Wind::favorable) so a fresh captain never spawns in irons; from there it
+    // backs/veers to a fresh random quarter every WIND_PERIOD seconds.
+    let mut wind_rng = Rng::from_seed(world.seed);
+    let mut wind = Wind::favorable(kin.heading_rad, &mut wind_rng);
+    const WIND_PERIOD: f32 = 300.0; // seconds between auto wind shifts
+    let mut clock: f32 = 0.0; // elapsed seconds, for the wind drift
+    let mut last_wind_shift: f32 = 0.0; // the opening breeze holds one full period
+
     // The ship's foreground (deck + rig). Roll/yaw are low-passed so the deck
     // rocks with the long swell rather than buzzing with the chop.
     let mut ship = ShipRenderer::new();
     let mut smooth_roll: f32 = 0.0;
     let mut smooth_yaw: f32 = 0.0;
     const ROLL_EASE: f32 = 2.2;
-    // Render-only placeholder wind (no physics yet): the bearing it blows *toward*,
-    // steered with [ and ] so the sail's brace/belly/luff can be seen to respond.
-    let mut wind_toward: f32 = std::f32::consts::PI; // a following wind to start
 
     loop {
         let dt = get_frame_time().min(0.05);
@@ -173,14 +193,35 @@ async fn main() {
         let horizon = h * 0.54;
 
         // --- Input -------------------------------------------------------------
-        let helm = read_helm();
-        kin = sailing::step(kin, helm, dt);
+        // Sails are set in discrete notches (W raises, S lowers) — set once, the
+        // ship keeps going; only the *first* press of a held key steps the sail.
+        if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
+            sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
+        }
+        if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
+            sail_mode = sail_mode.saturating_sub(1);
+        }
+        let helm = Helm {
+            turn: read_turn(),
+            throttle: SAIL_FRACTIONS[sail_mode],
+        };
+
+        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds.
+        clock += dt;
+        if clock - last_wind_shift >= WIND_PERIOD {
+            wind = Wind::random(&mut wind_rng);
+            last_wind_shift = clock;
+        }
+        // Dev aid (not in the original): nudge the wind with [ and ] to feel the
+        // points of sail and tacking on demand.
         if is_key_down(KeyCode::RightBracket) {
-            wind_toward = wrap_angle(wind_toward + dt * 0.8);
+            wind.toward_rad = wrap_angle(wind.toward_rad + dt * 0.8);
         }
         if is_key_down(KeyCode::LeftBracket) {
-            wind_toward = wrap_angle(wind_toward - dt * 0.8);
+            wind.toward_rad = wrap_angle(wind.toward_rad - dt * 0.8);
         }
+
+        kin = sailing::step(kin, helm, wind, dt);
         // Keep the hull out of every nearby island.
         let near = world.islands_near(kin.pos, 400.0);
         kin = sailing::resolve_grounding(kin, &near);
@@ -255,20 +296,31 @@ async fn main() {
             },
             set: helm.throttle,
             turn: helm.turn,
-            wind_rel: wrap_angle(wind_toward - kin.heading_rad),
+            wind_rel: wrap_angle(wind.toward_rad - kin.heading_rad),
         };
         ship.render(&rig, dt, t, day, storm, w, h);
 
         // --- HUD ---------------------------------------------------------------
+        // Wind is shown by the quarter it blows *from* (the seaman's convention).
         let knots = kin.speed() / sailing::KNOT;
+        let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
+        let point = wind.point_of_sail(kin.heading_rad).label();
         let hud = format!(
-            "{}  sea {:.2}  storm {:.2}  {:.1} kn   [WASD sail  Q/E sea  G storm  T time  [ ] wind]",
+            "{}  Sail: {}  {:.1} kn  ·  Wind {}  ({})",
             day.label(),
-            sea,
-            storm,
-            knots
+            SAIL_NAMES[sail_mode],
+            knots,
+            wind_from,
+            point,
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
+        draw_text(
+            "W/S sail  ·  A/D helm  ·  Q/E sea  ·  G storm  ·  T time  ·  [ ] wind  ·  Esc quit",
+            16.0,
+            52.0,
+            20.0,
+            Color::new(1.0, 1.0, 1.0, 0.7),
+        );
 
         next_frame().await
     }

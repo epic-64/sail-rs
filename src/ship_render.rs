@@ -14,16 +14,18 @@
 //!
 //! The belly/brace/luff are built in a small local 3-D rig space (x across, y up,
 //! z toward the viewer) and projected through a gentle fake perspective, so a
-//! braced-and-bellied sail still reads as a curved surface from any angle. There
-//! is no wind model yet (a later milestone), so the trim is driven by a
-//! render-only placeholder wind passed in by the caller; it feeds nothing but
-//! these visuals, so the real `Wind` system slots straight in.
+//! braced-and-bellied sail still reads as a curved surface from any angle. The
+//! trim is driven by the real [`crate::sailing::Wind`]: the caller passes the
+//! wind's bearing relative to the bow (`wind_rel`), and the sail bellies by the
+//! same `Wind::factor` curve the physics uses, so it luffs exactly when the ship
+//! is in irons.
 
 use macroquad::prelude::*;
 
 use crate::geometry::clamp;
 use crate::ocean::ShipMotion;
 use crate::palette::Daytime;
+use crate::sailing::wind_factor_rel;
 
 use std::f32::consts::TAU;
 
@@ -37,7 +39,6 @@ const FLAP_DEPTH: f32 = 0.035; // deepest a flog throws a panel, fraction of wid
 const BRACE_LIMIT: f32 = 1.4; // hard brace (~80°) reached by a beam wind
 const BRACE_EASE: f32 = 2.5; // 1/s the crew haul the yard toward its trim
 const WHEEL_EASE: f32 = 5.0; // 1/s the wheel chases the rudder input
-const NO_GO: f32 = 1.4; // rad off the wind inside which a square sail can't draw
 
 // --- How the swell's sway is split (the deck takes the bulk) ------------------
 const DECK_SHARE: f32 = 0.6;
@@ -61,12 +62,12 @@ const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
 const WHEEL_C: [f32; 3] = [134.0, 98.0, 58.0];
 const WHEEL_DK: [f32; 3] = [96.0, 68.0, 40.0];
 
-/// Per-frame trim the rig is steered by. With no wind model yet, `wind_rel` is a
-/// render-only placeholder bearing (0 = wind from dead astern, ±π = dead ahead).
+/// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
+/// bearing relative to the bow (0 = wind from dead astern, ±π = dead ahead).
 pub struct RigInput {
     /// Hull sway this frame (roll/yaw already low-passed by the caller).
     pub motion: ShipMotion,
-    /// Canvas set, 0 (furled) … 1 (full sail). Follows the throttle for now.
+    /// Canvas set, 0 (furled) … 1 (full sail) — the chosen sail fraction.
     pub set: f32,
     /// Rudder demand, [-1, 1] — the wheel leads it.
     pub turn: f32,
@@ -92,14 +93,6 @@ fn pitch_response(pitch: f32) -> f32 {
     pitch * (PITCH_CLIMB + (PITCH_DIVE - PITCH_CLIMB) * dive)
 }
 
-/// How much wind a square sail harvests at a wind angle off the bow: full running
-/// dead before it, falling to nothing inside the no-go zone close-hauled. A stand-
-/// in for `Wind.factor` until the real wind model lands.
-fn point_of_sail(wind_rel: f32) -> f32 {
-    let c = wind_rel.cos();
-    let knee = NO_GO.cos();
-    clamp((c - knee) / (1.0 - knee), 0.0, 1.0)
-}
 
 impl ShipRenderer {
     pub fn new() -> Self {
@@ -290,7 +283,7 @@ impl ShipRenderer {
         }
 
         // --- Sail trim --------------------------------------------------------
-        let draw_f = point_of_sail(rig.wind_rel); // wind harvested, 0..1
+        let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
         let set = clamp(rig.set, 0.0, 1.0);
         let fill = draw_f * set; // belly amount
         let luff = (1.0 - draw_f).powi(3) * set; // flog amount
