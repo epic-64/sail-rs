@@ -54,7 +54,15 @@ while keeping the game's mechanics and feel.
 
 - **Math & RNG** — `geometry.rs`, `rng.rs`.
 - **Ocean wave field** — `ocean.rs`: travelling-sine swells, `height()`,
-  `ship_motion()` (heave/pitch/roll/yaw — only heave used so far).
+  `ship_motion()` (heave/pitch/roll/yaw — only heave used so far). Wavelengths
+  **stretch with the sea state** (`wavelength_stretch`), so a building sea rolls in
+  long ridges instead of taller chop.
+- **Weather** — `weather.rs`: faithful `shared.Weather` ladder (Calm→Storm), drifting
+  to an adjacent scenario every ~130 s, but **biased toward calm** (`CALM_BIAS`) so
+  fair seas dominate (≈¾ of the time fair, ~⅒ in squall/storm). `WeatherState` eases
+  the `sea` (wave height + deck roll) and sky `gloom` it drives, and derives the
+  storm/`fury` blend from the eased gloom — so the sea builds/lays and the sky
+  greys/clears smoothly across a drift. **Q/E** nudge it calmer/stormier (dev aid).
 - **Wave renderer** — `ocean_renderer.rs`: world-anchored faceted mesh, Blinn-Phong
   glitter, Fresnel sky, subsurface glow, whitecap foam, glassy-crest alpha, foam-fleck
   optical-flow streaks. Tuned for native: far-biased row distribution (chunky near,
@@ -159,8 +167,6 @@ while keeping the game's mechanics and feel.
 
 ## 🟡 Partial / diverged from original (intentional)
 
-- **Weather / sea-state** — `sea` and `storm` are **debug toggles** (Q/E, G), not the
-  `Weather` calm→storm scenario system that drifts between adjacent states.
 - **Daytime** — cycled manually with **T**, not on an automatic dawn→night clock.
 - **HUD** — a single debug text line (state + controls), not the real HUD.
 - **Islands look** — deliberately **not** the SVG billboards; rebuilt as low-poly
@@ -173,8 +179,6 @@ while keeping the game's mechanics and feel.
 Roughly in suggested build order; each is a milestone.
 
 ### Rendering / feel
-- **Weather system** (`shared/Weather.scala`): auto-drift calm→storm along adjacent
-  states, driving `sea`/`gloom`; wire into the existing storm-blend palette.
 - **Automatic daytime cycle** (`shared/Daytime.scala`): advance dawn→day→dusk→night.
 - **HUD**: ✅ live stats live in the **captain's log** (`captains_log.rs`) + the debug
   line. Still wanting hull bar, gold, cargo — those need the GameState port.
@@ -218,8 +222,9 @@ Roughly in suggested build order; each is a milestone.
 - Run: `cargo run --release` (the dense wave mesh wants release for smooth FPS;
   debug runs but is choppier).
 - Controls: **W/S** raise/lower sail (None/Half/Full) · **A/D** helm · **Space**
-  dock at a port in range (sails struck) · **Q/E** sea-state · **G** storm · **T**
-  daytime · **[ ]** back/veer the wind (dev aid for feeling the points of sail) ·
+  dock at a port in range (sails struck) · **Q/E** nudge the weather calmer/stormier
+  (it auto-drifts) · **T** daytime · **[ ]** back/veer the wind (dev aid for feeling
+  the points of sail) ·
   **L** open/close the captain's log · **Esc** close the log / quit. In port: arrows
   move the cursor, **Tab** switches board, **Enter** trades, **Esc** sets sail.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,

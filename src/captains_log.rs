@@ -28,22 +28,6 @@ fn parchment_edge() -> Color {
     Color::new(120.0 / 255.0, 90.0 / 255.0, 55.0 / 255.0, 0.9)
 }
 
-/// A coarse word for the sea, read off the live sea-state and gale fury — the
-/// closest stand-in until the `Weather` scenario system is ported.
-fn weather_label(sea: f32, storm: f32) -> &'static str {
-    if storm > 0.55 {
-        "Storm"
-    } else if storm > 0.15 {
-        "Squally"
-    } else if sea < 0.35 {
-        "Calm"
-    } else if sea < 0.8 {
-        "Moderate"
-    } else {
-        "Rough seas"
-    }
-}
-
 /// Draw a label (left) and value (right-aligned) within a column of width `col_w`.
 fn row(label: &str, value: &str, x: f32, y: f32, col_w: f32, fs: u16) {
     draw_text(label, x, y, fs as f32, dim_ink());
@@ -59,8 +43,7 @@ pub fn render(
     wind: Wind,
     sail_name: &str,
     day: Daytime,
-    sea: f32,
-    storm: f32,
+    weather_label: &str,
     mission_targets: &[i32],
     w: f32,
     h: f32,
@@ -114,7 +97,7 @@ pub fn render(
     y += lh;
     row("Point of sail", point, lx, y, col_w, fs);
     y += lh;
-    row("Weather", weather_label(sea, storm), lx, y, col_w, fs);
+    row("Weather", weather_label, lx, y, col_w, fs);
     y += lh;
     row("Time", day.label(), lx, y, col_w, fs);
 
