@@ -4,7 +4,7 @@
 //! position and time, fixed to the chart rather than the camera. The renderer
 //! samples it to build the wave mesh; the hull samples it to sway with the water.
 
-use crate::geometry::Vec2;
+use crate::geometry::{clamp, Vec2};
 use std::f32::consts::TAU;
 
 /// How the deck reacts to the swell this frame (metres / radians). Bow-up pitch,
@@ -34,6 +34,48 @@ pub const MAX_AMPLITUDE: f32 = AMP[0] + AMP[1] + AMP[2] + AMP[3];
 // Hull half-dimensions (m) the sway samples the surface across.
 const HALF_LENGTH: f32 = 12.0;
 const HALF_BEAM: f32 = 4.0;
+// Where the helm — the first-person eye — sits aft of the hull's midpoint. The
+// view's heave is sampled here (not at the centre) so it crests and dips in step
+// with the observer rather than with a point a half-length ahead of them.
+const HELM_AFT: f32 = 9.0;
+
+// --- Deck / camera "ride" shaping (shared by main.rs and ship_render.rs) -------
+// The bow's answer to the swell is *shaped* before it drives the camera look and
+// the deck rake: amplified throughout (a swell should heave the bow, not just nod
+// it) and amplified more nosing *down* the back of a crest than climbing its face,
+// so a wave you slide down reads as a dive, not a glide. The dive boost eases in
+// with depth (over `PITCH_DIVE_KNEE`) so the response is C1-continuous through the
+// crest and never snaps as the pitch flips sign. Ported from `SailingView`.
+pub const PITCH_CLIMB: f32 = 1.3;
+pub const PITCH_DIVE: f32 = 2.0;
+pub const PITCH_DIVE_KNEE: f32 = 0.12; // rad of bow-down at which the dive boost is full
+
+/// The bow's shaped answer to the swell: climbs gently, noses down hard, eased in
+/// with depth so it stays smooth through the crest. `SailingView.pitchResponse`.
+#[inline]
+pub fn pitch_response(pitch: f32) -> f32 {
+    let dive = clamp(-pitch / PITCH_DIVE_KNEE, 0.0, 1.0);
+    pitch * (PITCH_CLIMB + (PITCH_DIVE - PITCH_CLIMB) * dive)
+}
+
+/// Metres ahead of the hull centre the bow parts the water — where the bow's lift
+/// above the hull's mean (`bow_lift`) is sampled for the deck's heave bob.
+pub const BOW_REACH: f32 = 12.0;
+/// How the bow's heave is split between craning the *camera* and bobbing the deck.
+/// 0 = all deck (a violent slide); 1 = all camera (a level deck under a heaving
+/// horizon). `SailingView.heaveCameraShare`.
+pub const HEAVE_CAMERA_SHARE: f32 = 0.42;
+const HEAVE_GAIN_PX: f32 = 27.0; // px the deck rises per metre the bow lifts above the mean
+const HEAVE_MAX_PX: f32 = 44.0; // ceiling, so a steep crest can't fling the deck
+
+/// Vertical screen shift (px) bobbing the deck/camera with the bow's lift above the
+/// hull's mean (`bow_lift`, metres). A plain linear gain, clamped so even a freak
+/// crest stays a bob, never a launch. Bow-up lifts the deck → negative (up) px.
+/// `SailingView.deckHeavePx`.
+#[inline]
+pub fn deck_heave_px(bow_lift: f32) -> f32 {
+    clamp(-bow_lift * HEAVE_GAIN_PX, -HEAVE_MAX_PX, HEAVE_MAX_PX)
+}
 
 /// Sea-surface elevation (m) at world point `p` and time `t` seconds.
 #[inline]
@@ -61,7 +103,16 @@ pub fn ship_motion(pos: Vec2, heading: f32, t: f32, sea: f32) -> ShipMotion {
     let z_stbd = height(pos + right * HALF_BEAM, t, sea);
     let z_port = height(pos - right * HALF_BEAM, t, sea);
 
-    let heave = (z_fore + z_aft + z_stbd + z_port) / 4.0;
+    // Heave at the helm, where the observer actually stands — averaged across the
+    // beam (the wheel is on the centreline, so roll lifts it none) for steadiness.
+    // Sampling it at the hull's midpoint made the crest peak, and the dip begin,
+    // while the helm a half-length astern was still climbing, so the view hung at
+    // the top and dipped late. Pitch and roll stay the hull's rigid slopes about
+    // its centre: the deck is a stiff body that tilts whole, not with the local
+    // water at the wheel.
+    let helm = pos - fwd * HELM_AFT;
+    let heave =
+        (height(helm + right * HALF_BEAM, t, sea) + height(helm - right * HALF_BEAM, t, sea)) / 2.0;
     let pitch = (z_fore - z_aft).atan2(2.0 * HALF_LENGTH);
     let roll = (z_stbd - z_port).atan2(2.0 * HALF_BEAM);
 

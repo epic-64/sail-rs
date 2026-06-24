@@ -129,8 +129,13 @@ const SAIL_NAMES: [&str; 3] = ["None", "Half", "Full"];
 // backwards on screen.
 const CAM_ROLL_GAIN: f32 = 0.55; // horizon tilt as a fraction of (swell roll + heel)
 const CAM_ROLL_MAX_DEG: f32 = 14.0; // clamp, so the over-scan margin always covers
-const CAM_PITCH_PX: f32 = 230.0; // px the horizon drops per rad of bow-up pitch
-const CAM_PITCH_MAX: f32 = 120.0;
+// Camera pitch "look": the bow climbing a wave face tips the view skyward (the
+// horizon drops) and sliding down the back tips it down. Driven by the *shaped*
+// fore-aft pitch (`ocean::pitch_response`), pushed well past a true camera pitch so
+// a swell reads as a drastic glance up the face and a steep plunge down the back.
+const PITCH_LOOK_GAIN: f32 = 650.0; // px the horizon shifts per rad of shaped pitch
+const CAMERA_DIVE_EXTRA: f32 = 1.6; // extra camera-only gain on the downward glance
+const CAM_PITCH_MAX: f32 = 170.0; // clamp, so the over-scan margin always covers
 const CAM_YAW_PX: f32 = 70.0; // px the view swings per rad of hull yaw
 const CAM_YAW_MAX: f32 = 42.0;
 // Wind heel: the press of the sails leans the boat away from the wind, hardest on
@@ -273,6 +278,15 @@ async fn main() {
         // Sample how the swell throws the hull this frame, then ease the parts that
         // should rock with the long swell rather than buzz with the chop.
         let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
+        // The bow's lift above the hull's mean (metres): the sea height where the bow
+        // parts the water, relative to the helm's heave. Drives the deck/camera heave
+        // bob, split between the two by `ocean::HEAVE_CAMERA_SHARE`.
+        let bow_z = ocean::height(
+            kin.pos + Vec2::from_heading(kin.heading_rad) * ocean::BOW_REACH,
+            t,
+            sea,
+        );
+        let bow_lift = bow_z - motion.heave;
         let wind_rel = wrap_angle(wind.toward_rad - kin.heading_rad);
         // Wind heel: the sails' press leans the boat away from the wind, hardest on
         // a beam reach (most side-force) and nil dead before it or in irons. The sign
@@ -296,7 +310,19 @@ async fn main() {
             -CAM_ROLL_MAX_DEG,
             CAM_ROLL_MAX_DEG,
         );
-        let cam_vert = clamp(CAM_PITCH_PX * smooth_pitch, -CAM_PITCH_MAX, CAM_PITCH_MAX);
+        // Camera pitch look + the camera's share of the bow's heave bob. The shaped
+        // pitch glances up the wave face and down the back (with extra gain diving);
+        // the bob's remaining share cranes the horizon so the near water and the deck's
+        // matched bob travel together. The deck (drawn in screen space) carries the rest.
+        let shaped_pitch = ocean::pitch_response(smooth_pitch);
+        let dive_depth = clamp(-smooth_pitch / ocean::PITCH_DIVE_KNEE, 0.0, 1.0);
+        let look_shift =
+            shaped_pitch * PITCH_LOOK_GAIN * (1.0 + (CAMERA_DIVE_EXTRA - 1.0) * dive_depth);
+        let cam_vert = clamp(
+            look_shift - ocean::deck_heave_px(bow_lift) * ocean::HEAVE_CAMERA_SHARE,
+            -CAM_PITCH_MAX,
+            CAM_PITCH_MAX,
+        );
         let cam_sway = clamp(CAM_YAW_PX * smooth_yaw, -CAM_YAW_MAX, CAM_YAW_MAX);
 
         // --- Scene (drawn through the camera ride) -----------------------------
@@ -362,11 +388,13 @@ async fn main() {
             motion: ocean::ShipMotion {
                 roll: smooth_roll + smooth_heel,
                 yaw: smooth_yaw,
+                pitch: smooth_pitch,
                 ..motion
             },
             set: helm.throttle,
             turn: helm.turn,
             wind_rel,
+            bow_lift,
         };
         ship.render(&rig, dt, t, day, storm, w, h);
 
