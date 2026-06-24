@@ -80,6 +80,15 @@ while keeping the game's mechanics and feel.
   articulates**: the yard braces about the mast, the sail bellies into a parabolic
   draft, and luffs (a travelling flog) when starved of wind. Rebuilt as geometry,
   *not* the original's `deck*.png` + CSS `perspective()`/`rotateY` transforms.
+- **Camera ride + wind heel** — `main.rs`: the whole world (sky, sun, waves,
+  islands) is drawn through a `Camera2D` that *rides* the swell — it tilts the
+  horizon opposite the hull's lean (the sea stays level while the captain heels),
+  nods as the bow pitches and swings as it yaws — while the deck leans *with* the
+  lean, so the two read as one heeling ship. The lean is swell-roll plus a **wind
+  heel**: the sails' press leans her away from the wind, hardest on a beam reach
+  and nil before the wind or in irons (`HEEL_GAIN`, eased). Tunables (`CAM_*`,
+  `HEEL_GAIN`) sit by the loop; world-anchored fills are over-scanned so a rolled
+  view never reveals background in the corners.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)

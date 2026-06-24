@@ -265,23 +265,6 @@ impl ShipRenderer {
             sway(cx + x * persp, foot_y - y * persp)
         };
 
-        // --- Mast: a slightly tapered vertical post, two-tone for round form ----
-        {
-            let bw = w * 0.018; // base half-width
-            let tw = w * 0.011; // taper to the masthead
-            let b0 = project(-bw, 0.0, 0.0);
-            let b1 = project(bw, 0.0, 0.0);
-            let t1 = project(tw, mast_len, 0.0);
-            let t0 = project(-tw, mast_len, 0.0);
-            let mid0 = project(0.0, 0.0, 0.0);
-            let mid1 = project(0.0, mast_len, 0.0);
-            // Left half lit, right half shaded.
-            draw_triangle(b0, mid0, mid1, rgba(SPAR, lit, 1.0));
-            draw_triangle(b0, mid1, t0, rgba(SPAR, lit, 1.0));
-            draw_triangle(mid0, b1, t1, rgba(SPAR_DK, lit, 1.0));
-            draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
-        }
-
         // --- Sail trim --------------------------------------------------------
         let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
         let set = clamp(rig.set, 0.0, 1.0);
@@ -291,6 +274,9 @@ impl ShipRenderer {
         let brace = self.brace_angle;
         let (sb, cb) = brace.sin_cos();
 
+        // The cloth hangs a touch abaft the mast (away from the viewer) so the spar
+        // always parts it, never pokes through — on top of that sits the belly.
+        let stand_off = w * 0.022; // base depth of the sail behind the mast plane
         let depth = -fill * BELLY_DEPTH * sail_w; // belly draft (px); negative = away
         let phase = t * FLAP_HZ * TAU;
 
@@ -302,7 +288,7 @@ impl ShipRenderer {
             let belly = depth * (1.0 - (2.0 * u).powi(2)); // parabolic bulge
             let wave = (phase - u * FLAP_WAVES * TAU).sin();
             let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs());
-            belly + flog
+            -stand_off + belly + flog
         };
         // Rotate a panel edge (across x0, out-of-plane z0) about the mast (the brace).
         let braced = |u: f32| -> (f32, f32) {
@@ -311,20 +297,10 @@ impl ShipRenderer {
             (x0 * cb + z0 * sb, -x0 * sb + z0 * cb)
         };
 
-        // --- Yard: a spar along the braced across-axis at the sail's head -------
-        {
-            let (lx, lz) = braced(-0.54);
-            let (rx, rz) = braced(0.54);
-            let th = h * 0.012;
-            let a = project(lx, sail_top + th, lz);
-            let b = project(rx, sail_top + th, rz);
-            let c = project(rx, sail_top - th, rz);
-            let d = project(lx, sail_top - th, lz);
-            draw_triangle(a, b, c, rgba(SPAR, lit, 1.0));
-            draw_triangle(a, c, d, rgba(SPAR, lit, 1.0));
-        }
-
         // --- Sail panels, drawn back-to-front by depth -------------------------
+        // Drawn *before* the spars so the mast and yard (at the rig's z≈0 plane,
+        // nearest the viewer) always part the cloth instead of the cloth painting
+        // over them.
         let n = SAIL_PANELS;
         let half_strip = (PANEL_OVERLAP / n as f32) * 0.5; // overlapping half-width in u
         let mut order: Vec<usize> = (0..n).collect();
@@ -354,6 +330,38 @@ impl ShipRenderer {
             let col = rgba(SAIL_CLOTH, lit * shade, 1.0);
             draw_triangle(tl, tr, br, col);
             draw_triangle(tl, br, bl, col);
+        }
+
+        // --- Yard: a spar along the braced across-axis at the sail's head -------
+        // Drawn over the panels so it crosses ahead of the cloth it carries.
+        {
+            let (lx, lz) = braced(-0.54);
+            let (rx, rz) = braced(0.54);
+            let th = h * 0.012;
+            let a = project(lx, sail_top + th, lz);
+            let b = project(rx, sail_top + th, rz);
+            let c = project(rx, sail_top - th, rz);
+            let d = project(lx, sail_top - th, lz);
+            draw_triangle(a, b, c, rgba(SPAR, lit, 1.0));
+            draw_triangle(a, c, d, rgba(SPAR, lit, 1.0));
+        }
+
+        // --- Mast: a slightly tapered vertical post, two-tone for round form ----
+        // Drawn last, at z=0 (nearest), so it stands in front of the sail and yard.
+        {
+            let bw = w * 0.018; // base half-width
+            let tw = w * 0.011; // taper to the masthead
+            let b0 = project(-bw, 0.0, 0.0);
+            let b1 = project(bw, 0.0, 0.0);
+            let t1 = project(tw, mast_len, 0.0);
+            let t0 = project(-tw, mast_len, 0.0);
+            let mid0 = project(0.0, 0.0, 0.0);
+            let mid1 = project(0.0, mast_len, 0.0);
+            // Left half lit, right half shaded.
+            draw_triangle(b0, mid0, mid1, rgba(SPAR, lit, 1.0));
+            draw_triangle(b0, mid1, t0, rgba(SPAR, lit, 1.0));
+            draw_triangle(mid0, b1, t1, rgba(SPAR_DK, lit, 1.0));
+            draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
         }
     }
 }
