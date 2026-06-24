@@ -32,6 +32,7 @@ while keeping the game's mechanics and feel.
 | `client/OceanRenderer.scala` | `src/ocean_renderer.rs` | wave mesh + island depth-interleave |
 | `client/IslandFloorRenderer.scala` + billboards | `src/islands_render.rs` | low-poly islands + features |
 | `client/SailingView.scala` (sky/camera/loop) | `src/main.rs` | scene, input, loop (partial) |
+| `client/SailingView.scala` (deck/rig/sail) | `src/ship_render.rs` | foreground deck + articulating rig |
 | `jvm/.../static/{img,sounds}` | `assets/` | copied; SVGs not yet used |
 | `jvm/server/WebServer.scala` (Cask) | — | N/A for native, skip |
 
@@ -65,6 +66,13 @@ while keeping the game's mechanics and feel.
   trees, palms, bushes, rocks, ruins, and port structures (huts, watchtower, dock,
   flags) + shipwrecks, drawn as flat-shaded billboards standing on the mound surface.
 - **Collision / grounding** — `sailing::resolve_grounding` (graze-and-slide off shores).
+- **Ship foreground** — `ship_render.rs`: flat-shaded low-poly deck (planked floor,
+  bulwarks, spinning wheel) + mast/yard and a square sail built from overlapping
+  cloth panels. The whole assembly sways as a rigid body with the swell (heave/
+  pitch/roll/yaw, deck-share split, roll/yaw low-passed), and the **rig
+  articulates**: the yard braces about the mast, the sail bellies into a parabolic
+  draft, and luffs (a travelling flog) when starved of wind. Rebuilt as geometry,
+  *not* the original's `deck*.png` + CSS `perspective()`/`rotateY` transforms.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
@@ -85,11 +93,13 @@ while keeping the game's mechanics and feel.
 Roughly in suggested build order; each is a milestone.
 
 ### Rendering / feel
-- **Ship foreground** — render the player's deck + mast + rig + sail in the
-  foreground, swaying with heave/pitch/roll/yaw (`ship_motion` already computes these).
-  Original: `SailingView` deck/rig transforms + `deck*.png`, `ship*.svg`, `wheel.svg`.
 - **Wind & sailing** (`shared/Sailing.scala` `Wind`, sail modes, `Wind.factor`/`maxBoost`):
   wind direction, sail trim/bend, luffing, tacking — restores the core sailing skill.
+  Note: `ship_render.rs` already brace/belly/luffs the sail from a **render-only
+  placeholder wind** (steered with `[`/`]`, `wind_rel` into `RigInput`); this
+  milestone replaces that placeholder with the real `Wind` model and feeds the same
+  trim values, and folds sail canvas (`set`) into a proper sail-mode control rather
+  than the throttle stand-in.
 - **Weather system** (`shared/Weather.scala`): auto-drift calm→storm along adjacent
   states, driving `sea`/`gloom`; wire into the existing storm-blend palette.
 - **Automatic daytime cycle** (`shared/Daytime.scala`): advance dawn→day→dusk→night.
@@ -128,7 +138,7 @@ Roughly in suggested build order; each is a milestone.
 - Run: `cargo run --release` (the dense wave mesh wants release for smooth FPS;
   debug runs but is choppier).
 - Controls: **WASD/arrows** sail · **Q/E** sea-state · **G** storm · **T** daytime ·
-  **Esc** quit.
+  **[ ]** back/veer the (placeholder) wind to trim the sail · **Esc** quit.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).
 
