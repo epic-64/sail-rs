@@ -24,6 +24,7 @@ const GRAVITY: f32 = 1150.0; // px/s² pulling droplets back down
 const LIFE_MIN: f32 = 0.35;
 const LIFE_MAX: f32 = 0.85;
 const MAX_PARTICLES: usize = 700; // hard cap so a long slam can't run away
+const SPIN_MAX: f32 = 9.0; // rad/s a fleck can tumble (sign random)
 
 // Foam colour (lit by the day), faintly blue-white.
 const FOAM: [f32; 3] = [236.0, 244.0, 248.0];
@@ -34,6 +35,8 @@ struct Particle {
     life: f32,
     max_life: f32,
     size: f32,
+    rot: f32,  // current rotation (rad)
+    spin: f32, // rad/s the fleck tumbles
 }
 
 /// Per-frame drivers for the spray, all derived in the main loop.
@@ -97,6 +100,7 @@ impl Spray {
             p.vel.y += grav;
             p.pos.x += p.vel.x * dt;
             p.pos.y += p.vel.y * dt;
+            p.rot += p.spin * dt;
             p.life -= dt;
             p.life > 0.0
         });
@@ -159,7 +163,7 @@ impl Spray {
         // --- Draw --------------------------------------------------------------
         let lit = clamp(input.day_lit, 0.0, 1.0);
         for p in &self.parts {
-            // Fade in fast off the hull, then ease out over the droplet's life.
+            // Fade in fast off the hull, then ease out over the fleck's life.
             let f = p.life / p.max_life;
             let alpha = (f * 1.3).min(0.85) * 0.9;
             let col = Color::new(
@@ -168,8 +172,19 @@ impl Spray {
                 FOAM[2] / 255.0 * lit,
                 alpha,
             );
-            // Droplets shrink a touch as they thin out.
-            draw_circle(p.pos.x, p.pos.y, p.size * (0.5 + 0.5 * f), col);
+            // A small tumbling square, shrinking a touch as it thins out. Built as
+            // two triangles from the rotated corners so it spins as it flies.
+            let s = p.size * (0.5 + 0.5 * f);
+            let (sin, cos) = p.rot.sin_cos();
+            let corner = |lx: f32, ly: f32| {
+                vec2(p.pos.x + lx * cos - ly * sin, p.pos.y + lx * sin + ly * cos)
+            };
+            let a = corner(-s, -s);
+            let b = corner(s, -s);
+            let c = corner(s, s);
+            let d = corner(-s, s);
+            draw_triangle(a, b, c, col);
+            draw_triangle(a, c, d, col);
         }
     }
 
@@ -196,12 +211,16 @@ impl Spray {
             return;
         }
         let max_life = self.range(LIFE_MIN, LIFE_MAX);
+        let rot = self.range(0.0, std::f32::consts::TAU);
+        let spin = self.range(-SPIN_MAX, SPIN_MAX);
         self.parts.push(Particle {
             pos,
             vel,
             life: max_life,
             max_life,
             size,
+            rot,
+            spin,
         });
     }
 }
