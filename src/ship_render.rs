@@ -57,6 +57,10 @@ const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
 const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
 const WHEEL_C: [f32; 3] = [134.0, 98.0, 58.0];
 const WHEEL_DK: [f32; 3] = [96.0, 68.0, 40.0];
+// Deck cargo: lashed crates. Top catches the sky, the side faces fall to shade.
+const CRATE_TOP: [f32; 3] = [182.0, 148.0, 96.0];
+const CRATE_MID: [f32; 3] = [150.0, 116.0, 70.0];
+const CRATE_DK: [f32; 3] = [108.0, 80.0, 46.0];
 
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
 /// bearing relative to the bow (0 = wind from dead astern, ±π = dead ahead).
@@ -153,13 +157,13 @@ impl ShipRenderer {
         // and settles the helm, so the deck rocks fore-and-aft through the swell
         // rather than just sliding up and down.
         let nod = pitch_ang * h * 0.72;
-        let far_y = h * 0.70 - nod;
-        let near_y = h * 1.08 + nod * 0.3; // off the bottom edge so the deck fills the foreground
-        let far_hw = w * 0.16;
-        let near_hw = w * 0.62;
+        let far_y = h * 0.76 - nod; // dropped so the bow covers less of the horizon
+        let near_y = h * 1.22 + nod * 0.3; // helm pulled well back, off the bottom edge
+        let far_hw = w * 0.12; // narrow bow + wide helm → stronger foreshortening
+        let near_hw = w * 0.72;
         // The stem: the bow pinches to a point forward of (above) the far edge so
         // the hull reads as a pointed prow, not a raft's flat front.
-        let stem_y = far_y - h * 0.13;
+        let stem_y = far_y - h * 0.09;
 
         let quad = |a: Vec2, b: Vec2, c: Vec2, d: Vec2, col: Color| {
             draw_triangle(a, b, c, col);
@@ -261,6 +265,56 @@ impl ShipRenderer {
             }
         }
 
+        // --- Deck cargo: a few lashed crates riding the deck -------------------
+        // Positioned in deck coords (u across ±1, v fore→aft 0..1), drawn far →
+        // near so nearer crates overlap those behind. Each is a flat-shaded box:
+        // the two side faces and near face in shade, the lit top catching the sky.
+        // The far face is hidden, so it is never drawn.
+        let deck_pt = |u: f32, v: f32| -> (f32, f32) {
+            let hw = far_hw + (near_hw - far_hw) * v;
+            (cx + u * hw, far_y + (near_y - far_y) * v)
+        };
+        // (centre u, centre v, half-width u, half-depth v, height px, base lift px)
+        let crates: [(f32, f32, f32, f32, f32, f32); 5] = [
+            (-0.40, 0.38, 0.16, 0.060, h * 0.085, 0.0),
+            (-0.38, 0.38, 0.13, 0.050, h * 0.070, h * 0.085), // stacked on the first
+            (0.46, 0.44, 0.17, 0.070, h * 0.100, 0.0),
+            (0.22, 0.27, 0.11, 0.045, h * 0.065, 0.0),
+            (-0.58, 0.50, 0.18, 0.075, h * 0.110, 0.0),
+        ];
+        let mut idx: Vec<usize> = (0..crates.len()).collect();
+        idx.sort_by(|&a, &b| {
+            // Far (small v) first; a stacked crate (greater lift) over its base.
+            (crates[a].1, crates[a].5)
+                .partial_cmp(&(crates[b].1, crates[b].5))
+                .unwrap()
+        });
+        for &k in &idx {
+            let (cu, cv, hu, hv, ph, lift) = crates[k];
+            let (flx, fly) = deck_pt(cu - hu, cv - hv); // far-left footprint
+            let (frx, fry) = deck_pt(cu + hu, cv - hv); // far-right
+            let (nrx, nry) = deck_pt(cu + hu, cv + hv); // near-right
+            let (nlx, nly) = deck_pt(cu - hu, cv + hv); // near-left
+            let base = |x: f32, y: f32| sway(x, y - lift);
+            let top = |x: f32, y: f32| sway(x, y - lift - ph);
+            let (bfl, bfr, bnr, bnl) = (base(flx, fly), base(frx, fry), base(nrx, nry), base(nlx, nly));
+            let (tfl, tfr, tnr, tnl) = (top(flx, fly), top(frx, fry), top(nrx, nry), top(nlx, nly));
+            quad(bnl, bfl, tfl, tnl, rgba(CRATE_DK, lit, 1.0)); // left side
+            quad(bfr, bnr, tnr, tfr, rgba(CRATE_DK, lit, 1.0)); // right side
+            quad(bnl, bnr, tnr, tnl, rgba(CRATE_MID, lit, 1.0)); // near face
+            quad(tfl, tfr, tnr, tnl, rgba(CRATE_TOP, lit, 1.0)); // lit top
+            // A batten across the near face so the box reads as planked.
+            let nf = |f: f32| {
+                (
+                    sway(nlx, nly - lift - ph * f),
+                    sway(nrx, nry - lift - ph * f),
+                )
+            };
+            let (lo_l, lo_r) = nf(0.42);
+            let (hi_l, hi_r) = nf(0.52);
+            quad(lo_l, lo_r, hi_r, hi_l, rgba(CRATE_DK, lit, 1.0));
+        }
+
         self.draw_wheel(sway, lit, h, w);
     }
 
@@ -268,8 +322,8 @@ impl ShipRenderer {
     /// hub, standing proud of the deck at the bottom-centre.
     fn draw_wheel(&self, sway: &impl Fn(f32, f32) -> Vec2, lit: f32, h: f32, w: f32) {
         let cx = w * 0.5;
-        let cy = h * 0.92;
-        let r = h * 0.085;
+        let cy = h * 1.0; // pulled back with the helm, half off the bottom edge
+        let r = h * 0.095;
         let a = self.wheel_angle;
 
         // Rim: a ring approximated by a fan of short trapezoids.
@@ -322,7 +376,7 @@ impl ShipRenderer {
         w: f32,
     ) {
         let cx = w * 0.5;
-        let foot_y = h * 0.78; // mast steps into the deck here
+        let foot_y = h * 0.82; // mast steps into the deck here (lowered with the deck)
         let mast_len = h * 0.82; // tall enough to tower off the top of the screen
         let yard_y = mast_len * 0.90; // yard crosses near the masthead
         let sail_w = w * 0.38;
