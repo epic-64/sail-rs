@@ -30,7 +30,7 @@ pub struct Mission {
 }
 
 /// How many contracts a port offers at once (`Missions.perPort`).
-pub const PER_PORT: i32 = 3;
+pub const PER_PORT: i32 = 5;
 
 /// The contracts on the board at the captain's current port, with any already
 /// accepted removed. Empty while at sea.

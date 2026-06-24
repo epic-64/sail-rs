@@ -737,12 +737,10 @@ async fn main() {
             draw_text(&salvage_msg, tx, ty, fs as f32, Color::new(1.0, 0.9, 0.5, p));
         }
 
-        // The destinations marked on the charts: every accepted contract, plus the
-        // race mark while one is booked.
-        let mut chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
-        if let Some(r) = gs.race {
-            chart_marks.push(r.target_id);
-        }
+        // The destinations marked on the charts: every accepted contract (yellow
+        // "M"), and separately the booked race's mark (red "R").
+        let chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
+        let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
 
         // Always-on corner chart: the local cluster, top-right.
         let map_size = (h * 0.24).clamp(140.0, 200.0);
@@ -754,6 +752,7 @@ async fn main() {
             map_rect,
             &minimap_pal,
             &chart_marks,
+            &race_marks,
             None,
             &traders.positions(),
         );
@@ -809,6 +808,7 @@ async fn main() {
                 day,
                 weather.weather.label(),
                 &chart_marks,
+                &race_marks,
                 log_spread,
                 dt,
                 w,

@@ -539,13 +539,16 @@ impl GameState {
         self.race = None;
     }
 
-    /// Withdraw from a booked race at port, forfeiting the stake. Refused at sea or
-    /// with no race booked. (`Race.withdraw`.)
+    /// Abandon a booked race at port before it has started — the stake is handed
+    /// back in full, so calling it off costs the captain nothing. (Once the rival is
+    /// on the water the race is settled by win/lose instead.) Refused at sea or with
+    /// no race booked. (`Race.withdraw`.)
     pub fn withdraw_race(&mut self, world: &World) -> Result<(), TradeError> {
         self.docked_island(world).ok_or(TradeError::NotDocked)?;
-        if self.race.is_none() {
+        let Some(r) = self.race else {
             return Err(TradeError::NoRace);
-        }
+        };
+        self.gold += r.stake;
         self.race = None;
         Ok(())
     }

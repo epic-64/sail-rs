@@ -151,15 +151,19 @@ while keeping the game's mechanics and feel.
   loop in `main.rs`: a faithful `shared.Race` port. A harbour offers a deterministic
   card of up to four rival ports (always the nearest and furthest, the rest filled
   from between) with a distance-fixed stake (`goldPerKm` + a quadratic
-  `bonusPerKmSq`); the Racing tab books one (charging the stake), shows the armed
-  race, or withdraws it. On setting sail the rival draws up alongside; heave to
+  `bonusPerKmSq`). The Racing tab uses the **same select-by-Enter flow as the
+  contracts board**: none is chosen at first, each rival port is a row (highlighting
+  one previews its leg on the chart), and Enter books it — charging the stake — then
+  shows the armed race. Until the off the captain may **abandon it for a full
+  refund** (no consequence). On setting sail the rival draws up alongside; heave to
   (sails struck, dead slow) within range and raise sail to fire the gun — only then
   does the rival sail, on a pristine copy of the player's own rig (its sail level,
   empty hold), beating for the mark but never into the wind's eye (`rivalHelm`/
   `layHeading`). First to within `finishMargin` of the mark wins (stake back
   doubled) or loses (stake forfeit), with a win/loss sting. A standings strip shows
   the gap; the rival is drawn as a low-poly sloop billboard riding the swell, and
-  the mark is ringed on every chart.
+  the mark is ringed in **red with an "R"** on every chart (contracts ring yellow
+  with an "M").
 - **Flotsam salvage** — `flotsam.rs` + `flotsam_render.rs` + the salvage sweep in
   `main.rs`: a faithful `shared.Flotsam` port. Crates, barrels and the rare
   strongbox drift on the swell (weighted `FlotsamKind::pick`, same draw order),
