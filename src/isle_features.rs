@@ -21,10 +21,13 @@ const GOLDEN: i64 = 0x9e3779b97f4a7c15u64 as i64;
 pub enum FeatureKind {
     Tree,
     Palm,
+    Pine,
+    Fern,
     Bush,
     Rock,
     Ruin,
     Hut,
+    Cottage,
     Tower,
     Dock,
     Flag,
@@ -65,10 +68,12 @@ pub fn generate(seed: i64, isle: &Island) -> Vec<IsleFeature> {
 fn green(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(7, 12);
-    let mut v = scatter(rng, n, r * 0.78, &[Tree, Palm, Tree], 6.0, 11.0, 0.8, 1.3);
-    let n = rng.int_between(4, 7);
-    v.extend(scatter(rng, n, r * 0.82, &[Bush], 2.0, 3.5, 0.8, 1.4));
+    let n = rng.int_between(12, 20);
+    let mut v = scatter(rng, n, r * 0.82, &[Tree, Palm, Tree, Pine], 6.0, 11.0, 0.8, 1.3);
+    let n = rng.int_between(8, 14);
+    v.extend(scatter(rng, n, r * 0.86, &[Bush, Fern, Bush], 2.0, 3.5, 0.8, 1.4));
+    let n = rng.int_between(0, 4);
+    v.extend(scatter(rng, n, r * 0.78, &[Rock], 3.0, 6.0, 0.7, 1.1));
     let n = rng.int_between(0, 2);
     v.extend(scatter(rng, n, r * 0.6, &[Ruin], 4.0, 7.0, 0.8, 1.2));
     maybe_shore(rng, isle, Shipwreck, 0.25, 3.0, 5.0, &mut v);
@@ -78,11 +83,11 @@ fn green(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 fn jungle(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(10, 16);
-    let mut v = scatter(rng, n, r * 0.82, &[Tree, Palm, Tree, Bush], 7.0, 12.0, 0.8, 1.3);
-    let n = rng.int_between(6, 10);
-    v.extend(scatter(rng, n, r * 0.85, &[Bush], 2.0, 4.0, 0.9, 1.4));
-    let n = rng.int_between(1, 3);
+    let n = rng.int_between(18, 28);
+    let mut v = scatter(rng, n, r * 0.86, &[Tree, Palm, Tree, Bush, Pine], 7.0, 12.0, 0.8, 1.3);
+    let n = rng.int_between(12, 18);
+    v.extend(scatter(rng, n, r * 0.88, &[Bush, Fern, Fern], 2.0, 4.0, 0.9, 1.4));
+    let n = rng.int_between(1, 4);
     v.extend(scatter(rng, n, r * 0.6, &[Ruin], 4.0, 7.0, 0.9, 1.3));
     maybe_shore(rng, isle, Shipwreck, 0.35, 3.0, 5.0, &mut v);
     v
@@ -91,10 +96,10 @@ fn jungle(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 fn rocky(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(4, 8);
-    let mut v = scatter(rng, n, r * 0.72, &[Rock], 4.0, 9.0, 0.7, 1.3);
-    let n = rng.int_between(0, 3);
-    v.extend(scatter(rng, n, r * 0.7, &[Tree], 5.0, 8.0, 0.6, 0.9));
+    let n = rng.int_between(8, 14);
+    let mut v = scatter(rng, n, r * 0.78, &[Rock, Rock, Pine], 4.0, 9.0, 0.7, 1.3);
+    let n = rng.int_between(2, 6);
+    v.extend(scatter(rng, n, r * 0.74, &[Pine, Tree, Bush], 5.0, 8.0, 0.6, 0.9));
     maybe_shore(rng, isle, Shipwreck, 0.3, 3.0, 5.0, &mut v);
     v
 }
@@ -102,10 +107,10 @@ fn rocky(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 fn volcanic(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(3, 7);
-    let mut v = scatter(rng, n, r * 0.7, &[Rock], 4.0, 9.0, 0.7, 1.3);
-    let n = rng.int_between(0, 2);
-    v.extend(scatter(rng, n, r * 0.72, &[Tree], 4.0, 7.0, 0.5, 0.8));
+    let n = rng.int_between(6, 12);
+    let mut v = scatter(rng, n, r * 0.74, &[Rock, Rock, Pine], 4.0, 9.0, 0.7, 1.3);
+    let n = rng.int_between(1, 4);
+    v.extend(scatter(rng, n, r * 0.74, &[Pine, Bush], 4.0, 7.0, 0.5, 0.8));
     v
 }
 
@@ -114,8 +119,8 @@ fn volcanic(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 fn port_structures(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(3, 6);
-    let mut v = scatter(rng, n, r * 0.5, &[Hut, Hut], 4.0, 6.0, 0.9, 1.2);
+    let n = rng.int_between(5, 9);
+    let mut v = scatter(rng, n, r * 0.55, &[Hut, Hut, Cottage], 4.0, 6.0, 0.9, 1.2);
     // A watchtower set back from the water.
     let ang = rng.between(0.0, TAU);
     let rad = r as f64 * 0.42;
