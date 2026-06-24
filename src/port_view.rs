@@ -433,7 +433,7 @@ impl PortScreen {
             }
         }
         let route = self.route_line(gs, world);
-        minimap::render(world, kin, wind, chart, &cpal, &marks, route);
+        minimap::render(world, kin, wind, chart, &cpal, &marks, route, &[]);
         // Name the local waters under the chart.
         let waters = &world.cluster_at(kin.pos).name;
         let cd = measure_text(waters, None, 18, 1.0);

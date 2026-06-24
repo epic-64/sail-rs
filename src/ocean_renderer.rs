@@ -262,6 +262,11 @@ impl OceanRenderer {
         // march at its own depth and nearer water paints over it. Dimmed by the same
         // `rival_light` (the scene light).
         flotsam: &[(Vec2, crate::flotsam::FlotsamKind)],
+        // The local cluster's wandering traders, sorted *descending* by distance
+        // (farthest first) like everything else, so each merchant slots into the
+        // depth march and nearer crests/islands occlude it. Drawn like the rival but
+        // flying a green pennant.
+        traders: &[Kinematics],
     ) {
         // Ease the live palette toward the clock's target with a slow cross-fade,
         // then blend toward the cold storm palette by the gale's fury.
@@ -359,12 +364,16 @@ impl OceanRenderer {
                 if d >= f {
                     crate::rival_render::draw(
                         &rk, kin, t, sea, heave, rival_light, horizon, px_per_rad,
-                        half_fov_h_view, w,
+                        half_fov_h_view, w, crate::rival_render::RIVAL_PENNANT,
                     );
                     rival_done = true;
                 }
             }
         };
+        // Traders march in alongside the islands and salvage: each is drawn once the
+        // band march descends past its distance (farthest first), so nearer bands
+        // then paint over it. `trd_idx` walks the farthest-first list.
+        let mut trd_idx = 0;
 
         // Even screen-row spacing: linear in the depression angle of the flat sea.
         let th_far = (BASE_EYE / self.f_far).atan();
@@ -419,9 +428,17 @@ impl OceanRenderer {
                 paint_island(islands[isle_idx].0, islands[isle_idx].1, kin, &view);
                 isle_idx += 1;
             }
-            // The rival and any salvage sit among the islands at their own depths,
-            // then the band paints over them just as it does the islands' bases.
+            // The rival, the traders and any salvage sit among the islands at their
+            // own depths, then the band paints over them just as it does the islands'
+            // bases.
             draw_rival(f);
+            while trd_idx < traders.len() && kin.pos.distance_to(traders[trd_idx].pos) >= f {
+                crate::rival_render::draw(
+                    &traders[trd_idx], kin, t, sea, heave, rival_light, horizon, px_per_rad,
+                    half_fov_h_view, w, crate::rival_render::TRADER_PENNANT,
+                );
+                trd_idx += 1;
+            }
             while flot_idx < flotsam.len() && kin.pos.distance_to(flotsam[flot_idx].0) >= f {
                 crate::flotsam_render::draw(
                     flotsam[flot_idx].0, flotsam[flot_idx].1, kin, t, sea, heave, rival_light,
@@ -463,6 +480,14 @@ impl OceanRenderer {
         }
         // A rival nearer than the closest band stands in front of all the water.
         draw_rival(0.0);
+        // Any traders nearer than the closest band stand in front of all the water.
+        while trd_idx < traders.len() {
+            crate::rival_render::draw(
+                &traders[trd_idx], kin, t, sea, heave, rival_light, horizon, px_per_rad,
+                half_fov_h_view, w, crate::rival_render::TRADER_PENNANT,
+            );
+            trd_idx += 1;
+        }
         // Any salvage nearer than the closest band floats in front of all the water.
         while flot_idx < flotsam.len() {
             crate::flotsam_render::draw(

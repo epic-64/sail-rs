@@ -33,6 +33,7 @@ pub struct MinimapPalette {
     pub land: Color,
     pub ship: Color,
     pub mission_mark: Color,
+    pub trader: Color,
 }
 
 impl MinimapPalette {
@@ -47,6 +48,7 @@ impl MinimapPalette {
             land: rgba(176, 214, 210, 0.8),
             ship: rgba(255, 255, 255, 0.95),
             mission_mark: rgba(255, 210, 90, 0.95),
+            trader: rgba(120, 220, 188, 0.95),
         }
     }
 
@@ -62,6 +64,7 @@ impl MinimapPalette {
             land: rgba(42, 32, 24, 0.35),
             ship: rgba(79, 47, 23, 1.0),
             mission_mark: rgba(200, 150, 47, 1.0),
+            trader: rgba(54, 96, 78, 0.9),
         }
     }
 }
@@ -136,6 +139,10 @@ pub fn render(
     pal: &MinimapPalette,
     mission_targets: &[i32],
     route: Option<(Vec2, Vec2)>,
+    // World positions of the local cluster's wandering traders, drawn as small
+    // marks so the captain can spot the traffic crossing the bay. Empty on the
+    // charts that don't track them (the log, the port board).
+    traders: &[Vec2],
 ) {
     // Panel + frame. (Parchment's panel is opaque beige; the HUD's is dark glass.)
     if pal.panel.a > 0.0 {
@@ -229,6 +236,16 @@ pub fn render(
             let fs = (13.0 * s).max(11.0);
             let dims = measure_text("M", None, fs as u16, 1.0);
             draw_text("M", x - dims.width / 2.0, y - rr - 3.0 * s, fs, pal.mission_mark);
+        }
+    }
+
+    // The local traders: a small mark each at their world position, drawn under
+    // the player's arrow. Only those whose mark falls inside the chart are shown.
+    for &tp in traders {
+        let x = sx(tp);
+        let y = sy(tp);
+        if rect.contains(vec2(x, y)) {
+            draw_circle(x, y, 2.2 * s, pal.trader);
         }
     }
 

@@ -26,6 +26,7 @@ mod rng;
 mod sailing;
 mod ship_render;
 mod sound;
+mod trader;
 mod weather;
 mod world;
 
@@ -247,6 +248,13 @@ async fn main() {
     let mut race_ready = false;
     let mut race_running = false;
 
+    // The local cluster's wandering traders: a small fleet of merchant craft that
+    // ply fixed circuits of nearby ports, tacking up to those that lie upwind and
+    // lying to for a minute or so on arrival before the next leg. Only the fleet of
+    // the cluster the ship is in is ever simulated; it re-spawns as the captain
+    // crosses to new waters (see `trader.rs`).
+    let mut traders = trader::TraderFleet::new(&world, kin.pos);
+
     // Floating salvage drifting on the swell: crates, barrels and the rare
     // strongbox the captain scoops by sailing over them. Per-frame and seeded off
     // the world, topped up to keep fresh salvage ahead of the bow. A pickup flashes
@@ -284,6 +292,10 @@ async fn main() {
         weather.update(dt);
         sea = weather.sea;
         storm = weather.fury();
+
+        // Sail the local traders along their circuits (whether the player is at sea
+        // or docked), re-spawning the fleet if the ship has crossed into new waters.
+        traders.update(&world, kin.pos, wind, dt);
 
         // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
         // the moving sun/moon and light, the blended sea palette and sky gradient,
@@ -601,6 +613,16 @@ async fn main() {
                 .unwrap()
         });
 
+        // The local traders, sorted farthest-first so the wave march can slot each
+        // into its own depth (nearer crests and islands then paint over it).
+        let mut trader_kins = traders.kinematics();
+        trader_kins.sort_by(|a, b| {
+            kin.pos
+                .distance_to(b.pos)
+                .partial_cmp(&kin.pos.distance_to(a.pos))
+                .unwrap()
+        });
+
         // --- Waves -------------------------------------------------------------
         renderer.render(
             &kin,
@@ -621,6 +643,7 @@ async fn main() {
             rival,
             day_lit,
             &flot_vis,
+            &trader_kins,
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
@@ -704,7 +727,16 @@ async fn main() {
         // Always-on corner chart: the local cluster, top-right.
         let map_size = (h * 0.24).clamp(140.0, 200.0);
         let map_rect = Rect::new(w - map_size - 16.0, 16.0, map_size, map_size);
-        minimap::render(&world, &kin, wind, map_rect, &minimap_pal, &chart_marks, None);
+        minimap::render(
+            &world,
+            &kin,
+            wind,
+            map_rect,
+            &minimap_pal,
+            &chart_marks,
+            None,
+            &traders.positions(),
+        );
 
         // Race standings strip: the mark and how far the player and rival each have
         // still to sail (or the instructions to get the race under way), shown top-
