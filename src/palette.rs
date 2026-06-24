@@ -154,6 +154,31 @@ pub fn daytime_at(tod: f32) -> Daytime {
     RING[s % 4]
 }
 
+/// Smoothstep: 0 below `e0`, 1 above `e1`, eased in between.
+#[inline]
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// How fully night has fallen, from the sun's altitude-sine (`sun_alt` per
+/// `celestial::sky_state`: >0 up, <0 below the horizon): 0 in daylight, easing to 1
+/// once the sun is well below the horizon. The sea palette, the painted sky
+/// (`main::draw_sky`) and the sky the water reflects (`main`) all key off this, so
+/// they drop to the dark-blue/cyan night palette together — no warm tint lingering on
+/// the water once the sky has gone dark. The window holds the full sunset colour
+/// through the moment the sun touches the horizon, then fades to full night over the
+/// following dusk (~25 s at the day's pace) — long enough to enjoy the red glow off
+/// the water without it overstaying into the night.
+pub fn night_factor(sun_alt: f32) -> f32 {
+    1.0 - smoothstep(-0.32, -0.02, sun_alt)
+}
+
+/// The sun's altitude-sine at clock `tod` (0 = midnight, ¼ sunrise, ½ noon, ¾ sunset).
+fn sun_alt_at(tod: f32) -> f32 {
+    ((tod.rem_euclid(1.0) - 0.25) * std::f32::consts::TAU).sin()
+}
+
 /// The sea palette at clock `tod`, blended across the day's keyframes.
 pub fn sea_palette(tod: f32) -> Palette {
     let (a, b, f) = ring_blend(tod);
@@ -162,6 +187,16 @@ pub fn sea_palette(tod: f32) -> Palette {
     let mut out = [0.0; PALETTE_LEN];
     for i in 0..PALETTE_LEN {
         out[i] = pa[i] + (pb[i] - pa[i]) * f;
+    }
+    // Once the sun is below the horizon, ease the whole palette quickly to night so
+    // the fiery dusk water doesn't stay red long after sunset (and so dawn's warmth
+    // holds off until the sun is about to rise), keeping sea and sky in step.
+    let night_pull = night_factor(sun_alt_at(tod));
+    if night_pull > 0.0 {
+        let night = palette_for(Daytime::Night);
+        for i in 0..PALETTE_LEN {
+            out[i] += (night[i] - out[i]) * night_pull;
+        }
     }
     out
 }

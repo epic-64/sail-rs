@@ -72,32 +72,137 @@ fn rgb(c: (f32, f32, f32)) -> Color {
     Color::new(c.0 / 255.0, c.1 / 255.0, c.2 / 255.0, 1.0)
 }
 
+/// Smoothstep: 0 below `e0`, 1 above `e1`, eased in between.
+#[inline]
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
 /// toward the storm overcast by `storm`. `sky` is the clock's fair-weather gradient.
-/// Drawn as horizontal strips since macroquad has no built-in gradient.
-fn draw_sky(sky: [(f32, f32, f32); 3], storm: f32, w: f32, horizon: f32, m: f32) {
-    let top = lerp3(sky[0], palette::STORM_SKY[0], storm);
-    let mid = lerp3(sky[1], palette::STORM_SKY[1], storm);
-    let hor = lerp3(sky[2], palette::STORM_SKY[2], storm);
+///
+/// Around dawn and dusk the gradient is no longer uniform across the width: the warm
+/// "lit" sky is kept only toward the sun's bearing, fading sideways to a cool, dark
+/// twilight (the night gradient) on the far side. So at sunset the red glow sits on
+/// the sun's side and the opposite sky goes dark first; at sunrise the sun's side
+/// brightens while the rest is still night. The effect is gated to the low-sun
+/// window (`tw`) and weighted toward the horizon, so midday and deep night stay
+/// uniform. Built as one mesh, since macroquad has no built-in gradient.
+#[allow(clippy::too_many_arguments)]
+fn draw_sky(
+    sky: [(f32, f32, f32); 3],
+    storm: f32,
+    w: f32,
+    horizon: f32,
+    m: f32,
+    sun_az: f32,
+    sun_alt: f32,
+    heading: f32,
+    half_fov: f32,
+) {
+    // The two gradients blended between horizontally: the clock's "lit" sky and the
+    // cool night sky stood in for the un-sunlit side. Both eased toward the overcast.
+    let storm_blend = |g: [(f32, f32, f32); 3]| {
+        [
+            lerp3(g[0], palette::STORM_SKY[0], storm),
+            lerp3(g[1], palette::STORM_SKY[1], storm),
+            lerp3(g[2], palette::STORM_SKY[2], storm),
+        ]
+    };
+    let lit = storm_blend(sky);
+    let dark = storm_blend(palette::fair_sky(palette::Daytime::Night));
 
-    // Over-scan base: paint the top sky colour across the whole region above the
-    // horizon (and out past every edge) so the camera ride's tilt/translate never
-    // reveals the cleared background above or beside the gradient.
-    draw_rectangle(-m, -m, w + 2.0 * m, horizon + m, rgb(top));
-
-    let strips = 96;
-    let strip_h = horizon / strips as f32;
-    for i in 0..strips {
-        let t = i as f32 / (strips - 1) as f32;
-        let c = if t < 0.5 {
-            lerp3(top, mid, t * 2.0)
+    // Vertical three-stop sample (top → mid → horizon) at `t` in [0, 1].
+    let grad = |g: &[(f32, f32, f32); 3], t: f32| {
+        if t < 0.5 {
+            lerp3(g[0], g[1], t * 2.0)
         } else {
-            lerp3(mid, hor, (t - 0.5) * 2.0)
-        };
-        let y = i as f32 * strip_h;
-        // +1px overlap so no seams show between strips; over-scanned sideways.
-        draw_rectangle(-m, y, w + 2.0 * m, strip_h + 1.0, rgb(c));
+            lerp3(g[1], g[2], (t - 0.5) * 2.0)
+        }
+    };
+
+    // The whole sky darkens to the night gradient as the sun sinks past the horizon,
+    // so no warm tint lingers overhead or to the sides once it's down. Only a low
+    // band toward the sun's bearing is spared, keeping the directional afterglow —
+    // and only briefly, as `glow_window` shuts once the sun is well below.
+    let base_night = palette::night_factor(sun_alt); // 0 by day, 1 once set
+    let glow_window = smoothstep(-0.42, -0.05, sun_alt); // warm patch only near sunset
+    // The sun's bearing across the view (relative to the heading).
+    let rel_sun = wrap_angle(sun_az - heading);
+    // Angular half-width of the warm glow around the sun's bearing.
+    const GLOW_WIDTH: f32 = 0.85;
+
+    // Backstop fill (covered by the mesh) so a hard camera tilt never bares the
+    // cleared background past the gradient's edges.
+    let back = lerp3(grad(&lit, 0.0), grad(&dark, 0.0), base_night);
+    draw_rectangle(-m, -m, w + 2.0 * m, horizon + m, rgb(back));
+
+    if base_night <= 0.001 || glow_window <= 0.001 {
+        // No directional warmth (full day, or fully dark night): a plain vertical
+        // gradient — eased uniformly toward night by `base_night` — is enough.
+        let strips = 96;
+        let strip_h = horizon / strips as f32;
+        for i in 0..strips {
+            let t = i as f32 / (strips - 1) as f32;
+            let y = i as f32 * strip_h;
+            let c = lerp3(grad(&lit, t), grad(&dark, t), base_night);
+            draw_rectangle(-m, y, w + 2.0 * m, strip_h + 1.0, rgb(c));
+        }
+        return;
     }
+
+    // Directional gradient as a grid mesh: rows give the vertical gradient, columns
+    // the sideways lit→dark blend by angle from the sun. Kept small enough that the
+    // index count stays under macroquad's per-drawcall limit (max_indices = 5000;
+    // 24×32×6 = 4608); the per-vertex colours interpolate smoothly across each quad.
+    let cols = 24usize;
+    let rows = 32usize;
+    let x0 = -m;
+    let x1 = w + m;
+    let y0 = -m;
+    let y1 = horizon;
+    let mut vertices: Vec<Vertex> = Vec::with_capacity((cols + 1) * (rows + 1));
+    for r in 0..=rows {
+        let fy = r as f32 / rows as f32;
+        let y = y0 + (y1 - y0) * fy;
+        // Vertical gradient parameter: clamp the over-scan above y=0 to the top stop.
+        let t = clamp(y / horizon, 0.0, 1.0);
+        let lit_c = grad(&lit, t);
+        let dark_c = grad(&dark, t);
+        // The afterglow is confined to the lower sky (overhead darkens like the rest).
+        let horizon_band = smoothstep(0.45, 0.95, t);
+        for c in 0..=cols {
+            let fx = c as f32 / cols as f32;
+            let x = x0 + (x1 - x0) * fx;
+            // This column's bearing relative to the heading, and its angle from the
+            // sun; the warm glow falls off as a soft bell around the sun's bearing.
+            let rel_col = (x - w * 0.5) / (w * 0.5) * half_fov;
+            let sep = wrap_angle(rel_col - rel_sun);
+            let glow = (-(sep / GLOW_WIDTH).powi(2)).exp();
+            // How much of the warm sky to spare from the night darkening, here.
+            let warm_keep = glow * horizon_band * glow_window;
+            let night_amt = clamp(base_night * (1.0 - warm_keep), 0.0, 1.0);
+            let col = lerp3(lit_c, dark_c, night_amt);
+            vertices.push(Vertex::new(x, y, 0.0, fx, fy, rgb(col)));
+        }
+    }
+    let stride = (cols + 1) as u16;
+    let mut indices: Vec<u16> = Vec::with_capacity(cols * rows * 6);
+    for r in 0..rows as u16 {
+        for c in 0..cols as u16 {
+            let i0 = r * stride + c;
+            let i1 = i0 + 1;
+            let i2 = i0 + stride;
+            let i3 = i2 + 1;
+            indices.extend_from_slice(&[i0, i1, i2, i1, i3, i2]);
+        }
+    }
+    draw_mesh(&Mesh {
+        vertices,
+        indices,
+        texture: None,
+    });
 }
 
 /// Discrete sail settings: W raises a notch, S lowers one. Each maps to a sail
@@ -532,9 +637,12 @@ async fn main() {
             if is_key_pressed(KeyCode::E) {
                 weather.nudge_stormier();
             }
-            // Skip the clock forward ~3 hours, to jump ahead through the cycle.
+            // Nudge the clock forward (T) / back (Y) ~30 min, to ease through the cycle.
             if is_key_pressed(KeyCode::T) {
-                tod = (tod + 0.12).rem_euclid(1.0);
+                tod = (tod + 0.02).rem_euclid(1.0);
+            }
+            if is_key_pressed(KeyCode::Y) {
+                tod = (tod - 0.02).rem_euclid(1.0);
             }
             if is_key_pressed(KeyCode::L) {
                 log_open = !log_open;
@@ -656,9 +764,34 @@ async fn main() {
         set_camera(&world_cam);
         clear_background(BLACK);
 
-        draw_sky(sky_grad, storm, w, horizon, overscan);
+        // Look astern: hold C to spin the *view* 180° (the physics/helm are untouched)
+        // so the captain can glance back over the wake. Only the projected world turns;
+        // a view-only copy of the kinematics carries the flipped heading into every
+        // bearing-relative draw below, and the forward deck/spray are hidden while it's
+        // held. Suppressed when a board or the log owns the screen.
+        let look_back =
+            is_key_down(KeyCode::C) && !log_open && !harbor.is_open() && !pause.open;
+        let view_heading = if look_back {
+            wrap_angle(kin.heading_rad + std::f32::consts::PI)
+        } else {
+            kin.heading_rad
+        };
+        let mut view_kin = kin;
+        view_kin.heading_rad = view_heading;
+
+        draw_sky(
+            sky_grad,
+            storm,
+            w,
+            horizon,
+            overscan,
+            sky.sun_az,
+            sky.sun_alt,
+            view_heading,
+            half_fov_h_view,
+        );
         // Stars, then the moon and sun arcing over on the clock.
-        celestial::draw(&sky, &stars, t, kin.heading_rad, half_fov_h_view, w, h, horizon, storm);
+        celestial::draw(&sky, &stars, t, view_heading, half_fov_h_view, w, h, horizon, storm);
 
         // Distant-water backdrop behind the wave mesh, over-scanned so a rolled view
         // still finds deep sea in the corners.
@@ -679,7 +812,7 @@ async fn main() {
             .iter()
             .filter(|i| {
                 let d = kin.pos.distance_to(i.pos);
-                let rel = wrap_angle(kin.pos.bearing_to(i.pos) - kin.heading_rad);
+                let rel = wrap_angle(kin.pos.bearing_to(i.pos) - view_heading);
                 d <= MAX_VIEW && d >= i.radius && rel.abs() <= half_fov_h_view * 1.6
             })
             .map(|i| (i, features[i.id as usize].as_slice()))
@@ -693,7 +826,7 @@ async fn main() {
             .iter()
             .filter(|f| {
                 let d = kin.pos.distance_to(f.pos);
-                let rel = wrap_angle(kin.pos.bearing_to(f.pos) - kin.heading_rad);
+                let rel = wrap_angle(kin.pos.bearing_to(f.pos) - view_heading);
                 d <= MAX_VIEW && rel.abs() <= half_fov_h_view * 1.3
             })
             .map(|f| (f.pos, f.kind))
@@ -715,14 +848,26 @@ async fn main() {
                 .unwrap()
         });
 
+        // The sky the water mirrors (Fresnel) must match the *displayed* sky, which
+        // darkens to night as the sun sets (draw_sky's `base_night`). Ease the
+        // reflected gradient down the same way, else warm reflections linger on the
+        // waves long after the painted sky has gone dark.
+        let base_night = palette::night_factor(sky.sun_alt);
+        let night_sky = palette::fair_sky(palette::Daytime::Night);
+        let reflect_sky = [
+            lerp3(sky_grad[0], night_sky[0], base_night),
+            lerp3(sky_grad[1], night_sky[1], base_night),
+            lerp3(sky_grad[2], night_sky[2], base_night),
+        ];
+
         // --- Waves -------------------------------------------------------------
         renderer.render(
-            &kin,
+            &view_kin,
             t,
             sea,
             motion.heave,
             &sea_pal,
-            sky_grad,
+            reflect_sky,
             sky.light_az,
             sky.light_alt,
             sky.light_strength,
@@ -768,19 +913,24 @@ async fn main() {
         // droplets behind it — only the spray rising above and outboard of the bow
         // shows. Strengthens with speed (the standing bow wave) and bursts on a
         // frontal slam or a hard roll into a sea.
-        spray.render(
-            &SprayInput {
-                speed_frac: clamp(kin.speed() / sailing::MAX_SPEED, 0.0, 1.0),
-                slam,
-                heel_rate,
-                day_lit,
-            },
-            dt,
-            w,
-            h,
-        );
+        // The forward deck, rig and bow spray are the captain's-eye foreground looking
+        // ahead; hide them while glancing astern so the wake and following sea read
+        // clear over open water.
+        if !look_back {
+            spray.render(
+                &SprayInput {
+                    speed_frac: clamp(kin.speed() / sailing::MAX_SPEED, 0.0, 1.0),
+                    slam,
+                    heel_rate,
+                    day_lit,
+                },
+                dt,
+                w,
+                h,
+            );
 
-        ship.render(&rig, dt, t, day_lit, storm, w, h);
+            ship.render(&rig, dt, t, day_lit, storm, w, h);
+        }
 
         // --- HUD ---------------------------------------------------------------
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
@@ -797,7 +947,7 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail · A/D helm · Space dock · Q/E weather · T time · [ ] wind · L log · B bloom · Esc menu",
+            "W/S sail · A/D helm · Space dock · C look astern · Q/E weather · T time · [ ] wind · L log · B bloom · Esc menu",
             16.0,
             52.0,
             20.0,
