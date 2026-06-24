@@ -22,6 +22,7 @@ use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, Upgra
 use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
 use crate::sailing::{Kinematics, Wind};
+use crate::sound::SoundBank;
 use crate::world::{Island, World};
 
 // How far off the bow a port may sit and still raise the docking prompt: a
@@ -207,29 +208,48 @@ impl PortScreen {
             .unwrap_or(Focus::TabBar);
     }
 
-    fn activate(&mut self, gs: &mut GameState, world: &World, market: &Market) {
+    fn activate(
+        &mut self,
+        gs: &mut GameState,
+        world: &World,
+        market: &Market,
+        sounds: &SoundBank,
+    ) {
         match self.focus {
             Focus::TabBar => self.enter_rows(world),
             Focus::Good(i) => {
                 let good = Good::ALL[i];
-                let _ = match self.column {
+                let done = match self.column {
                     0 => gs.buy(market, good, 1),
                     1 => gs.fill(market, good),
                     2 => gs.dump(market, good),
                     _ => gs.sell(market, good, 1),
                 };
+                if done.is_ok() {
+                    sounds.transaction();
+                }
             }
             Focus::Repair => {
-                let _ = gs.repair();
+                if gs.repair().is_ok() {
+                    sounds.transaction();
+                }
             }
             Focus::Upgrade(kind) => {
-                let _ = gs.buy_upgrade(world, kind);
+                if gs.buy_upgrade(world, kind).is_ok() {
+                    sounds.transaction();
+                }
             }
         }
     }
 
     /// Read keys and drive the board. Returns true when the captain sets sail.
-    pub fn handle_input(&mut self, gs: &mut GameState, world: &World, market: &Market) -> bool {
+    pub fn handle_input(
+        &mut self,
+        gs: &mut GameState,
+        world: &World,
+        market: &Market,
+        sounds: &SoundBank,
+    ) -> bool {
         if is_key_pressed(KeyCode::Escape) {
             return true;
         }
@@ -258,7 +278,7 @@ impl PortScreen {
             }
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
-            self.activate(gs, world, market);
+            self.activate(gs, world, market, sounds);
         }
         false
     }
