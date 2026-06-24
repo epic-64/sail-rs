@@ -163,6 +163,15 @@ while keeping the game's mechanics and feel.
   "+gold" toast naming the find. Each piece is a flat-shaded billboard (planked
   crate / hooped cask / brass-bound chest) riding the local wave and depth-sorted
   into the wave march like the rival, so nearer crests and islands occlude it.
+- **Trader NPCs** — `trader.rs` + the trader march in `ocean_renderer.rs`: a small
+  fleet of merchant craft (3 per cluster, only the *current* cluster simulated) that
+  ply fixed circuits of 3–4 nearby ports, re-spawned when the captain crosses to new
+  waters. Each helms itself with the rival's tacking logic (`race::rival_helm` —
+  beating up to a port that lies upwind rather than stalling in irons) and grazes off
+  shores like the player; on reaching a port it lies to for 60–90 s before the next
+  leg. Drawn as the rival sloop billboard but flying a green pennant (vs the race
+  rival's red), depth-sorted into the wave march, and dotted on the corner chart. A
+  new feature, not in the original.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)

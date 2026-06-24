@@ -21,6 +21,11 @@ const RIVAL_MAG: f32 = 1.35; // drawn a touch larger than life
 const RIVAL_MIN_PX: f32 = 26.0; // floor so a distant sail stays spottable
 const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
 
+/// The racing rival flies a defiant red pennant; the wandering traders a calmer
+/// sea-green one, so a sail crossing the bay reads as friendly traffic at a glance.
+pub const RIVAL_PENNANT: [f32; 3] = [201.0, 62.0, 56.0];
+pub const TRADER_PENNANT: [f32; 3] = [86.0, 158.0, 132.0];
+
 /// Draw the rival on the water, or nothing if she is out of view. Called inside
 /// the world-camera pass (after the wave mesh) so she rides the camera ride and
 /// sits on the painted sea. `heave` is the player's heave (the camera's rise);
@@ -37,6 +42,7 @@ pub fn draw(
     px_per_rad: f32,
     half_fov_h_view: f32,
     w: f32,
+    pennant: [f32; 3],
 ) {
     let d = kin.pos.distance_to(rk.pos);
     if d < 1.0 || d > MAX_VIEW {
@@ -76,14 +82,15 @@ pub fn draw(
     let z_l = ocean::height(rk.pos - beam * span, t, sea);
     let roll = clamp(((z_r - z_l) * WAVE_GAIN / (2.0 * span)).atan() * 0.7, -0.4, 0.4);
 
-    draw_sloop(sx, foot_y, height, flip, roll, alpha, light);
+    draw_sloop(sx, foot_y, height, flip, roll, alpha, light, pennant);
 }
 
 /// A stylised square-rigged sloop in a local space where x ∈ [-0.5, 0.5] (bow to
 /// the right before mirroring) and y ∈ [0, 1] (0 = waterline foot, 1 = masthead),
 /// mapped to screen at (cx + flip·lx·w, foot − ly·h). Two-tone to imply a bellied
 /// sail and a rounded hull, matching the faceted low-poly look of the isles.
-fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, light: f32) {
+#[allow(clippy::too_many_arguments)]
+fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, light: f32, pennant: [f32; 3]) {
     let w = h * 0.92;
     // Local (lx, ly) → an offset from the foot, rotated by the swell heel, then
     // anchored at the foot point on the wave so she rocks about her waterline.
@@ -110,7 +117,6 @@ fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, ligh
     const MAST: [f32; 3] = [74.0, 56.0, 38.0];
     const SAIL: [f32; 3] = [236.0, 228.0, 204.0];
     const SAIL_DK: [f32; 3] = [200.0, 190.0, 162.0];
-    const PENNANT: [f32; 3] = [201.0, 62.0, 56.0];
 
     // Mast, then the two sails braced about it (drawn before the hull so the hull's
     // bulwark tucks over their foot).
@@ -130,6 +136,6 @@ fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, ligh
     tri((-0.40, 0.04), (0.40, 0.04), (0.30, 0.0), rgba(HULL_DK, alpha)); // keel shadow
     quad((-0.40, 0.16), (0.40, 0.16), (0.40, 0.20), (-0.40, 0.20), rgba(DECK, alpha)); // deck line
 
-    // A pennant streaming from the masthead.
-    tri((0.0, 0.99), (0.20, 0.95), (0.0, 0.90), rgba(PENNANT, alpha));
+    // A pennant streaming from the masthead (red for a rival, green for a trader).
+    tri((0.0, 0.99), (0.20, 0.95), (0.0, 0.90), rgba(pennant, alpha));
 }
