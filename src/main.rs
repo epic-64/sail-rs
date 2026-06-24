@@ -7,6 +7,8 @@
 mod bloom;
 mod captains_log;
 mod celestial;
+mod flotsam;
+mod flotsam_render;
 mod game_state;
 mod geometry;
 mod isle_features;
@@ -236,6 +238,15 @@ async fn main() {
     let mut rival: Option<Kinematics> = None;
     let mut race_ready = false;
     let mut race_running = false;
+
+    // Floating salvage drifting on the swell: crates, barrels and the rare
+    // strongbox the captain scoops by sailing over them. Per-frame and seeded off
+    // the world, topped up to keep fresh salvage ahead of the bow. A pickup flashes
+    // a fading toast (`salvage_flash` seconds) reading what came aboard.
+    let mut flotsam = flotsam::FlotsamField::from_seed(world.seed ^ 0x5a17_f00d);
+    let mut salvage_flash: f32 = 0.0;
+    let mut salvage_msg = String::new();
+    const SALVAGE_FLASH_TIME: f32 = 1.6;
     // The rival waits this far abeam at the off; the player counts as alongside
     // within `RACE_START_RANGE` and "standing still" at or below `RACE_STILL_SPEED`.
     const RACE_START_GAP: f32 = 90.0;
@@ -338,6 +349,30 @@ async fn main() {
             // Keep the hull out of every nearby island.
             let near = world.islands_near(kin.pos, 400.0);
             kin = sailing::resolve_grounding(kin, &near);
+
+            // --- Salvage -------------------------------------------------------
+            // Scoop up any flotsam the ship has sailed over (gold straight to the
+            // purse, with a chime + a fading toast), then keep fresh salvage drifting
+            // ahead of the bow for the next stretch of open water.
+            let haul = flotsam.collect_near(kin.pos, flotsam::REACH);
+            if haul.gold > 0 {
+                gs.gold += haul.gold;
+                sounds.salvage();
+                salvage_flash = SALVAGE_FLASH_TIME;
+                // Name the best find so a rare strongbox feels like an event.
+                let best = haul
+                    .picked
+                    .iter()
+                    .max_by_key(|f| f.kind.gold())
+                    .map(|f| f.kind.label())
+                    .unwrap_or("Salvage");
+                salvage_msg = if haul.picked.len() > 1 {
+                    format!("Salvage! +{} gold  ({} & more)", haul.gold, best)
+                } else {
+                    format!("{}! +{} gold", best, haul.gold)
+                };
+            }
+            flotsam.replenish(kin.pos, kin.heading_rad, &world);
 
             // --- Race ----------------------------------------------------------
             // While waiting the rival sits dead at the line; the start is armed once
@@ -537,6 +572,25 @@ async fn main() {
             .collect();
         visible.sort_by(|a, b| key(b.0).partial_cmp(&key(a.0)).unwrap());
 
+        // Visible salvage: in view and within range, sorted farthest-first like the
+        // isles so the wave renderer can slot each piece in at its own depth.
+        let mut flot_vis: Vec<(Vec2, flotsam::FlotsamKind)> = flotsam
+            .items
+            .iter()
+            .filter(|f| {
+                let d = kin.pos.distance_to(f.pos);
+                let rel = wrap_angle(kin.pos.bearing_to(f.pos) - kin.heading_rad);
+                d <= MAX_VIEW && rel.abs() <= half_fov_h_view * 1.3
+            })
+            .map(|f| (f.pos, f.kind))
+            .collect();
+        flot_vis.sort_by(|a, b| {
+            kin.pos
+                .distance_to(b.0)
+                .partial_cmp(&kin.pos.distance_to(a.0))
+                .unwrap()
+        });
+
         // --- Waves -------------------------------------------------------------
         renderer.render(
             &kin,
@@ -556,6 +610,7 @@ async fn main() {
             // so nearer crests and islands occlude it like any other world object.
             rival,
             day_lit,
+            &flot_vis,
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
@@ -609,6 +664,25 @@ async fn main() {
         // Purse + hold, so the captain can read his fortunes from the helm too.
         let purse = format!("Gold {}  ·  Hold {}/{}", gs.gold, gs.hold_used(), gs.hold_capacity);
         draw_text(&purse, 16.0, 76.0, 22.0, Color::new(1.0, 0.92, 0.6, 1.0));
+
+        // Salvage pickup toast: a gold note that floats up and fades over the deck
+        // when a piece is hauled aboard.
+        salvage_flash = (salvage_flash - dt).max(0.0);
+        if salvage_flash > 0.0 && !harbor.is_open() && !log_open {
+            let p = salvage_flash / SALVAGE_FLASH_TIME; // 1 → 0 as it fades
+            let fs = 30;
+            let dims = measure_text(&salvage_msg, None, fs, 1.0);
+            let tx = w * 0.5 - dims.width / 2.0;
+            let ty = h * 0.34 - (1.0 - p) * 36.0; // drifts upward as it fades
+            draw_text(
+                &salvage_msg,
+                tx + 1.0,
+                ty + 1.0,
+                fs as f32,
+                Color::new(0.0, 0.0, 0.0, 0.5 * p),
+            );
+            draw_text(&salvage_msg, tx, ty, fs as f32, Color::new(1.0, 0.9, 0.5, p));
+        }
 
         // The destinations marked on the charts: every accepted contract, plus the
         // race mark while one is booked.
