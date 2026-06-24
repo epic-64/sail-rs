@@ -42,16 +42,19 @@ const HELM_AFT: f32 = 9.0;
 // --- Deck / camera "ride" shaping (shared by main.rs and ship_render.rs) -------
 // The bow's answer to the swell is *shaped* before it drives the camera look and
 // the deck rake: amplified throughout (a swell should heave the bow, not just nod
-// it) and amplified more nosing *down* the back of a crest than climbing its face,
-// so a wave you slide down reads as a dive, not a glide. The dive boost eases in
-// with depth (over `PITCH_DIVE_KNEE`) so the response is C1-continuous through the
-// crest and never snaps as the pitch flips sign. Ported from `SailingView`.
+// it). `PITCH_DIVE` can amplify nosing *down* the back of a crest more than climbing
+// its face — set above `PITCH_CLIMB` to make a wave you slide down read as a dive
+// rather than a glide. That boost eases in with depth (over `PITCH_DIVE_KNEE`) so the
+// response is C1-continuous through the crest and never snaps as the pitch flips sign.
+// Currently the two are equal: the nod is symmetric, so the view rests on the horizon
+// on average instead of biasing downward. Ported from `SailingView`.
 pub const PITCH_CLIMB: f32 = 1.3;
-pub const PITCH_DIVE: f32 = 2.0;
+pub const PITCH_DIVE: f32 = 1.3;
 pub const PITCH_DIVE_KNEE: f32 = 0.12; // rad of bow-down at which the dive boost is full
 
-/// The bow's shaped answer to the swell: climbs gently, noses down hard, eased in
-/// with depth so it stays smooth through the crest. `SailingView.pitchResponse`.
+/// The bow's shaped answer to the swell: amplified throughout, with an optional extra
+/// dive gain (`PITCH_DIVE` > `PITCH_CLIMB`) eased in with depth so it stays smooth
+/// through the crest. Symmetric while the two gains are equal. `SailingView.pitchResponse`.
 #[inline]
 pub fn pitch_response(pitch: f32) -> f32 {
     let dive = clamp(-pitch / PITCH_DIVE_KNEE, 0.0, 1.0);
