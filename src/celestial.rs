@@ -77,11 +77,14 @@ pub fn sky_state(tod: f32) -> Sky {
 /// One fixed star: a world bearing + altitude, a size, a tint, and its own twinkle.
 struct Star {
     az: f32,
-    alt: f32, // sine of altitude above the horizon, in (0, 1]
+    alt: f32, // sine of altitude; <0 dips below the horizon, >1 is past the zenith
     size: f32,
     color: (f32, f32, f32),
     phase: f32,
     rate: f32,
+    /// A faint star that only emerges at the darkest of night: its alpha is gated by
+    /// how far the sun has sunk, so it lifts the density past what dusk shows.
+    faint: bool,
 }
 
 /// A deterministic dome of stars, generated once from the world seed.
@@ -107,12 +110,26 @@ fn star_color(rng: &mut Rng) -> (f32, f32, f32) {
 impl StarField {
     pub fn new(seed: i64, count: usize) -> Self {
         let mut rng = Rng::from_seed(seed);
-        let mut stars = Vec::with_capacity(count);
-        for _ in 0..count {
+        // The bright field shown all night, plus a denser pool of faint stars that
+        // only fade in at the darkest of night (gated in `draw`).
+        let faint_count = count * 3 / 4;
+        let mut stars = Vec::with_capacity(count + faint_count);
+        for i in 0..count + faint_count {
+            let faint = i >= count;
             let az = rng.next_f64() as f32 * TAU;
-            // Bias toward the upper sky so the field thins near the horizon haze.
-            let alt = 0.05 + (rng.next_f64() as f32).powf(0.7) * 0.95;
-            let size = 0.8 + rng.next_f64() as f32 * 0.45;
+            // Spread evenly from below the horizon up past the zenith, so the field
+            // reaches the sea line (and keeps reaching it when the camera rolls or
+            // pitches) and still fills the top corners when the helm cranes up. The
+            // projection is linear in `alt`, so a uniform draw gives even screen
+            // density. Stars that fall below the horizon are painted over by the sea;
+            // those past the zenith sit over the over-scanned top sky.
+            let alt = -0.18 + rng.next_f64() as f32 * 1.6;
+            // Faint stars are the small pin-pricks that crowd a truly dark sky.
+            let size = if faint {
+                0.5 + rng.next_f64() as f32 * 0.4
+            } else {
+                0.8 + rng.next_f64() as f32 * 0.45
+            };
             let color = star_color(&mut rng);
             let phase = rng.next_f64() as f32 * TAU;
             let rate = 1.4 + rng.next_f64() as f32 * 3.2;
@@ -123,6 +140,7 @@ impl StarField {
                 color,
                 phase,
                 rate,
+                faint,
             });
         }
         StarField { stars }
@@ -187,13 +205,21 @@ pub fn draw(
 
     let star_a = sky.star_alpha * dim;
     if star_a > 0.01 {
+        // `star_alpha` is already full by early night, so it can't reveal the faint
+        // pool. Gate those on how far the sun has sunk past it: 0 until well after
+        // dusk, ramping to 1 at the darkest of night (sun at its lowest).
+        let deep_night = clamp((-sky.sun_alt - 0.5) / 0.5, 0.0, 1.0);
         for s in &stars.stars {
+            let base = if s.faint { star_a * deep_night } else { star_a };
+            if base <= 0.01 {
+                continue;
+            }
             if let Some((x, y)) = project(s.az, s.alt, heading, half_fov_h, w, horizon) {
-                if y > horizon {
-                    continue;
-                }
+                // No horizon cull: stars run right down to (and past) the sea line so
+                // a rolled or pitched view never bares a starless band at the horizon.
+                // The far-water rectangle, drawn after this, hides the submerged ones.
                 let tw = 0.82 + 0.18 * (t * s.rate + s.phase).sin();
-                let a = clamp(star_a * tw, 0.0, 1.0);
+                let a = clamp(base * tw, 0.0, 1.0);
                 let c = Color::new(s.color.0 / 255.0, s.color.1 / 255.0, s.color.2 / 255.0, a);
                 draw_circle(x, y, s.size, c);
             }

@@ -6,7 +6,7 @@
 //!
 //!   - **Main** — *Resume* (back to the helm), *Options*, *Quit*.
 //!   - **Options** — a master-volume slider (in steps of 10%) that scales the whole
-//!     mix, plus *Back*.
+//!     mix, a fullscreen toggle, plus *Back*.
 //!
 //! Keyboard-driven like the rest of the game: Up/Down move the cursor, Left/Right
 //! work the slider, Enter selects, Esc backs out (Options → Main, Main → Resume).
@@ -24,8 +24,8 @@ enum View {
 
 /// The main-menu rows, in cursor order.
 const MAIN_ITEMS: [&str; 3] = ["Resume", "Options", "Quit"];
-/// The options rows: the master-volume slider, then Back.
-const OPTIONS_ROWS: usize = 2; // 0 = master volume, 1 = back
+/// The options rows: the master-volume slider, the fullscreen toggle, then Back.
+const OPTIONS_ROWS: usize = 3; // 0 = master volume, 1 = fullscreen, 2 = back
 const MASTER_STEP: f32 = 0.1; // the slider moves in 10% notches
 
 /// What the main loop should do after handling a frame of pause-menu input.
@@ -43,6 +43,9 @@ pub struct PauseMenu {
     pub open: bool,
     view: View,
     cursor: usize,
+    /// Our own record of the window state — macroquad offers no getter, so we track
+    /// it here and toggle `set_fullscreen` against it.
+    fullscreen: bool,
 }
 
 impl PauseMenu {
@@ -51,6 +54,7 @@ impl PauseMenu {
             open: false,
             view: View::Main,
             cursor: 0,
+            fullscreen: false,
         }
     }
 
@@ -110,9 +114,18 @@ impl PauseMenu {
                 sounds.set_master(snap(sounds.master() - MASTER_STEP));
             }
         }
+        // The fullscreen toggle (row 1): Enter or Left/Right flips it.
+        if self.cursor == 1
+            && (is_key_pressed(KeyCode::Enter)
+                || is_key_pressed(KeyCode::Left)
+                || is_key_pressed(KeyCode::Right))
+        {
+            self.fullscreen = !self.fullscreen;
+            set_fullscreen(self.fullscreen);
+        }
         // Back to the main view, whether by Esc or Enter on the Back row.
         let back = is_key_pressed(KeyCode::Escape)
-            || (is_key_pressed(KeyCode::Enter) && self.cursor == 1);
+            || (is_key_pressed(KeyCode::Enter) && self.cursor == 2);
         if back {
             self.view = View::Main;
             self.cursor = 1; // land back on Options
@@ -209,15 +222,29 @@ impl PauseMenu {
             draw_text("◄ / ►", track_x, track_y + 34.0, 16.0, dim_ink());
         }
 
-        // --- Back (row 1) ---
-        let back_y = y0 + ph - 64.0;
+        // --- Fullscreen toggle (row 1) ---
+        let fs_y = row_y + 76.0;
         if self.cursor == 1 {
+            draw_rectangle(x0 + 12.0, fs_y - 26.0, pw - 24.0, 38.0, row_highlight());
+        }
+        draw_text("Fullscreen", cx, fs_y, 24.0, ink());
+        draw_text(
+            if self.fullscreen { "On" } else { "Off" },
+            x0 + pw - pad - 56.0,
+            fs_y,
+            24.0,
+            ink(),
+        );
+
+        // --- Back (row 2) ---
+        let back_y = y0 + ph - 64.0;
+        if self.cursor == 2 {
             draw_rectangle(x0 + 12.0, back_y - 26.0, pw - 24.0, 38.0, row_highlight());
         }
         draw_text("Back", cx, back_y, 28.0, ink());
 
         draw_text(
-            "↑/↓ move · ◄/► adjust · Esc back",
+            "↑/↓ move · ◄/► or Enter adjust · Esc back",
             cx,
             y0 + ph - 20.0,
             16.0,
