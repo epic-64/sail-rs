@@ -97,10 +97,10 @@ fn star_color(rng: &mut Rng) -> (f32, f32, f32) {
             let b = 0.85 + rng.next_f64() as f32 * 0.15;
             (228.0 * b, 234.0 * b, 255.0)
         }
-        r if r < 0.80 => (170.0, 198.0, 255.0), // blue
-        r if r < 0.89 => (255.0, 216.0, 168.0), // amber
-        r if r < 0.95 => (255.0, 176.0, 162.0), // red
-        _ => (176.0, 255.0, 214.0),             // cyan-green
+        r if r < 0.80 => (150.0, 188.0, 255.0), // blue
+        r if r < 0.89 => (255.0, 190.0, 110.0), // amber
+        r if r < 0.95 => (255.0, 120.0, 96.0),  // red
+        _ => (120.0, 255.0, 188.0),             // cyan-green
     }
 }
 
@@ -112,7 +112,7 @@ impl StarField {
             let az = rng.next_f64() as f32 * TAU;
             // Bias toward the upper sky so the field thins near the horizon haze.
             let alt = 0.05 + (rng.next_f64() as f32).powf(0.7) * 0.95;
-            let size = 0.6 + rng.next_f64() as f32 * 1.7;
+            let size = 0.8 + rng.next_f64() as f32 * 0.45;
             let color = star_color(&mut rng);
             let phase = rng.next_f64() as f32 * TAU;
             let rate = 1.4 + rng.next_f64() as f32 * 3.2;
@@ -192,7 +192,7 @@ pub fn draw(
                 if y > horizon {
                     continue;
                 }
-                let tw = 0.62 + 0.38 * (t * s.rate + s.phase).sin();
+                let tw = 0.82 + 0.18 * (t * s.rate + s.phase).sin();
                 let a = clamp(star_a * tw, 0.0, 1.0);
                 let c = Color::new(s.color.0 / 255.0, s.color.1 / 255.0, s.color.2 / 255.0, a);
                 draw_circle(x, y, s.size, c);
