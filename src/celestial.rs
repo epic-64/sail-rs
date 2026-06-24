@@ -11,12 +11,15 @@ use macroquad::prelude::*;
 use std::f32::consts::{PI, TAU};
 
 use crate::geometry::{clamp, wrap_angle};
-use crate::ocean_renderer::SUN_BEARING;
 use crate::rng::Rng;
 
-/// Radians the sun (and moon) track across its bearing between rise and set, so it
-/// sweeps the sky rather than rising and setting on one spot.
-const AZ_SPREAD: f32 = 0.7;
+/// The world bearing the sun transits at noon: due south (0 = N, CW), so it climbs
+/// the southern sky like the real northern-hemisphere sun.
+const NOON_AZ: f32 = PI;
+/// Radians either side of due south the sun (and moon) tracks between rise and set.
+/// At 1.25 it rises in the east-south-east and sets in the west-south-west, sweeping
+/// the sky rather than rising and setting on one spot.
+const AZ_SPREAD: f32 = 1.25;
 
 /// The sky's lighting and bodies at clock `tod`. Altitudes are the *sine* of the
 /// body's angle above the horizon (so >0 is up, and they double as the vertical
@@ -41,11 +44,12 @@ pub fn sky_state(tod: f32) -> Sky {
     // Arc angle: 0 at sunrise, π/2 at noon, π at sunset, 3π/2 at midnight.
     let a = (tod.rem_euclid(1.0) - 0.25) * TAU;
     let sun_alt = a.sin();
-    let sun_az = SUN_BEARING - a.cos() * AZ_SPREAD;
+    // cos(a): +1 at sunrise (east of south) → −1 at sunset (west of south).
+    let sun_az = NOON_AZ - a.cos() * AZ_SPREAD;
     // The moon runs half a cycle behind the sun, so it climbs as the sun sets.
     let am = a + PI;
     let moon_alt = am.sin();
-    let moon_az = SUN_BEARING - am.cos() * AZ_SPREAD;
+    let moon_az = NOON_AZ - am.cos() * AZ_SPREAD;
 
     let sun_light = clamp(sun_alt * 1.4 + 0.05, 0.0, 1.0);
     let moon_light = clamp(moon_alt, 0.0, 1.0) * 0.16;
@@ -202,13 +206,18 @@ pub fn draw(
     }
 
     if sky.sun_alt > -0.06 {
-        // Low sun burns orange, climbs to a warm white at noon.
+        // The setting sun burns deep blood-red on the horizon and warms to white at
+        // noon. `warm` is held low across the low sun (squared) so the red lingers
+        // through the whole sunset rather than only at the instant it touches down.
         let warm = clamp(sky.sun_alt, 0.0, 1.0);
+        let warm = warm * warm;
         let color = (
-            255.0 + (255.0 - 255.0) * warm,
-            150.0 + (244.0 - 150.0) * warm,
-            70.0 + (214.0 - 70.0) * warm,
+            228.0 + (255.0 - 228.0) * warm,
+            48.0 + (244.0 - 48.0) * warm,
+            28.0 + (214.0 - 28.0) * warm,
         );
-        draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, h * 0.055, color, dim);
+        // The low sun also swells larger near the horizon, as it really appears.
+        let r = h * (0.055 + 0.03 * (1.0 - warm));
+        draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, r, color, dim);
     }
 }
