@@ -40,8 +40,13 @@ pub struct IslandView {
     pub px_per_rad_h: f32,
     pub half_fov_h_view: f32,
     pub eye_rise: f32,
-    /// World-space unit vector pointing toward the sun (x, y on chart; z up).
+    /// World-space unit vector pointing toward the active light (x, y on chart;
+    /// z up) — the sun by day, the moon by night.
     pub sun: (f32, f32, f32),
+    /// Overall brightness from the day/night clock (1 = full noon, ~0.3 deep
+    /// night), multiplied into every facet so the isle darkens to a moonlit
+    /// silhouette after dusk.
+    pub light: f32,
 }
 
 /// Sand-rim and foliage-interior colours per archetype (matches the original).
@@ -156,9 +161,9 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
         fill_poly(&xs, &ys, color);
     };
-    floor_ring(isle.radius * 1.06, col(SHADOW, 1.0, alpha * 0.45));
-    floor_ring(isle.radius * 0.98, col(sand, 1.0, alpha));
-    floor_ring(isle.radius * 0.70, col(foliage, 1.0, alpha));
+    floor_ring(isle.radius * 1.06, col(SHADOW, v.light, alpha * 0.45));
+    floor_ring(isle.radius * 0.98, col(sand, v.light, alpha));
+    floor_ring(isle.radius * 0.70, col(foliage, v.light, alpha));
 
     // --- Faceted mound body --------------------------------------------------
     let h = isle.height;
@@ -201,7 +206,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             let b = ring_w[lvl][j];
             let c = ring_w[lvl + 1][j];
             let sh = shade(a, b, c, v);
-            let color = col(base, sh, alpha);
+            let color = col(base, sh * v.light, alpha);
             draw_triangle(
                 vec2(ring_sx[lvl][i], ring_sy[lvl][i]),
                 vec2(ring_sx[lvl][j], ring_sy[lvl][j]),
@@ -221,7 +226,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             vec2(ring_sx[2][i], ring_sy[2][i]),
             vec2(ring_sx[2][j], ring_sy[2][j]),
             vec2(apex_sx, apex_sy),
-            col(foliage, sh, alpha),
+            col(foliage, sh * v.light, alpha),
         );
     }
 
@@ -253,7 +258,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             continue;
         }
         let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
-        draw_feature(f.kind, fx, fy, w_px, h_px, alpha);
+        draw_feature(f.kind, fx, fy, w_px, h_px, alpha, v.light);
     }
 }
 
@@ -278,12 +283,7 @@ fn feature_aspect(kind: FeatureKind) -> f32 {
 // ground, 1 = top), mapped to screen at (cx + lx·w, foot − ly·h). Two-tone where
 // it helps imply form, matching the faceted low-poly look.
 
-#[inline]
-fn rgba(c: [f32; 3], a: f32) -> Color {
-    Color::new(c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, a)
-}
-
-fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32) {
+fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, light: f32) {
     // Local→screen.
     let p = |lx: f32, ly: f32| vec2(cx + lx * w, foot - ly * h);
     let quad = |x0: f32, y0: f32, x1: f32, y1: f32, c: Color| {
@@ -292,6 +292,11 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
     };
     let tri = |a: (f32, f32), b: (f32, f32), cc: (f32, f32), c: Color| {
         draw_triangle(p(a.0, a.1), p(b.0, b.1), p(cc.0, cc.1), c);
+    };
+    // Shadow the module `rgba` with one dimmed by the day/night light, so every
+    // feature colour below darkens with the rest of the isle after dusk.
+    let rgba = |c: [f32; 3], a: f32| {
+        Color::new(c[0] / 255.0 * light, c[1] / 255.0 * light, c[2] / 255.0 * light, a)
     };
 
     const TRUNK: [f32; 3] = [92.0, 64.0, 40.0];

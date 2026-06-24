@@ -4,6 +4,7 @@
 //! world-anchored wave system, and lets you sail a free camera around the swell.
 //! Islands, the ship deck/rig, HUD and weather come in later stages.
 
+mod bloom;
 mod captains_log;
 mod celestial;
 mod game_state;
@@ -139,9 +140,13 @@ async fn main() {
     // The day/night clock: a value in [0,1) that runs continuously (0 = midnight,
     // ¼ sunrise, ½ noon, ¾ sunset), wrapping every `DAY_LENGTH` seconds. The sky,
     // sea, sun, moon and stars are all derived from it.
-    const DAY_LENGTH: f32 = 180.0;
+    const DAY_LENGTH: f32 = 540.0;
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
+    // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
+    // the water's reflections). Toggle with B.
+    let mut bloom = bloom::Bloom::new();
+    let mut bloom_on = true;
 
     // Build the world and start the captain just off the home cluster's shipyard
     // port, bow pointed at it, so there's land in view from the first frame.
@@ -300,6 +305,9 @@ async fn main() {
             if is_key_pressed(KeyCode::L) {
                 log_open = !log_open;
             }
+            if is_key_pressed(KeyCode::B) {
+                bloom_on = !bloom_on;
+            }
             if is_key_pressed(KeyCode::Escape) {
                 if log_open {
                     log_open = false;
@@ -370,20 +378,26 @@ async fn main() {
         let px_per_rad = h * 0.85;
         let half_fov_h_view = projection::MAX_HALF_FOV_H.min((w * 0.5) / px_per_rad);
 
-        clear_background(BLACK);
         // The tilted/translated view must never reveal background past the painted
         // sea and sky, so everything world-anchored is over-scanned past the screen
         // edges by this much (sized to cover the clamped roll + translate).
         let overscan = w.max(h) * 0.25 + 60.0;
         let mut world_cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, w, h));
-        // `from_display_rect` builds its zoom for *render-to-texture*; drawn straight
-        // to the screen it comes out vertically flipped (its clip-space Y is the
-        // negative of macroquad's default screen projection). Flip `zoom.y` back so
-        // the world is upright and matches the screen-space ship/HUD drawn after.
-        world_cam.zoom.y = -world_cam.zoom.y;
+        if bloom_on {
+            // Render the world into the bloom's scene texture. Rendering to a target
+            // flips `invert_y`, which cancels the screen flip below — so leave `zoom.y`
+            // as `from_display_rect` set it and the net matrix matches the screen path.
+            world_cam.render_target = Some(bloom.scene_target(w, h));
+        } else {
+            // `from_display_rect` builds its zoom for render-to-texture; drawn straight
+            // to the screen it comes out vertically flipped. Flip `zoom.y` back so the
+            // world is upright and matches the screen-space ship/HUD drawn after.
+            world_cam.zoom.y = -world_cam.zoom.y;
+        }
         world_cam.rotation = cam_roll_deg;
         world_cam.target = vec2(w * 0.5 + cam_sway, h * 0.5 - cam_vert);
         set_camera(&world_cam);
+        clear_background(BLACK);
 
         draw_sky(sky_grad, storm, w, horizon, overscan);
         // Stars, then the moon and sun arcing over on the clock.
@@ -433,8 +447,13 @@ async fn main() {
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
-        // viewport rather than riding the swell.
-        set_default_camera();
+        // viewport rather than riding the swell. With bloom on, this also extracts and
+        // blurs the bright parts of the scene texture and composites them to the screen.
+        if bloom_on {
+            bloom.render_to_screen(w, h);
+        } else {
+            set_default_camera();
+        }
 
         // --- Ship (deck + rig) -------------------------------------------------
         // The deck leans with the same swell roll *and* wind heel, so she visibly
@@ -469,7 +488,7 @@ async fn main() {
         );
         draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
         draw_text(
-            "W/S sail · A/D helm · Space dock · Q/E sea · G storm · T time · [ ] wind · L log · Esc quit",
+            "W/S sail · A/D helm · Space dock · Q/E sea · G storm · T time · [ ] wind · L log · B bloom · Esc quit",
             16.0,
             52.0,
             20.0,
