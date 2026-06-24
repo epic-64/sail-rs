@@ -38,6 +38,7 @@ const FLAP_DEPTH: f32 = 0.035; // deepest a flog throws a panel, fraction of wid
 const BRACE_LIMIT: f32 = 1.4; // hard brace (~80°) reached by a beam wind
 const BRACE_EASE: f32 = 2.5; // 1/s the crew haul the yard toward its trim
 const WHEEL_EASE: f32 = 5.0; // 1/s the wheel chases the rudder input
+const SET_EASE: f32 = 2.2; // 1/s the crew haul the canvas to its new set (furl/unfurl)
 
 // --- How the swell's sway is split (the deck takes the bulk) ------------------
 const DECK_SHARE: f32 = 0.6;
@@ -78,10 +79,13 @@ pub struct RigInput {
     pub bow_lift: f32,
 }
 
-/// Holds the eased animation state (wheel spin, yard brace) between frames.
+/// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
 pub struct ShipRenderer {
     wheel_angle: f32,
     brace_angle: f32,
+    /// Visually-eased sail set, chasing the chosen notch so the canvas furls/unfurls
+    /// smoothly instead of teleporting between None/Half/Full.
+    set: f32,
 }
 
 #[inline]
@@ -94,6 +98,7 @@ impl ShipRenderer {
         ShipRenderer {
             wheel_angle: 0.0,
             brace_angle: 0.0,
+            set: 0.0,
         }
     }
 
@@ -110,10 +115,12 @@ impl ShipRenderer {
         w: f32,
         h: f32,
     ) {
-        // Wheel chases the rudder; the yard hauls round toward the wind's bearing.
+        // Wheel chases the rudder; the yard hauls round toward the wind's bearing;
+        // the canvas furls/unfurls toward the chosen notch.
         self.wheel_angle += (rig.turn * 2.4 - self.wheel_angle) * clamp(WHEEL_EASE * dt, 0.0, 1.0);
         let target_brace = clamp(-rig.wind_rel, -BRACE_LIMIT, BRACE_LIMIT);
         self.brace_angle += (target_brace - self.brace_angle) * clamp(BRACE_EASE * dt, 0.0, 1.0);
+        self.set += (clamp(rig.set, 0.0, 1.0) - self.set) * clamp(SET_EASE * dt, 0.0, 1.0);
 
         // The storm drains the deck toward slate, so it sits in the same light as the
         // sea, on top of the clock's daylight already folded into `day_lit`.
@@ -397,7 +404,7 @@ impl ShipRenderer {
 
         // --- Sail trim --------------------------------------------------------
         let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
-        let set = clamp(rig.set, 0.0, 1.0);
+        let set = self.set; // visually-eased set, so the canvas furls/unfurls smoothly
         let fill = draw_f * set; // belly amount
         let luff = (1.0 - draw_f).powi(3) * set; // flog amount
         let furl = set.max(0.05); // a struck sail keeps a thin rolled sliver
