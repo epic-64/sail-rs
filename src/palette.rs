@@ -62,12 +62,13 @@ pub const STORM_PALETTE: Palette = pal(
 /// The target sea palette for a time of day — eased toward in the renderer.
 pub fn palette_for(d: Daytime) -> Palette {
     match d {
-        // Vivid tropical noon: deep-blue foreground water rising through bright
-        // teal to a luminous near-white horizon band under the high sun.
+        // Vivid tropical noon: a deep teal-blue trough rising through saturated
+        // teal to a bright cyan-teal crest/horizon — the white highlights left to
+        // the foam tips so the body stays richly teal rather than washing pale.
         Daytime::Day => pal(
-            (12.0, 42.0, 92.0),
-            (26.0, 152.0, 168.0),
-            (214.0, 240.0, 248.0),
+            (6.0, 60.0, 82.0),
+            (10.0, 165.0, 180.0),
+            (104.0, 214.0, 226.0),
             (236.0, 253.0, 255.0),
             (255.0, 246.0, 222.0),
             (200.0, 236.0, 250.0),

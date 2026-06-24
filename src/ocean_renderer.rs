@@ -169,11 +169,11 @@ impl OceanRenderer {
             depth_far: 850.0,
             light_strength: 1.0,
             shininess: 90.0,
-            base_saturation: 1.55,
-            height_shade: 0.5,
+            base_saturation: 1.7,
+            height_shade: 0.62,
             slope_shade: 0.42,
             sky_shade: 0.16,
-            crest_brighten: 0.6,
+            crest_brighten: 0.74,
             crest_glass: 0.2,
             crest_fade_lo: 0.12,
             crest_fade_hi: 0.42,
@@ -190,7 +190,7 @@ impl OceanRenderer {
             sss_ambient: 0.16,
             c_glow: (40.0, 232.0, 172.0),
             fresnel_f0: 0.02,
-            reflect_strength: 0.72,
+            reflect_strength: 0.46,
             sky_horizon: [0.0; 3],
             sky_zenith: [0.0; 3],
             live,
@@ -572,8 +572,8 @@ impl OceanRenderer {
                 1.0 + crest * self.height_shade
                     + (sun_face - 0.5) * self.slope_shade
                     + (sky_face - 0.5) * self.sky_shade,
-                0.38,
-                1.8,
+                0.28,
+                1.85,
             );
             let mut r = base_r * shade;
             let mut g = base_g * shade;
