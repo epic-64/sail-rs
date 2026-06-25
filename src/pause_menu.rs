@@ -5,9 +5,9 @@
 //! two views:
 //!
 //!   - **Main** — *Resume* (back to the helm), *Options*, *Quit*.
-//!   - **Options** — a **World Seed** text field (type digits, Enter to sail a fresh
-//!     chart on that seed), a master-volume slider (in steps of 10%) that scales the
-//!     whole mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, plus *Back*.
+//!   - **Options** — a master-volume slider (in steps of 10%) that scales the whole
+//!     mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, a **World Seed**
+//!     text field (type digits, Enter to sail a fresh chart on that seed), plus *Back*.
 //!     The bloom and MSAA rows are graphics settings that take effect immediately;
 //!     both rely on render-to-texture / a WebGL2 resolve that the web build can't
 //!     grant, so on the web they show "Not supported" and can't be toggled.
@@ -32,13 +32,13 @@ enum View {
 /// The main-menu rows, in cursor order.
 const MAIN_ITEMS: [&str; 3] = ["Resume", "Options", "Quit"];
 /// The options rows, in cursor order:
-/// 0 = world seed, 1 = master volume, 2 = bloom, 3 = MSAA 4×, 4 = fullscreen, 5 = back.
+/// 0 = master volume, 1 = bloom, 2 = MSAA 4×, 3 = fullscreen, 4 = world seed, 5 = back.
 const OPTIONS_ROWS: usize = 6;
-const ROW_SEED: usize = 0;
-const ROW_MASTER: usize = 1;
-const ROW_BLOOM: usize = 2;
-const ROW_MSAA: usize = 3;
-const ROW_FULLSCREEN: usize = 4;
+const ROW_MASTER: usize = 0;
+const ROW_BLOOM: usize = 1;
+const ROW_MSAA: usize = 2;
+const ROW_FULLSCREEN: usize = 3;
+const ROW_SEED: usize = 4;
 const ROW_BACK: usize = 5;
 const MASTER_STEP: f32 = 0.1; // the slider moves in 10% notches
 
@@ -300,12 +300,12 @@ impl PauseMenu {
     }
 
     fn render_main(&self, cx: f32, x0: f32, y0: f32, pw: f32) {
-        draw_text("Paused", cx, y0 + 50.0, 36.0, ink());
+        crate::font::heading(|| draw_text("Paused", cx, y0 + 50.0, 36.0, ink()));
         draw_text(
             "The voyage lies hove to.",
             cx,
             y0 + 78.0,
-            18.0,
+            15.0,
             dim_ink(),
         );
 
@@ -315,7 +315,7 @@ impl PauseMenu {
             if i == self.cursor {
                 draw_rectangle(x0 + 12.0, ry - 26.0, pw - 24.0, row_h - 6.0, row_highlight());
             }
-            draw_text(label, cx, ry, 28.0, ink());
+            draw_text(label, cx, ry, 22.0, ink());
             ry += row_h;
         }
 
@@ -323,7 +323,7 @@ impl PauseMenu {
             "↑/↓ move · Enter select · Esc resume",
             cx,
             y0 + 132.0 + row_h * MAIN_ITEMS.len() as f32 + 8.0,
-            16.0,
+            14.0,
             dim_ink(),
         );
     }
@@ -337,7 +337,7 @@ impl PauseMenu {
             // A taller highlight than the other rows to take in the edit hint below.
             draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 58.0, row_highlight());
         }
-        draw_text("World Seed", cx, y, 24.0, ink());
+        draw_text("World Seed", cx, y, 19.0, ink());
 
         // The value, with a blinking-free caret while focused so the field reads as
         // editable; jiggles red on a rejected entry.
@@ -347,11 +347,11 @@ impl PauseMenu {
             self.seed_text.clone()
         };
         let (dx, red) = self.seed_flash_state();
-        let vw = measure_text(&value, None, 24, 1.0).width;
-        draw_text(&value, x0 + pw - pad - vw + dx, y, 24.0, flash_ink(red));
+        let vw = measure_text(&value, None, 19, 1.0).width;
+        draw_text(&value, x0 + pw - pad - vw + dx, y, 19.0, flash_ink(red));
 
         if focused {
-            draw_text("type digits · Enter sail a new chart", cx, y + 22.0, 15.0, dim_ink());
+            draw_text("type digits · Enter sail a new chart", cx, y + 22.0, 13.0, dim_ink());
         }
     }
 
@@ -365,24 +365,20 @@ impl PauseMenu {
         ph: f32,
         pad: f32,
     ) {
-        draw_text("Options", cx, y0 + 50.0, 36.0, ink());
+        crate::font::heading(|| draw_text("Options", cx, y0 + 50.0, 36.0, ink()));
 
-        // --- World seed field (row 0) ---
-        let seed_y = y0 + 100.0;
-        self.render_seed_row(cx, x0, seed_y, pw, pad);
-
-        // --- Master volume slider (row 1) ---
-        let row_y = y0 + 170.0;
+        // --- Master volume slider (row 0) ---
+        let row_y = y0 + 110.0;
         if self.cursor == ROW_MASTER {
             draw_rectangle(x0 + 12.0, row_y - 26.0, pw - 24.0, 70.0, row_highlight());
         }
         let master = sounds.master();
-        draw_text("Master Volume", cx, row_y, 24.0, ink());
+        draw_text("Master Volume", cx, row_y, 19.0, ink());
         draw_text(
             &format!("{}%", (master * 100.0).round() as i32),
             x0 + pw - pad - 56.0,
             row_y,
-            24.0,
+            19.0,
             ink(),
         );
 
@@ -396,10 +392,10 @@ impl PauseMenu {
         let knob_x = track_x + track_w * master;
         draw_circle(knob_x, track_y + track_h * 0.5, 8.0, ink());
         if self.cursor == ROW_MASTER {
-            draw_text("◄ / ►", track_x, track_y + 34.0, 16.0, dim_ink());
+            draw_text("◄ / ►", track_x, track_y + 34.0, 14.0, dim_ink());
         }
 
-        // --- Bloom toggle (row 2) ---
+        // --- Bloom toggle (row 1) ---
         // On the web these graphics rows are inert: show why instead of On/Off.
         let bloom_y = row_y + 80.0;
         if GRAPHICS_SUPPORTED {
@@ -408,7 +404,7 @@ impl PauseMenu {
             self.disabled_row(ROW_BLOOM, "Bloom", cx, x0, bloom_y, pw, pad);
         }
 
-        // --- MSAA 4× toggle (row 3) ---
+        // --- MSAA 4× toggle (row 2) ---
         let msaa_y = bloom_y + 40.0;
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_MSAA, "MSAA 4×", on_off(self.msaa), cx, x0, msaa_y, pw, pad);
@@ -416,22 +412,27 @@ impl PauseMenu {
             self.disabled_row(ROW_MSAA, "MSAA 4×", cx, x0, msaa_y, pw, pad);
         }
 
-        // --- Fullscreen toggle (row 4) ---
+        // --- Fullscreen toggle (row 3) ---
         let fs_y = msaa_y + 40.0;
         self.toggle_row(ROW_FULLSCREEN, "Fullscreen", on_off(self.fullscreen), cx, x0, fs_y, pw, pad);
+
+        // --- World seed field (row 4) ---
+        // Sits just above Back; its edit hint needs the extra room below.
+        let seed_y = fs_y + 56.0;
+        self.render_seed_row(cx, x0, seed_y, pw, pad);
 
         // --- Back (row 5) ---
         let back_y = y0 + ph - 56.0;
         if self.cursor == ROW_BACK {
             draw_rectangle(x0 + 12.0, back_y - 26.0, pw - 24.0, 38.0, row_highlight());
         }
-        draw_text("Back", cx, back_y, 28.0, ink());
+        draw_text("Back", cx, back_y, 22.0, ink());
 
         draw_text(
             "↑/↓ move · ◄/► or Enter adjust · Esc back",
             cx,
             y0 + ph - 20.0,
-            16.0,
+            14.0,
             dim_ink(),
         );
     }
@@ -443,9 +444,9 @@ impl PauseMenu {
         if self.cursor == row {
             draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
         }
-        draw_text(label, cx, y, 24.0, ink());
-        let vw = measure_text(value, None, 24, 1.0).width;
-        draw_text(value, x0 + pw - pad - vw, y, 24.0, ink());
+        draw_text(label, cx, y, 19.0, ink());
+        let vw = measure_text(value, None, 19, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, 19.0, ink());
     }
 
     /// Like `toggle_row`, but for a row that can't be changed in this build (web): the
@@ -454,10 +455,10 @@ impl PauseMenu {
         if self.cursor == row {
             draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
         }
-        draw_text(label, cx, y, 24.0, dim_ink());
+        draw_text(label, cx, y, 19.0, dim_ink());
         let value = "Not supported";
-        let vw = measure_text(value, None, 18, 1.0).width;
-        draw_text(value, x0 + pw - pad - vw, y, 18.0, dim_ink());
+        let vw = measure_text(value, None, 15, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, 15.0, dim_ink());
     }
 }
 

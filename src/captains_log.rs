@@ -112,7 +112,7 @@ struct Page {
 /// it off from the body (replacing the old centred "Captain's Log" that straddled
 /// the spine).
 fn heading(p: &Page, text: &str) {
-    draw_text(text, p.x, p.title_y, 28.0, ink());
+    crate::font::heading(|| draw_text(text, p.x, p.title_y, 28.0, ink()));
     draw_line(p.x, p.title_y + 10.0, p.x + p.col_w, p.title_y + 10.0, 1.5, dim_ink());
 }
 
@@ -366,7 +366,7 @@ fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
 /// A smaller sub-heading within a page body, used to group the hull-condition
 /// readout below the rig figures.
 fn heading_minor(p: &Page, text: &str, y: f32) {
-    draw_text(text, p.x, y, 20.0, dim_ink());
+    crate::font::heading(|| draw_text(text, p.x, y, 20.0, dim_ink()));
 }
 
 /// **The Hold** — the laden fraction with a fill bar, then the manifest.
@@ -451,7 +451,7 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
     let mut y = p.body_y;
 
     // Contracts: each accepted haul's destination and how far it lies.
-    draw_text("Contracts", p.x, y, 18.0, dim_ink());
+    crate::font::heading(|| draw_text("Contracts", p.x, y, 18.0, dim_ink()));
     y += lh * 0.9;
     if gs.active_missions.is_empty() {
         draw_text("No active contracts.", p.x, y, fs as f32, dim_ink());
@@ -468,7 +468,7 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
     y += lh * 0.9;
 
     // Race: the mark, its distance, and the speed made good toward it (VMG).
-    draw_text("Race", p.x, y, 18.0, dim_ink());
+    crate::font::heading(|| draw_text("Race", p.x, y, 18.0, dim_ink()));
     y += lh * 0.9;
     match gs.race {
         Some(r) => {
@@ -495,7 +495,7 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
     y += lh * 0.9;
 
     // Nearest shipyard: where to mend the hull and buy fittings.
-    draw_text("Nearest Shipyard", p.x, y, 18.0, dim_ink());
+    crate::font::heading(|| draw_text("Nearest Shipyard", p.x, y, 18.0, dim_ink()));
     y += lh * 0.9;
     let nearest = world
         .islands
