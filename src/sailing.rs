@@ -101,9 +101,18 @@ impl Wind {
 /// only on the magnitude of this angle, so the sail renderer can read its belly
 /// straight off the relative wind without the world heading. See `Wind::factor`.
 pub fn wind_factor_rel(wind_rel: f32) -> f32 {
+    wind_factor_rel_widened(wind_rel, 0.0)
+}
+
+/// As [`wind_factor_rel`], but widening the no-go zone by `dead_extra` radians on
+/// each side — a battered hull can't point as high, so its irons edge creeps out
+/// (see `game_state::hull::debuff`). `dead_extra` of 0 is the undamaged curve.
+pub fn wind_factor_rel_widened(wind_rel: f32, dead_extra: f32) -> f32 {
     let theta = wind_rel.abs(); // 0 = running downwind
     let off_wind = PI - theta; // 0 = into the eye, π = dead run
-    let irons = PI - DEAD_ANGLE; // 30° off the eye: edge of the no-go zone
+    // 30° off the eye plus the damage's widening, clamped short of the beam so the
+    // climb to the peak never inverts.
+    let irons = (PI - DEAD_ANGLE + dead_extra).min(BEAM_ANGLE - 0.01);
     if off_wind <= irons {
         0.0
     } else if off_wind <= BEAM_ANGLE {
@@ -113,6 +122,27 @@ pub fn wind_factor_rel(wind_rel: f32) -> f32 {
         let t = (off_wind - BEAM_ANGLE) / (PI - BEAM_ANGLE); // 0 at the beam, 1 dead astern
         MAX_BOOST - (MAX_BOOST - RUN_DRIVE) * t.powf(RUN_EXP)
     }
+}
+
+/// Handling penalties a damaged hull suffers, stacked from its condition by
+/// `game_state::hull::debuff`. A sound hull uses [`HullDebuff::NONE`], which
+/// leaves the boat's feel exactly as the original.
+#[derive(Clone, Copy, Debug)]
+pub struct HullDebuff {
+    /// Radians added to each side of the no-go zone (she can't point as high).
+    pub dead_angle_extra: f32,
+    /// Multiplier on rudder turn rate (1.0 = full bite, < 1 sluggish helm).
+    pub turn_mult: f32,
+    /// Multiplier on top speed (1.0 = full, < 1 a tired hull).
+    pub speed_mult: f32,
+}
+
+impl HullDebuff {
+    pub const NONE: HullDebuff = HullDebuff {
+        dead_angle_extra: 0.0,
+        turn_mult: 1.0,
+        speed_mult: 1.0,
+    };
 }
 
 /// Where the present heading sits on the points of sail, coarse-grained for the
@@ -207,18 +237,33 @@ pub fn step(kin: Kinematics, helm: Helm, wind: Wind, dt: f32) -> Kinematics {
 /// upgraded rig and the weight of its cargo (see `game_state::upgrades`). A bare
 /// ship within its haulage uses 1.0, so the baseline feel is unchanged.
 pub fn step_scaled(kin: Kinematics, helm: Helm, wind: Wind, dt: f32, speed_scale: f32) -> Kinematics {
+    step_debuffed(kin, helm, wind, dt, speed_scale, HullDebuff::NONE)
+}
+
+/// As [`step_scaled`], but with a damaged hull's handling penalties folded in: a
+/// wider no-go zone, a slower-answering helm, and a lower top speed (see
+/// [`HullDebuff`]). [`step_scaled`] is this with [`HullDebuff::NONE`].
+pub fn step_debuffed(
+    kin: Kinematics,
+    helm: Helm,
+    wind: Wind,
+    dt: f32,
+    speed_scale: f32,
+    debuff: HullDebuff,
+) -> Kinematics {
     let rudder = clamp(helm.turn, -1.0, 1.0);
     let throttle = clamp(helm.throttle, 0.0, 1.0);
-    let top = MAX_SPEED * speed_scale.max(0.05);
+    let top = MAX_SPEED * speed_scale.max(0.05) * debuff.speed_mult.max(0.05);
 
     let authority = clamp(kin.speed() / REF_SPEED, MIN_AUTHORITY, 1.0);
-    let target_yaw = rudder * MAX_YAW_RATE * authority;
+    let target_yaw = rudder * MAX_YAW_RATE * debuff.turn_mult * authority;
     let yaw_rate = kin.yaw_rate + (target_yaw - kin.yaw_rate) * clamp(YAW_INERTIA * dt, 0.0, 1.0);
     let heading = wrap_angle(kin.heading_rad + yaw_rate * dt);
     let fwd = Vec2::from_heading(heading);
 
-    // Sails push along the bow, scaled by how much wind the bow's angle harvests.
-    let factor = wind.factor(heading);
+    // Sails push along the bow, scaled by how much wind the bow's angle harvests —
+    // through a no-go zone widened by any hull damage.
+    let factor = wind_factor_rel_widened(wrap_angle(wind.toward_rad - heading), debuff.dead_angle_extra);
     let drive = throttle * (top * DRAG) * factor;
     let thrust_v = kin.vel + fwd * (drive * dt);
     // Water resistance: a single low DRAG at every point of sail gives the hull plenty
