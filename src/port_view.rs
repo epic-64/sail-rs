@@ -637,11 +637,17 @@ impl PortScreen {
 
         let board_x = chart.x + chart_size + COL_GAP;
         let board_w = right - board_x;
+        // The chart on the left is a rect whose *top edge* sits at `body_top`, but the
+        // boards lead with text drawn on a *baseline* — so starting them at `body_top`
+        // floats their first line a full ascent above it, riding up against the tab bar.
+        // Drop the board down by one heading ascent so its first line's cap-height lines
+        // up with the chart's top edge.
+        let board_top = body_top + FS_HEADING as f32;
         match self.tab {
-            Tab::Market => self.render_market(gs, market, board_x, body_top, board_w),
-            Tab::Contracts => self.render_contracts(gs, world, board_x, body_top, board_w),
-            Tab::Yard => self.render_yard(gs, world, board_x, body_top, board_w),
-            Tab::Race => self.render_race(gs, world, board_x, body_top, board_w),
+            Tab::Market => self.render_market(gs, market, board_x, board_top, board_w),
+            Tab::Contracts => self.render_contracts(gs, world, board_x, board_top, board_w),
+            Tab::Yard => self.render_yard(gs, world, board_x, board_top, board_w),
+            Tab::Race => self.render_race(gs, world, board_x, board_top, board_w),
         }
 
         // Footer hint.
