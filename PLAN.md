@@ -195,6 +195,16 @@ while keeping the game's mechanics and feel.
   leg. Drawn as the rival sloop billboard but flying a green pennant (vs the race
   rival's red), depth-sorted into the wave march, and dotted on the corner chart. A
   new feature, not in the original.
+- **Saves** — `save.rs`: the voyage persists across sessions, on the desktop *and*
+  in the browser (itch.io localStorage). A compact versioned `key=value` text holds
+  only voyage state — the seed (the chart is regenerated from it), the `GameState`
+  (gold/cargo/hull/missions/booked race/location), the ship's `Kinematics`, and the
+  clock/sail-notch/wind quarter; transient scenery (traders, flotsam, weather) is
+  reseeded fresh on load. The game autosaves every 15 s and on quit, and **continues
+  the saved voyage automatically on launch** (its seed picks the chart, restoring a
+  docked board or a mid-leg race rival). Storage backend: native writes a `.sav`
+  beside the exe; the web build calls three `localStorage` shims imported from the JS
+  loader (a `miniquad_add_plugin` in `web/index.html`) — no serde, no extra crates.
 - **Assets** — all `img/*` and `sounds/*` copied into `assets/`.
 
 ## 🟡 Partial / diverged from original (intentional)
