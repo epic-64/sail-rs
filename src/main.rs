@@ -54,6 +54,14 @@ fn window_conf() -> Conf {
         fullscreen: true, // launch full-screen (toggle in the pause menu's Options)
         high_dpi: true,
         sample_count: 4, // MSAA: smooth the wave-quad edges
+        // On the web the renderer's MSAA resolve uses WebGL2-only calls
+        // (`blitFramebuffer`/`readBuffer`); miniquad defaults the canvas to
+        // WebGL1, which would crash on the first `clear_background`. Request a
+        // WebGL2 context. Ignored on native (desktop GL is unaffected).
+        platform: macroquad::miniquad::conf::Platform {
+            webgl_version: macroquad::miniquad::conf::WebGLVersion::WebGL2,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
