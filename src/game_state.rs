@@ -151,7 +151,6 @@ impl UpgradeKind {
 pub const STARTING_GOLD: i32 = 200;
 pub const BASE_CARGO: i32 = 16; // hold slots on a fresh ship
 pub const CARGO_STEP: i32 = 8; // slots added per cargo upgrade
-pub const STARTING_FOOD: i32 = 4;
 
 // The single source of the base top speed is the sailing engine's
 // `BASE_TOP_KNOTS` (an exact integer-valued f32, so the `as f64` is lossless); the
@@ -403,15 +402,13 @@ pub struct GameState {
 }
 
 impl GameState {
-    /// A fresh voyage with a starting purse, a small larder, and a modest hold.
+    /// A fresh voyage with a starting purse, an empty hold, and a modest hull.
     /// The captain begins sailing just off the home port (the view is set up by
     /// `main`); the home shipyard is found the same way the original did.
     pub fn start() -> GameState {
-        let mut cargo = [0i32; 7];
-        cargo[Good::Food.index()] = STARTING_FOOD;
         GameState {
             gold: STARTING_GOLD,
-            cargo,
+            cargo: [0i32; 7],
             hold_capacity: BASE_CARGO,
             location: Location::Sailing,
             hull_level: 0,
