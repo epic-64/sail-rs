@@ -360,7 +360,11 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     // Skip isles faded out, off to the side, or ones we've sailed inside of (the
     // ring projection degenerates there). Grounding keeps the hull just outside the
     // shore radius, so culling only strictly-inside keeps big isles visible up close.
-    if dist > MAX_VIEW || dist < isle.radius || rel.abs() > v.half_fov_h_view * SIDE_CULL {
+    // The off-axis limit is widened by the isle's angular half-width (`asin(radius/d)`)
+    // so a large isle sailed alongside — its near shore filling the view while its
+    // centre sits abeam — isn't culled the moment its centre clears the FOV.
+    let ang_r = (isle.radius / dist).min(1.0).asin();
+    if dist > MAX_VIEW || dist < isle.radius || rel.abs() > v.half_fov_h_view * SIDE_CULL + ang_r {
         return;
     }
     let alpha = clamp((1.0 - dist / MAX_VIEW) * 1.5, 0.0, 1.0);
