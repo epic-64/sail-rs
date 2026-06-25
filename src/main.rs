@@ -906,7 +906,12 @@ async fn run_game(
             .filter(|i| {
                 let d = kin.pos.distance_to(i.pos);
                 let rel = wrap_angle(kin.pos.bearing_to(i.pos) - view_heading);
-                d <= MAX_VIEW && d >= i.radius && rel.abs() <= half_fov_h_view * 1.6
+                // Allow for the isle's angular half-width: close in, its near shore
+                // fills the view even when the *centre* lies well off the bow, so
+                // the off-axis limit must grow as `asin(radius/d)`. Otherwise a big
+                // isle sailed alongside pops out the moment its centre clears the FOV.
+                let ang_r = (i.radius / d).min(1.0).asin();
+                d <= MAX_VIEW && d >= i.radius && rel.abs() <= half_fov_h_view * 1.6 + ang_r
             })
             .map(|i| (i, features[i.id as usize].as_slice()))
             .collect();
