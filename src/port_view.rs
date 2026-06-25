@@ -163,12 +163,9 @@ const LAST_COLUMN: usize = 3;
 /// step, column split and symbol the board draws is named here, so the render code
 /// below carries no bare pixel literals. Sizes are deliberately compact.
 mod style {
-    // --- Type scale (px) — one tight ladder, used everywhere ----------------
-    pub const FS_TITLE: u16 = 26; // the port name
-    pub const FS_HEADING: u16 = 16; // section / board headers (display face) + the purse
-    pub const FS_BODY: u16 = 15; // data lines, list rows, tab labels
-    pub const FS_SMALL: u16 = 13; // eyebrows, column labels, captions, hints
-    pub const FS_CHIP: u16 = 14; // button / chip labels
+    // --- Type scale & line height — the one shared UI ladder ----------------
+    // Lives in `crate::ui` so the captain's log draws on the very same scale.
+    pub use crate::ui::{line_h, FS_BODY, FS_CHIP, FS_HEADING, FS_SMALL, FS_TITLE};
 
     // --- Spacing — every gap is a multiple of one base unit -----------------
     pub const UNIT: f32 = 6.0;
@@ -176,13 +173,6 @@ mod style {
     pub const GAP: f32 = UNIT * 2.0; // gap between groups (12)
     pub const RULE_GAP: f32 = UNIT; // heading baseline → its underline rule (6)
     pub const COL_GAP: f32 = UNIT * 4.0; // chart column → board column (24)
-
-    // --- Vertical rhythm ----------------------------------------------------
-    /// A text line's height is its font size times this — the list/row step.
-    pub const LINE_RATIO: f32 = 1.55;
-    pub fn line_h(fs: u16) -> f32 {
-        (fs as f32 * LINE_RATIO).round()
-    }
 
     // --- The panel itself ---------------------------------------------------
     pub const SCRIM: f32 = 0.5; // alpha of the dim behind the board
@@ -1225,18 +1215,10 @@ mod dock_cycle_tests {
 
 // --- Small drawing helpers ----------------------------------------------------
 
-fn ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 1.0)
-}
-fn dim_ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 0.62)
-}
-fn parchment() -> Color {
-    Color::new(230.0 / 255.0, 216.0 / 255.0, 176.0 / 255.0, 1.0)
-}
-fn parchment_edge() -> Color {
-    Color::new(120.0 / 255.0, 90.0 / 255.0, 55.0 / 255.0, 0.9)
-}
+// The ink / parchment palette and the type scale are shared with the captain's log;
+// see `crate::ui`.
+use crate::ui::{dim_ink, ink, parchment, parchment_edge};
+
 fn row_highlight() -> Color {
     Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28)
 }

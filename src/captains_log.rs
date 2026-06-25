@@ -18,6 +18,12 @@ use crate::game_state::{hull, upgrades, GameState, Good};
 use crate::minimap::{self, MinimapPalette};
 use crate::palette::Daytime;
 use crate::sailing::{Kinematics, Wind, KNOT};
+// The ink/parchment palette, the type scale and `format_dist` are shared with the
+// port board; see `crate::ui`. Only the log's own warning inks live below.
+use crate::ui::{
+    dim_ink, format_dist, ink, line_h, parchment, parchment_edge, FS_BODY, FS_CHIP, FS_HEADING,
+    FS_SMALL, FS_TITLE,
+};
 use crate::world::World;
 
 /// How many two-page spreads the book holds; `main` clamps the page cursor to this.
@@ -33,50 +39,14 @@ pub fn button_count(spread: usize) -> usize {
     }
 }
 
-/// Parchment + ink colours for the open book.
-fn ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 1.0)
-}
-fn dim_ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 0.62)
-}
-fn parchment() -> Color {
-    Color::new(230.0 / 255.0, 216.0 / 255.0, 176.0 / 255.0, 1.0)
-}
-fn parchment_edge() -> Color {
-    Color::new(120.0 / 255.0, 90.0 / 255.0, 55.0 / 255.0, 0.9)
-}
 /// Warning inks for a battered hull / overladen hold (amber → red), matching the
-/// original's `log-damaged` / `log-crippled` value classes.
+/// original's `log-damaged` / `log-crippled` value classes — the log's own, atop the
+/// shared parchment palette.
 fn warn_ink() -> Color {
     Color::new(150.0 / 255.0, 78.0 / 255.0, 20.0 / 255.0, 1.0)
 }
 fn alarm_ink() -> Color {
     Color::new(150.0 / 255.0, 38.0 / 255.0, 24.0 / 255.0, 1.0)
-}
-
-// --- Type scale ---------------------------------------------------------------
-// The same standard ladder the port board draws on (`port_view::style`), so the log's
-// lettering matches the rest of the UI rather than carrying its own larger set.
-const FS_TITLE: u16 = 26; // a page heading
-const FS_HEADING: u16 = 16; // a sub-heading within a page
-const FS_BODY: u16 = 15; // data rows
-const FS_SMALL: u16 = 13; // captions, footer, hints
-const FS_CHIP: u16 = 14; // button labels
-
-/// A text line's height — the body row step (font size times a fixed ratio).
-fn line_h(fs: u16) -> f32 {
-    (fs as f32 * 1.55).round()
-}
-
-/// A short distance readout for a heading: km past 1 km, metres below it. Mirrors
-/// `main::format_dist` / `SailingView.formatDist`.
-fn format_dist(m: f32) -> String {
-    if m >= 1000.0 {
-        format!("{:.1} km", m / 1000.0)
-    } else {
-        format!("{} m", m.round() as i32)
-    }
 }
 
 /// Draw a label (left) and value (right-aligned) within a column of width `col_w`.

@@ -28,6 +28,7 @@ const CLIPS: &[(&str, u8, &str)] = &[
     ("flap1.mp3", 1, "80k"),
     ("flap2.mp3", 1, "80k"),
     ("collect-coin.mp3", 1, "80k"),
+    ("collect-item.mp3", 1, "80k"),
     ("pw23check-winning-218995.mp3", 1, "80k"),
     ("lightyeartraxx-kl-peach-game-over-iii-142453.mp3", 1, "80k"),
     ("invalid-input.mp3", 1, "80k"),
