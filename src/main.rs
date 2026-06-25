@@ -34,7 +34,7 @@ mod world;
 
 use macroquad::prelude::*;
 
-use game_state::{upgrades, GameState, Market};
+use game_state::{hull, upgrades, GameState, Market};
 use geometry::{clamp, wrap_angle, Vec2};
 use port_view::Harbor;
 use ocean_renderer::OceanRenderer;
@@ -549,10 +549,15 @@ async fn main() {
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls.
             let scale = upgrades::speed_scale(gs.sail_level, gs.cargo_used());
-            kin = sailing::step_scaled(kin, helm, wind, dt, scale);
+            let hull_debuff = hull::debuff(hull::fraction(&gs));
+            let prev_pos = kin.pos;
+            kin = sailing::step_debuffed(kin, helm, wind, dt, scale, hull_debuff);
             // Keep the hull out of every nearby island.
             let near = world.islands_near(kin.pos, 400.0);
             kin = sailing::resolve_grounding(kin, &near);
+            // Hull decay: every kilometre sailed wears 1% off the hull, so the
+            // drydock has something to mend.
+            gs.wear_distance(kin.pos.distance_to(prev_pos) as f64);
 
             // --- Salvage -------------------------------------------------------
             // Scoop up any flotsam the ship has sailed over (gold straight to the
@@ -1101,7 +1106,9 @@ async fn main() {
         }
 
         // The docking call-to-action (while sailing), then the port board (docked).
-        port_view::render_prompt(&harbor, &world, sail_mode == 0, w, h);
+        // Suppress it at a race's finish line so a novice doesn't strike sail short.
+        let race_target = gs.race.map(|r| r.target_id);
+        port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
         if harbor.is_open() {
             if let Some(id) = gs.docked_island_id() {
                 let market = Market::for_island(&world.islands[id as usize], world.seed);

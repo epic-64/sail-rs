@@ -112,6 +112,8 @@ pub enum TradeError {
     NoShipyard,
     MaxUpgrade,
     HullSound,
+    /// The hull is too battered to honourably take on a race or contract.
+    HullTooDamaged,
     NoSuchMission,
     NoDelivery,
     RaceInProgress,
@@ -264,6 +266,75 @@ pub mod hull {
     pub fn repair_cost(s: &GameState) -> i32 {
         damage(s) * REPAIR_COST_PER_HULL
     }
+
+    // --- Condition penalties --------------------------------------------------
+    // As the hull rots, handicaps stack one notch for every 10% of hull lost
+    // below 90%, cycling through three kinds: a wider no-go zone, a slower helm,
+    // then a lower top speed — and repeating down the scale. So the first bite at
+    // 90% widens the no-go zone, 80% slows the turn, 70% trims top speed, 60%
+    // widens the no-go again, and so on to 10%.
+
+    /// Degrees added to each side of the no-go zone per deadzone notch.
+    pub const DEADZONE_STEP_DEG: f32 = 5.0;
+    /// Top-speed lost per speed notch (fraction).
+    pub const SPEED_STEP: f32 = 0.05;
+    /// Turn-rate lost per helm notch (fraction).
+    pub const TURN_STEP: f32 = 0.10;
+    /// At or below this fraction of hull the harbourmaster won't let the captain
+    /// take on races or haulage — sailing a job in such a wreck is unseemly.
+    pub const JOB_REFUSE_FRACTION: f64 = 0.30;
+
+    /// How many notches of each penalty kind the hull's `fraction` has earned,
+    /// returned as `(deadzone, turn, speed)`. The single source of truth for both
+    /// the physics ([`debuff`]) and the captain's log ([`penalty_lines`]).
+    pub fn penalty_counts(fraction: f64) -> (i32, i32, i32) {
+        let pct = fraction * 100.0;
+        if pct > 90.0 {
+            return (0, 0, 0);
+        }
+        // Notch 0 bites at 90%, one more for every further 10% lost, down to 10%.
+        let crossed = (((90.0 - pct) / 10.0).floor() as i32 + 1).clamp(0, 9);
+        let mut counts = [0i32; 3];
+        for i in 0..crossed {
+            counts[(i % 3) as usize] += 1;
+        }
+        (counts[0], counts[1], counts[2])
+    }
+
+    /// The handling penalties currently in force, for the helm/physics.
+    pub fn debuff(fraction: f64) -> crate::sailing::HullDebuff {
+        let (dz, turn, spd) = penalty_counts(fraction);
+        crate::sailing::HullDebuff {
+            dead_angle_extra: (dz as f32) * DEADZONE_STEP_DEG.to_radians(),
+            turn_mult: (1.0 - TURN_STEP * turn as f32).max(0.1),
+            speed_mult: (1.0 - SPEED_STEP * spd as f32).max(0.1),
+        }
+    }
+
+    /// Human-readable lines describing the penalties in force, for the captain's
+    /// log. Empty while the hull is sound (above 90%).
+    pub fn penalty_lines(fraction: f64) -> Vec<(String, String)> {
+        let (dz, turn, spd) = penalty_counts(fraction);
+        let mut lines = Vec::new();
+        if dz > 0 {
+            lines.push((
+                "No-go zone".to_string(),
+                format!("+{}°", (dz as f32 * DEADZONE_STEP_DEG) as i32),
+            ));
+        }
+        if turn > 0 {
+            lines.push(("Turn rate".to_string(), format!("-{}%", turn * 10)));
+        }
+        if spd > 0 {
+            lines.push(("Top speed".to_string(), format!("-{}%", spd * 5)));
+        }
+        lines
+    }
+
+    /// Whether the hull is sound enough to take on races and haulage contracts.
+    pub fn can_take_jobs(s: &GameState) -> bool {
+        fraction(s) > JOB_REFUSE_FRACTION
+    }
 }
 
 // --- Location & GameState ----------------------------------------------------
@@ -286,6 +357,10 @@ pub struct GameState {
     pub location: Location,
     pub sail_level: i32, // rig upgrades bought; drives top speed (see `upgrades`)
     pub hull: i32,       // current hull integrity; worn by storms & starvation
+    /// Fractional hull wear sailed off but not yet a whole point. The hull is
+    /// integer-valued, so distance decay (see [`GameState::wear_distance`])
+    /// banks its remainder here and spends it a point at a time.
+    pub hull_wear: f64,
     /// Accepted haulage contracts riding in the hold until delivered (see
     /// [`crate::mission`]). Their goods occupy hold space but cannot be sold.
     pub active_missions: Vec<Mission>,
@@ -308,6 +383,7 @@ impl GameState {
             location: Location::Sailing,
             sail_level: 0,
             hull: hull::max_hull(0, 0),
+            hull_wear: 0.0,
             active_missions: Vec::new(),
             race: None,
         }
@@ -336,6 +412,24 @@ impl GameState {
 
     pub fn max_hull(&self) -> i32 {
         hull::max_hull(self.sail_level, upgrades::cargo_level_of(self.hold_capacity))
+    }
+
+    /// Wear the hull from distance sailed: every kilometre under way costs 1%
+    /// of a full hull. Damage is accrued continuously and banked in
+    /// `hull_wear`, spending whole points off `hull` as they accumulate, so
+    /// even a string of short hops grinds the planking down over a voyage.
+    /// `meters` is the world-distance (1 unit = 1 m) covered this step.
+    pub fn wear_distance(&mut self, meters: f64) {
+        if meters <= 0.0 || self.hull <= 0 {
+            return;
+        }
+        let km = meters / 1000.0;
+        self.hull_wear += km * self.max_hull() as f64 * 0.01;
+        if self.hull_wear >= 1.0 {
+            let points = self.hull_wear.floor() as i32;
+            self.hull_wear -= points as f64;
+            self.hull = (self.hull - points).max(0);
+        }
     }
 
     pub fn docked_island_id(&self) -> Option<i32> {
@@ -402,6 +496,11 @@ impl GameState {
 
     /// Buy the next upgrade of `kind`. Requires being docked at a shipyard with
     /// the funds and the fitting not already maxed.
+    ///
+    /// Every upgrade enlarges the hull ([`max_hull`](GameState::max_hull) grows
+    /// with the rig and hold), and the new fittings come sound: the yard hauls her
+    /// out and patches the hull to full as part of the work, so an upgrade never
+    /// leaves the captain a smaller *fraction* of hull than before.
     pub fn buy_upgrade(&mut self, world: &World, kind: UpgradeKind) -> Result<(), TradeError> {
         let isle = self.docked_island(world).ok_or(TradeError::NotDocked)?;
         if !isle.is_shipyard {
@@ -416,6 +515,9 @@ impl GameState {
             UpgradeKind::Sail => self.sail_level += 1,
             UpgradeKind::Cargo => self.hold_capacity += CARGO_STEP,
         }
+        // Fresh, sound planking: the refit patches the hull all the way back up.
+        self.hull = self.max_hull();
+        self.hull_wear = 0.0;
         Ok(())
     }
 
@@ -445,6 +547,9 @@ impl GameState {
     pub fn accept(&mut self, world: &World, mission_id: i32) -> Result<(), TradeError> {
         if self.docked_island_id().is_none() {
             return Err(TradeError::NotDocked);
+        }
+        if !hull::can_take_jobs(self) {
+            return Err(TradeError::HullTooDamaged);
         }
         let mission = mission::offered_at(self, world)
             .into_iter()
@@ -507,6 +612,9 @@ impl GameState {
         if self.race.is_some() {
             return Err(TradeError::RaceInProgress);
         }
+        if !hull::can_take_jobs(self) {
+            return Err(TradeError::HullTooDamaged);
+        }
         let target = race::targets_at(self, world)
             .into_iter()
             .find(|p| p.id == target_id)
@@ -551,5 +659,83 @@ impl GameState {
         self.gold += r.stake;
         self.race = None;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distance_wear_costs_one_percent_of_full_hull_per_km() {
+        let mut gs = GameState::start();
+        let full = gs.max_hull();
+        // 10 km should knock off ~10% of a full hull.
+        gs.wear_distance(10_000.0);
+        let lost = full - gs.hull;
+        let expected = (full as f64 * 0.10).floor() as i32;
+        assert_eq!(lost, expected);
+    }
+
+    #[test]
+    fn distance_wear_banks_the_fractional_remainder() {
+        let mut gs = GameState::start();
+        let full = gs.max_hull();
+        // A string of short hops totalling 1 km still wears a whole ~1% off, even
+        // though no single hop crosses a full hull point on its own.
+        for _ in 0..100 {
+            gs.wear_distance(10.0); // 10 m each, 1 km total
+        }
+        assert_eq!(full - gs.hull, (full as f64 * 0.01).floor() as i32);
+    }
+
+    #[test]
+    fn penalties_stack_one_notch_per_ten_percent_cycling_kinds() {
+        use hull::penalty_counts;
+        // Sound above 90%.
+        assert_eq!(penalty_counts(1.00), (0, 0, 0));
+        assert_eq!(penalty_counts(0.95), (0, 0, 0));
+        // 90% widens the no-go zone; 80% adds a slow helm; 70% trims top speed.
+        assert_eq!(penalty_counts(0.90), (1, 0, 0));
+        assert_eq!(penalty_counts(0.80), (1, 1, 0));
+        assert_eq!(penalty_counts(0.70), (1, 1, 1));
+        // …then the cycle repeats down the scale.
+        assert_eq!(penalty_counts(0.60), (2, 1, 1));
+        assert_eq!(penalty_counts(0.30), (3, 2, 2));
+        assert_eq!(penalty_counts(0.10), (3, 3, 3));
+    }
+
+    #[test]
+    fn debuff_translates_notches_into_handling_numbers() {
+        // At 70% hull: +5° no-go, -10% turn, -5% top speed.
+        let d = hull::debuff(0.70);
+        assert!((d.dead_angle_extra - 5f32.to_radians()).abs() < 1e-6);
+        assert!((d.turn_mult - 0.90).abs() < 1e-6);
+        assert!((d.speed_mult - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn buying_an_upgrade_refits_the_hull_to_full() {
+        let world = crate::world::generate(1);
+        // Dock at a shipyard so the upgrade is allowed.
+        let yard = world.islands.iter().find(|i| i.is_shipyard).unwrap();
+        let mut gs = GameState::start();
+        gs.gold = 1_000_000;
+        gs.location = Location::Docked(yard.id);
+        gs.hull = gs.max_hull() / 4; // battered before the refit
+        gs.buy_upgrade(&world, UpgradeKind::Cargo).unwrap();
+        // The bigger hull comes sound — full, not the old quarter.
+        assert_eq!(gs.hull, gs.max_hull());
+        assert_eq!(gs.hull_wear, 0.0);
+    }
+
+    #[test]
+    fn a_battered_hull_is_barred_from_jobs_at_thirty_percent() {
+        let mut gs = GameState::start();
+        gs.location = Location::Docked(0);
+        gs.hull = (gs.max_hull() as f64 * 0.31).round() as i32;
+        assert!(hull::can_take_jobs(&gs));
+        gs.hull = (gs.max_hull() as f64 * 0.30).round() as i32;
+        assert!(!hull::can_take_jobs(&gs));
     }
 }
