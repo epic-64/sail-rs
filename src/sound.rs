@@ -25,23 +25,40 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 // The clips, baked into the binary so there's nothing to ship alongside it.
-const SAILING_MP3: &[u8] = include_bytes!("../assets/sounds/dammafra-sailing-435998.mp3");
-const CALM_MP3: &[u8] = include_bytes!("../assets/sounds/calm.mp3");
-const STORM_MP3: &[u8] = include_bytes!("../assets/sounds/thunderstorm-cut.mp3");
+// On the web the whole binary is downloaded up front, so the wasm build embeds
+// re-encoded (smaller) copies that `build.rs` generates into `OUT_DIR/sounds-web/`
+// at build time (ffmpeg if available, else the original copied through). Nothing
+// re-encoded is committed. The native build embeds the full-quality
+// `assets/sounds/` originals directly.
+#[cfg(target_arch = "wasm32")]
+macro_rules! snd {
+    ($f:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/sounds-web/", $f))
+    };
+}
+#[cfg(not(target_arch = "wasm32"))]
+macro_rules! snd {
+    ($f:literal) => {
+        include_bytes!(concat!("../assets/sounds/", $f))
+    };
+}
+
+const SAILING_MP3: &[u8] = snd!("dammafra-sailing-435998.mp3");
+const CALM_MP3: &[u8] = snd!("calm.mp3");
+const STORM_MP3: &[u8] = snd!("thunderstorm-cut.mp3");
 // Canvas-flap one-shots: raising sail (more canvas catching wind) vs lowering.
-const FLAP_UP_MP3: &[u8] = include_bytes!("../assets/sounds/flap1.mp3");
-const FLAP_DOWN_MP3: &[u8] = include_bytes!("../assets/sounds/flap2.mp3");
-const WIND_SHIFT_MP3: &[u8] = include_bytes!("../assets/sounds/universfield-transition-02-141076.mp3");
+const FLAP_UP_MP3: &[u8] = snd!("flap1.mp3");
+const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
+const WIND_SHIFT_MP3: &[u8] = snd!("universfield-transition-02-141076.mp3");
 // The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`).
-const COIN_MP3: &[u8] = include_bytes!("../assets/sounds/collect-coin.mp3");
+const COIN_MP3: &[u8] = snd!("collect-coin.mp3");
 // Race result one-shots: a triumphant chime on a win, a glum jingle on a loss
 // (`SailingView.raceWonSound` / `raceLostSound`).
-const RACE_WON_MP3: &[u8] = include_bytes!("../assets/sounds/pw23check-winning-218995.mp3");
-const RACE_LOST_MP3: &[u8] =
-    include_bytes!("../assets/sounds/lightyeartraxx-kl-peach-game-over-iii-142453.mp3");
+const RACE_WON_MP3: &[u8] = snd!("pw23check-winning-218995.mp3");
+const RACE_LOST_MP3: &[u8] = snd!("lightyeartraxx-kl-peach-game-over-iii-142453.mp3");
 // A short buzzer when the captain tries something the rules won't allow (no gold
 // for a wager, no room in the hold, nothing to sell, …).
-const INVALID_MP3: &[u8] = include_bytes!("../assets/sounds/invalid-input.mp3");
+const INVALID_MP3: &[u8] = snd!("invalid-input.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues. These mirror the per-clip volumes
