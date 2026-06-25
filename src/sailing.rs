@@ -210,7 +210,16 @@ impl Helm {
 }
 
 pub const KNOT: f32 = 0.5144; // m/s per knot
-pub const MAX_SPEED: f32 = 23.0 * KNOT; // ~11.83 m/s top speed (a dead run = 100%)
+/// The base hull's top speed in knots — a fresh, lightly-laden ship on a beam reach
+/// (its fastest point of sail). This is only the *baseline*: the engine itself
+/// imposes no ceiling. The actual top speed is whatever the ship hands
+/// [`step_with`]/[`step_debuffed`], which its rig upgrades raise and a laden hold
+/// lowers (see `game_state::upgrades::top_speed`). Kept here, beside `KNOT`, as the
+/// single source the economy reads back in knots (`game_state::BASE_TOP_KNOTS`).
+pub const BASE_TOP_KNOTS: f32 = 24.0;
+/// [`BASE_TOP_KNOTS`] in engine units (m/s) — the default ceiling for the
+/// parameterless [`step`] (NPCs) and the reference the bow-spray normalises against.
+pub const BASE_TOP_SPEED: f32 = BASE_TOP_KNOTS * KNOT; // ~12.35 m/s
 pub const DRAG: f32 = 0.16; // 1/s water resistance. Low for a heavy, high-momentum hull:
 // the drive impulse scales with DRAG too, so steady-state speed (drive/DRAG) is
 // unchanged — lowering it only makes her slower to gain *and* shed way, so she
@@ -230,30 +239,31 @@ pub const YAW_INERTIA: f32 = 0.3; // 1/s how quickly yaw-rate eases toward the r
 /// reach is fastest, pointing into the eye removes drive entirely, so making ground
 /// upwind forces the player to tack. Ported from `Ship.step`.
 pub fn step(kin: Kinematics, helm: Helm, wind: Wind, dt: f32) -> Kinematics {
-    step_scaled(kin, helm, wind, dt, 1.0)
+    step_with(kin, helm, wind, dt, BASE_TOP_SPEED)
 }
 
-/// As [`step`], but scaling the rig's top speed by `speed_scale` — the ship's
-/// upgraded rig and the weight of its cargo (see `game_state::upgrades`). A bare
-/// ship within its haulage uses 1.0, so the baseline feel is unchanged.
-pub fn step_scaled(kin: Kinematics, helm: Helm, wind: Wind, dt: f32, speed_scale: f32) -> Kinematics {
-    step_debuffed(kin, helm, wind, dt, speed_scale, HullDebuff::NONE)
+/// As [`step`], but with the ship's own `top_speed` (m/s) on a beam reach — set by
+/// its rig upgrades and the weight in its hold (see `game_state::upgrades::top_speed`).
+/// The engine carries no top speed of its own; the ship is the authority. A bare hull
+/// passes [`BASE_TOP_SPEED`], so the baseline feel is unchanged.
+pub fn step_with(kin: Kinematics, helm: Helm, wind: Wind, dt: f32, top_speed: f32) -> Kinematics {
+    step_debuffed(kin, helm, wind, dt, top_speed, HullDebuff::NONE)
 }
 
-/// As [`step_scaled`], but with a damaged hull's handling penalties folded in: a
+/// As [`step_with`], but with a damaged hull's handling penalties folded in: a
 /// wider no-go zone, a slower-answering helm, and a lower top speed (see
-/// [`HullDebuff`]). [`step_scaled`] is this with [`HullDebuff::NONE`].
+/// [`HullDebuff`]). [`step_with`] is this with [`HullDebuff::NONE`].
 pub fn step_debuffed(
     kin: Kinematics,
     helm: Helm,
     wind: Wind,
     dt: f32,
-    speed_scale: f32,
+    top_speed: f32,
     debuff: HullDebuff,
 ) -> Kinematics {
     let rudder = clamp(helm.turn, -1.0, 1.0);
     let throttle = clamp(helm.throttle, 0.0, 1.0);
-    let top = MAX_SPEED * speed_scale.max(0.05) * debuff.speed_mult.max(0.05);
+    let top = top_speed.max(0.05 * BASE_TOP_SPEED) * debuff.speed_mult.max(0.05);
 
     let authority = clamp(kin.speed() / REF_SPEED, MIN_AUTHORITY, 1.0);
     let target_yaw = rudder * MAX_YAW_RATE * debuff.turn_mult * authority;
@@ -367,11 +377,14 @@ mod tests {
     #[test]
     fn a_long_beam_reach_climbs_to_top_speed_without_exceeding_it() {
         let mut k = still(PI / 2.0);
-        for _ in 0..200 {
+        // Long enough to settle near the asymptote: the discrete drive climbs to
+        // ~0.984·top, within ~1% of it only after ~60 s of beam reach (200 steps
+        // reached just ~0.945·top, short of the bar below).
+        for _ in 0..600 {
             k = step(k, Helm { turn: 0.0, throttle: 1.0 }, NORTHERLY, 0.1);
         }
-        assert!(k.speed() > MAX_SPEED * 0.95);
-        assert!(k.speed() <= MAX_SPEED + 1e-6);
+        assert!(k.speed() > BASE_TOP_SPEED * 0.95);
+        assert!(k.speed() <= BASE_TOP_SPEED + 1e-6);
     }
 
     #[test]
