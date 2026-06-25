@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <title>sail-rs</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #05121c;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            outline: none;
+        }
+        #loading {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #cbe3f2;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.05em;
+            background: #05121c;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Hoisting sail&hellip;</div>
+    <canvas id="glcanvas" tabindex="1"></canvas>
+    <script src="mq_js_bundle.js"></script>
+    <script>
+        // Hide the loading splash once the wasm module has booted.
+        const _loading = document.getElementById("loading");
+        const _obs = setInterval(() => {
+            if (window.wasm_exports) {
+                if (_loading) _loading.style.display = "none";
+                clearInterval(_obs);
+            }
+        }, 100);
+        load("sail-rs.wasm");
+        // Keep keyboard focus on the canvas so controls work immediately.
+        document.getElementById("glcanvas").focus();
+    </script>
+</body>
+</html>
