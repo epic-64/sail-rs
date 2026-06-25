@@ -5,14 +5,18 @@
 //! two views:
 //!
 //!   - **Main** — *Resume* (back to the helm), *Options*, *Quit*.
-//!   - **Options** — a master-volume slider (in steps of 10%) that scales the whole
-//!     mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, plus *Back*. The
-//!     bloom and MSAA rows are graphics settings that take effect immediately; both
-//!     rely on render-to-texture / a WebGL2 resolve that the web build can't grant,
-//!     so on the web they show "Not supported" and can't be toggled.
+//!   - **Options** — a **World Seed** text field (type digits, Enter to sail a fresh
+//!     chart on that seed), a master-volume slider (in steps of 10%) that scales the
+//!     whole mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, plus *Back*.
+//!     The bloom and MSAA rows are graphics settings that take effect immediately;
+//!     both rely on render-to-texture / a WebGL2 resolve that the web build can't
+//!     grant, so on the web they show "Not supported" and can't be toggled.
 //!
 //! Keyboard-driven like the rest of the game: Up/Down move the cursor, Left/Right
 //! work the slider, Enter selects, Esc backs out (Options → Main, Main → Resume).
+//! On the seed field, digits edit the value, Backspace deletes, and Enter applies
+//! it. A rejected seed entry (a non-digit, an over-long value, or an empty field)
+//! gets the same audio buzzer + red jiggle the port board uses for an illegal trade.
 
 use macroquad::prelude::*;
 
@@ -28,14 +32,26 @@ enum View {
 /// The main-menu rows, in cursor order.
 const MAIN_ITEMS: [&str; 3] = ["Resume", "Options", "Quit"];
 /// The options rows, in cursor order:
-/// 0 = master volume, 1 = bloom, 2 = MSAA 4×, 3 = fullscreen, 4 = back.
-const OPTIONS_ROWS: usize = 5;
-const ROW_MASTER: usize = 0;
-const ROW_BLOOM: usize = 1;
-const ROW_MSAA: usize = 2;
-const ROW_FULLSCREEN: usize = 3;
-const ROW_BACK: usize = 4;
+/// 0 = world seed, 1 = master volume, 2 = bloom, 3 = MSAA 4×, 4 = fullscreen, 5 = back.
+const OPTIONS_ROWS: usize = 6;
+const ROW_SEED: usize = 0;
+const ROW_MASTER: usize = 1;
+const ROW_BLOOM: usize = 2;
+const ROW_MSAA: usize = 3;
+const ROW_FULLSCREEN: usize = 4;
+const ROW_BACK: usize = 5;
 const MASTER_STEP: f32 = 0.1; // the slider moves in 10% notches
+
+/// World-seed field rules: digits only, 1..=`SEED_MAX_LEN` of them. The cap keeps
+/// the value comfortably inside `i64` (18 nines < `i64::MAX`), so any accepted
+/// string parses; the lower bound (non-empty) is enforced at apply time.
+const SEED_MAX_LEN: usize = 18;
+
+/// Flash timing for a rejected seed entry — a brief red jiggle that decays to
+/// nothing, matching the port board's constraint flash (`port_view`).
+const FLASH_DUR: f32 = 0.42; // seconds the jiggle lasts
+const FLASH_AMP: f32 = 4.0; // peak horizontal wobble, px
+const FLASH_FREQ: f32 = 7.0; // wobble oscillations per second
 
 /// Whether the graphics features (bloom, MSAA) can run in this build. They need
 /// render-to-texture / a WebGL2 resolve the web build deliberately avoids (see
@@ -50,6 +66,9 @@ pub enum PauseAction {
     Resume,
     /// Quit the game.
     Quit,
+    /// The captain entered a new world seed: end this voyage and begin a fresh one
+    /// on the given seed.
+    NewWorld(i64),
 }
 
 /// The pause menu's state: whether it's up, which view, and the cursor row.
@@ -66,6 +85,12 @@ pub struct PauseMenu {
     /// 4× MSAA on the offscreen scene. Read each frame by the render loop. Off on the
     /// web (the resolve needs WebGL2, which the build avoids).
     msaa: bool,
+    /// The world-seed field's edit buffer (digits only). Seeds the current chart;
+    /// applied with Enter on the seed row to start a fresh voyage.
+    seed_text: String,
+    /// When a rejected seed entry last flashed (`get_time` seconds), driving the
+    /// red jiggle; `None` once it has decayed or never fired.
+    seed_flash: Option<f64>,
 }
 
 impl PauseMenu {
@@ -79,6 +104,9 @@ impl PauseMenu {
             // bloom + 4× MSAA), and forced off on the web.
             bloom: GRAPHICS_SUPPORTED,
             msaa: GRAPHICS_SUPPORTED,
+            // Matches the world the loop boots on (`run_game(1, …)` in main).
+            seed_text: String::from("1"),
+            seed_flash: None,
         }
     }
 
@@ -139,6 +167,12 @@ impl PauseMenu {
         if is_key_pressed(KeyCode::Up) {
             self.cursor = (self.cursor + OPTIONS_ROWS - 1) % OPTIONS_ROWS;
         }
+        // The seed field owns the keyboard while focused: digits edit it, Backspace
+        // deletes, Enter applies, Esc backs out. Handle it on its own and return so
+        // none of the toggle/slider logic below sees the keys.
+        if self.cursor == ROW_SEED {
+            return self.input_seed(sounds);
+        }
         // A row's toggle is worked with Enter or Left/Right.
         let toggled = is_key_pressed(KeyCode::Enter)
             || is_key_pressed(KeyCode::Left)
@@ -175,15 +209,83 @@ impl PauseMenu {
         PauseAction::None
     }
 
+    /// One frame of input while the world-seed field is focused. Digits append (up
+    /// to the length cap), Backspace deletes, Enter applies, Esc backs out to Main.
+    /// A character the rule won't take — a non-digit, or a digit past the cap —
+    /// is rejected with the standard buzzer + red jiggle, never silently dropped.
+    fn input_seed(&mut self, sounds: &mut SoundBank) -> PauseAction {
+        if is_key_pressed(KeyCode::Backspace) {
+            self.seed_text.pop();
+        }
+        if is_key_pressed(KeyCode::Enter) {
+            return self.apply_seed(sounds);
+        }
+        if is_key_pressed(KeyCode::Escape) {
+            self.view = View::Main;
+            self.cursor = 1; // land back on Options
+            return PauseAction::None;
+        }
+        // Drain the frame's typed characters. Control keys (Enter/Backspace/Esc,
+        // handled above) arrive as control chars and are ignored here.
+        while let Some(c) = get_char_pressed() {
+            if c.is_ascii_digit() && self.seed_text.len() < SEED_MAX_LEN {
+                self.seed_text.push(c);
+            } else if !c.is_control() {
+                self.reject(sounds);
+            }
+        }
+        PauseAction::None
+    }
+
+    /// Validate and apply the seed buffer. A non-empty digit string (guaranteed to
+    /// fit `i64` by the length cap) starts a fresh voyage with a confirming chime;
+    /// an empty field is rejected like any illegal entry.
+    fn apply_seed(&mut self, sounds: &mut SoundBank) -> PauseAction {
+        match self.seed_text.parse::<i64>() {
+            Ok(seed) => {
+                sounds.transaction(); // the coin chime confirms the new chart
+                self.open = false;
+                PauseAction::NewWorld(seed)
+            }
+            Err(_) => {
+                self.reject(sounds);
+                PauseAction::None
+            }
+        }
+    }
+
+    /// Reject an illegal seed entry: the buzzer plus a fresh red jiggle on the field.
+    fn reject(&mut self, sounds: &SoundBank) {
+        sounds.invalid();
+        self.seed_flash = Some(get_time());
+    }
+
+    /// The seed field's current `(dx, redness)` jiggle, or `(0, 0)` once it has
+    /// decayed — same shape as the port board's constraint flash.
+    fn seed_flash_state(&self) -> (f32, f32) {
+        match self.seed_flash {
+            Some(start) => {
+                let age = (get_time() - start) as f32;
+                if age >= FLASH_DUR {
+                    return (0.0, 0.0);
+                }
+                let decay = 1.0 - age / FLASH_DUR;
+                let dx = FLASH_AMP * (age * FLASH_FREQ * std::f32::consts::TAU).sin() * decay;
+                (dx, decay)
+            }
+            None => (0.0, 0.0),
+        }
+    }
+
     /// Draw the menu over the (frozen) scene.
     pub fn render(&self, sounds: &SoundBank, w: f32, h: f32) {
         // Dim the world behind the board so the parchment reads clearly.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
 
         let pw = 420.0_f32.min(w * 0.82);
-        // Tall enough for the Options view's five rows; the Main view just has more
-        // breathing room.
-        let ph = 440.0_f32.min(h * 0.85);
+        // Tall enough for the Options view's six rows (the seed field's hint adds a
+        // line); the Main view just has more breathing room.
+        let ph = 488.0_f32.min(h * 0.9);
         let x0 = (w - pw) * 0.5;
         let y0 = (h - ph) * 0.5;
         draw_rectangle(x0, y0, pw, ph, parchment());
@@ -226,6 +328,33 @@ impl PauseMenu {
         );
     }
 
+    /// Draw the world-seed row: label, the edit buffer right-aligned (with a caret
+    /// and an edit hint when focused), jiggling red toward the alarm ink when an
+    /// entry was just rejected.
+    fn render_seed_row(&self, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
+        let focused = self.cursor == ROW_SEED;
+        if focused {
+            // A taller highlight than the other rows to take in the edit hint below.
+            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 58.0, row_highlight());
+        }
+        draw_text("World Seed", cx, y, 24.0, ink());
+
+        // The value, with a blinking-free caret while focused so the field reads as
+        // editable; jiggles red on a rejected entry.
+        let value = if focused {
+            format!("{}_", self.seed_text)
+        } else {
+            self.seed_text.clone()
+        };
+        let (dx, red) = self.seed_flash_state();
+        let vw = measure_text(&value, None, 24, 1.0).width;
+        draw_text(&value, x0 + pw - pad - vw + dx, y, 24.0, flash_ink(red));
+
+        if focused {
+            draw_text("type digits · Enter sail a new chart", cx, y + 22.0, 15.0, dim_ink());
+        }
+    }
+
     fn render_options(
         &self,
         sounds: &SoundBank,
@@ -238,8 +367,12 @@ impl PauseMenu {
     ) {
         draw_text("Options", cx, y0 + 50.0, 36.0, ink());
 
-        // --- Master volume slider (row 0) ---
-        let row_y = y0 + 104.0;
+        // --- World seed field (row 0) ---
+        let seed_y = y0 + 100.0;
+        self.render_seed_row(cx, x0, seed_y, pw, pad);
+
+        // --- Master volume slider (row 1) ---
+        let row_y = y0 + 170.0;
         if self.cursor == ROW_MASTER {
             draw_rectangle(x0 + 12.0, row_y - 26.0, pw - 24.0, 70.0, row_highlight());
         }
@@ -266,7 +399,7 @@ impl PauseMenu {
             draw_text("◄ / ►", track_x, track_y + 34.0, 16.0, dim_ink());
         }
 
-        // --- Bloom toggle (row 1) ---
+        // --- Bloom toggle (row 2) ---
         // On the web these graphics rows are inert: show why instead of On/Off.
         let bloom_y = row_y + 80.0;
         if GRAPHICS_SUPPORTED {
@@ -275,7 +408,7 @@ impl PauseMenu {
             self.disabled_row(ROW_BLOOM, "Bloom", cx, x0, bloom_y, pw, pad);
         }
 
-        // --- MSAA 4× toggle (row 2) ---
+        // --- MSAA 4× toggle (row 3) ---
         let msaa_y = bloom_y + 40.0;
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_MSAA, "MSAA 4×", on_off(self.msaa), cx, x0, msaa_y, pw, pad);
@@ -283,11 +416,11 @@ impl PauseMenu {
             self.disabled_row(ROW_MSAA, "MSAA 4×", cx, x0, msaa_y, pw, pad);
         }
 
-        // --- Fullscreen toggle (row 3) ---
+        // --- Fullscreen toggle (row 4) ---
         let fs_y = msaa_y + 40.0;
         self.toggle_row(ROW_FULLSCREEN, "Fullscreen", on_off(self.fullscreen), cx, x0, fs_y, pw, pad);
 
-        // --- Back (row 4) ---
+        // --- Back (row 5) ---
         let back_y = y0 + ph - 56.0;
         if self.cursor == ROW_BACK {
             draw_rectangle(x0 + 12.0, back_y - 26.0, pw - 24.0, 38.0, row_highlight());
@@ -358,4 +491,18 @@ fn parchment_edge() -> Color {
 }
 fn row_highlight() -> Color {
     Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28)
+}
+/// The alarm red a rejected seed entry flashes toward (matches `port_view`).
+fn flash_red() -> Color {
+    Color::new(0.80, 0.13, 0.10, 1.0)
+}
+/// Ink blended toward the alarm red by `red` (0 = normal ink, 1 = full red).
+fn flash_ink(red: f32) -> Color {
+    let (a, b) = (ink(), flash_red());
+    Color::new(
+        a.r + (b.r - a.r) * red,
+        a.g + (b.g - a.g) * red,
+        a.b + (b.b - a.b) * red,
+        1.0,
+    )
 }
