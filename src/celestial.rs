@@ -195,6 +195,33 @@ fn draw_body(
     draw_circle(x, y, r, core);
 }
 
+/// A faint horizontal "twinkle streak" lying across a star: a four-point diamond
+/// (centre bright, the two horizontal tips and the slim top/bottom edges fading to
+/// transparent) so it reads as a thin flare of light. This is what fakes the bloom
+/// shimmer for builds that have no bloom (the web) — and restores it under MSAA,
+/// which smooths the sub-pixel aliasing the native bloom used to catch. Drawn as one
+/// small mesh, alpha-blended over the night sky like the star's own disc.
+fn draw_streak(x: f32, y: f32, half_len: f32, half_thick: f32, color: (f32, f32, f32), a: f32) {
+    if a <= 0.003 || half_len <= 0.1 {
+        return;
+    }
+    let bright = Color::new(color.0 / 255.0, color.1 / 255.0, color.2 / 255.0, a);
+    let edge = Color::new(color.0 / 255.0, color.1 / 255.0, color.2 / 255.0, 0.0);
+    let vertices = vec![
+        Vertex::new(x, y, 0.0, 0.0, 0.0, bright),            // 0 centre
+        Vertex::new(x - half_len, y, 0.0, 0.0, 0.0, edge),   // 1 left tip
+        Vertex::new(x, y - half_thick, 0.0, 0.0, 0.0, edge), // 2 top
+        Vertex::new(x + half_len, y, 0.0, 0.0, 0.0, edge),   // 3 right tip
+        Vertex::new(x, y + half_thick, 0.0, 0.0, 0.0, edge), // 4 bottom
+    ];
+    let indices = vec![0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1];
+    draw_mesh(&Mesh {
+        vertices,
+        indices,
+        texture: None,
+    });
+}
+
 /// Paint the stars (behind), then the moon, then the sun — all above the horizon,
 /// so the sea drawn afterwards covers anything dipping below it. `storm` dims the
 /// whole sky toward overcast.
@@ -230,6 +257,21 @@ pub fn draw(
                 let tw = 0.82 + 0.18 * (t * s.rate + s.phase).sin();
                 let a = clamp(base * tw, 0.0, 1.0);
                 let c = Color::new(s.color.0 / 255.0, s.color.1 / 255.0, s.color.2 / 255.0, a);
+                // Horizontal twinkle streak on the brighter stars (the faint pin-pricks
+                // stay plain). Two beat sines multiplied and cubed give a sharp,
+                // irregular sparkle — mostly dark with the odd bright flash — rather
+                // than a steady glow, so the streak *flickers* the way the old
+                // bloom-on-aliasing shimmer did. Length and brightness both ride the
+                // spark, so it darts out and snaps back.
+                if !s.faint {
+                    const STREAK_GAIN: f32 = 0.6;
+                    let beat = (t * s.rate * 1.7 + s.phase).sin()
+                        * (t * s.rate * 0.9 + s.phase * 2.3).sin();
+                    let spark = (0.5 + 0.5 * beat).powi(3);
+                    let sa = clamp(base * spark * STREAK_GAIN, 0.0, 1.0);
+                    let half_len = s.size * (2.5 + 9.0 * spark);
+                    draw_streak(x, y, half_len, s.size * 0.55, s.color, sa);
+                }
                 draw_circle(x, y, s.size, c);
             }
         }
