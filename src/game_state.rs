@@ -270,32 +270,6 @@ pub mod upgrades {
             })
         }
     }
-
-    /// A one-line description of the fitting's current → next effect.
-    pub fn effect(kind: UpgradeKind, s: &GameState) -> String {
-        match kind {
-            UpgradeKind::Hull => {
-                let lvl = s.hull_level;
-                format!(
-                    "{}->{} kn  hull {}->{}",
-                    peak_knots(lvl) as i32,
-                    peak_knots(lvl + 1) as i32,
-                    hull::max_hull(lvl),
-                    hull::max_hull(lvl + 1),
-                )
-            }
-            UpgradeKind::Sail => {
-                format!(
-                    "haul {}->{} units",
-                    max_haul(s.sail_level),
-                    max_haul(s.sail_level + 1)
-                )
-            }
-            UpgradeKind::Cargo => {
-                format!("{}->{} slots", s.hold_capacity, s.hold_capacity + CARGO_STEP)
-            }
-        }
-    }
 }
 
 // --- Hull (free functions; the logic of `shared.Hull`) -----------------------
