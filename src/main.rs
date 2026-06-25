@@ -1079,10 +1079,10 @@ async fn run_game(
         let point = wind.point_of_sail(kin.heading_rad).label();
         // Everything in one row, at one font size, dot-separated: a coin icon and
         // the purse, then speed · wind quarter · point of sail.
-        let fs = 24.0;
-        let baseline = 32.0;
+        let fs = 18.0;
+        let baseline = 26.0;
         // Coin icon, vertically centred on the text's cap height.
-        let r = 9.0;
+        let r = 7.0;
         let cx = 16.0 + r;
         let cy = baseline - fs * 0.34;
         let rim = Color::new(0.78, 0.58, 0.12, 1.0); // darker milled edge
@@ -1111,8 +1111,8 @@ async fn run_game(
             }
             let warn = Color::new(1.0, 0.78, 0.2, 1.0);
             let mut x = 16.0;
-            let y = 84.0;
-            let s = 16.0; // triangle size
+            let y = 56.0;
+            let s = 13.0; // triangle size
             for label in badges {
                 draw_triangle(
                     vec2(x + s * 0.5, y - s),
@@ -1120,10 +1120,10 @@ async fn run_game(
                     vec2(x + s, y),
                     warn,
                 );
-                draw_text("!", x + s * 0.5 - 2.5, y - 2.0, 18.0, Color::new(0.1, 0.05, 0.0, 1.0));
+                draw_text("!", x + s * 0.5 - 2.0, y - 2.0, 14.0, Color::new(0.1, 0.05, 0.0, 1.0));
                 let lx = x + s + 6.0;
-                draw_text(label, lx, y, 20.0, warn);
-                x = lx + measure_text(label, None, 20, 1.0).width + 18.0;
+                draw_text(label, lx, y, 15.0, warn);
+                x = lx + measure_text(label, None, 15, 1.0).width + 18.0;
             }
         }
 
