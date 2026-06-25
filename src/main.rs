@@ -602,10 +602,10 @@ async fn run_game(
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
             // whole hold — ordinary cargo *and* reserved mission goods riding along.
-            let scale = upgrades::speed_scale(gs.sail_level, gs.hold_used());
+            let top_speed = upgrades::top_speed(gs.sail_level, gs.hold_used());
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             let prev_pos = kin.pos;
-            kin = sailing::step_debuffed(kin, helm, wind, dt, scale, hull_debuff);
+            kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
             // Keep the hull out of every nearby island.
             let near = world.islands_near(kin.pos, 400.0);
             kin = sailing::resolve_grounding(kin, &near);
@@ -648,9 +648,9 @@ async fn run_game(
                 let target = &world.islands[r.target_id as usize];
                 match rival {
                     Some(rk) if race_running => {
-                        let scale = upgrades::speed_scale(gs.sail_level, 0);
+                        let top_speed = upgrades::top_speed(gs.sail_level, 0);
                         let rhelm = race::rival_helm(&rk, target.pos, wind);
-                        let stepped = sailing::step_scaled(rk, rhelm, wind, dt, scale);
+                        let stepped = sailing::step_with(rk, rhelm, wind, dt, top_speed);
                         let rnear = world.islands_near(stepped.pos, 400.0);
                         rival = Some(sailing::resolve_grounding(stepped, &rnear));
                         if race::reached(&kin, target) {
@@ -1022,7 +1022,7 @@ async fn run_game(
         if !look_back {
             spray.render(
                 &SprayInput {
-                    speed_frac: clamp(kin.speed() / sailing::MAX_SPEED, 0.0, 1.0),
+                    speed_frac: clamp(kin.speed() / sailing::BASE_TOP_SPEED, 0.0, 1.0),
                     slam,
                     heel_rate,
                     day_lit,

@@ -144,7 +144,10 @@ pub const BASE_CARGO: i32 = 16; // hold slots on a fresh ship
 pub const CARGO_STEP: i32 = 4; // slots added per cargo upgrade
 pub const STARTING_FOOD: i32 = 4;
 
-const BASE_TOP_KNOTS: f64 = 24.0;
+// The single source of the base top speed is the sailing engine's
+// `BASE_TOP_KNOTS` (an exact integer-valued f32, so the `as f64` is lossless); the
+// economy reads it back here in knots. Don't redefine it — keep one number.
+const BASE_TOP_KNOTS: f64 = crate::sailing::BASE_TOP_KNOTS as f64;
 const KNOTS_PER_SAIL_LEVEL: f64 = 4.0;
 const HAUL_BASE: i32 = 12;
 const HAUL_PER_SAIL_LEVEL: i32 = 6;
@@ -183,11 +186,13 @@ pub mod upgrades {
         peak * (1.0 - overload_penalty(sail_level, load))
     }
 
-    /// Top speed relative to a fresh, lightly-laden ship — the multiplier the
-    /// sailing engine scales its base top speed by, so a stronger rig runs
-    /// faster and an overladen hull crawls. 1.0 for a bare ship within haulage.
-    pub fn speed_scale(sail_level: i32, load: i32) -> f32 {
-        (top_knots(sail_level, load) / BASE_TOP_KNOTS) as f32
+    /// The ship's peak speed in engine units (m/s) — [`top_knots`] converted for
+    /// the sailing engine, which the ship hands to [`crate::sailing::step_with`] /
+    /// [`crate::sailing::step_debuffed`] as its own ceiling. A stronger rig runs
+    /// faster, an overladen hull crawls; a bare ship within haulage makes
+    /// [`crate::sailing::BASE_TOP_SPEED`].
+    pub fn top_speed(sail_level: i32, load: i32) -> f32 {
+        (top_knots(sail_level, load) * crate::sailing::KNOT as f64) as f32
     }
 
     pub fn cargo_capacity(cargo_level: i32) -> i32 {
