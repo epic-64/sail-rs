@@ -47,8 +47,10 @@ smooth frame rate. A debug `cargo run` works but is choppier.
 | **T / Y** | Advance / rewind the time of day. |
 | **`[` / `]`** | Back / veer the wind (dev aid for feeling the points of sail). |
 | **L** | Open / close the captain's log (**← / →** turn pages while open). |
-| **B** | Toggle bloom (native only). |
 | **Esc** | Close the log / open the pause menu / quit. |
+
+Bloom and 4× MSAA are toggled in the pause menu's **Options** (native only — both show as
+"Not supported" on the web; see below).
 | *In port* | **Arrows** move cursor · **Tab** switch board · **Enter** trade · **Esc** set sail. |
 
 ## Building for the web / itch.io
