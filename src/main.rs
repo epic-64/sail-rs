@@ -303,18 +303,17 @@ async fn main() {
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
-    // the water's reflections). Toggle with B.
+    // the water's reflections). Bloom and the 4× MSAA on the scene are toggled in the
+    // pause menu's Options (`pause.bloom()` / `pause.msaa()`), defaulting on natively.
+    //
+    // Both render the scene into an offscreen target: bloom blurs the bright parts,
+    // and MSAA resolves multisamples on the scene texture. Either way miniquad issues
+    // a WebGL2/MRT `drawBuffers` call for the render-to-texture pass, which is
+    // unavailable in many web environments (itch's iframe / fingerprint blockers don't
+    // expose `WEBGL_draw_buffers`). So on the web both are OFF and unsupported — the
+    // scene draws straight to the default framebuffer (no RTT, no WebGL2 calls) — and
+    // the pause menu shows them as "Not supported" there.
     let mut bloom = bloom::Bloom::new();
-    // Bloom renders the scene into an offscreen target, and miniquad issues a
-    // WebGL2/MRT `drawBuffers` call for any render-to-texture pass. That call is
-    // unavailable in many web environments (itch's iframe / fingerprint blockers
-    // don't expose `WEBGL_draw_buffers`), so bloom is OFF on the web — the scene
-    // draws straight to the default framebuffer (no RTT, no WebGL2 calls). Native
-    // keeps bloom and its B-key toggle.
-    #[cfg(target_arch = "wasm32")]
-    let bloom_on = false;
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut bloom_on = true;
 
     // Build the world and start the captain just off the home cluster's shipyard
     // port, bow pointed at it, so there's land in view from the first frame.
@@ -713,10 +712,6 @@ async fn main() {
                     log_spread = log_spread.saturating_sub(1);
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            if is_key_pressed(KeyCode::B) {
-                bloom_on = !bloom_on;
-            }
             if is_key_pressed(KeyCode::Escape) {
                 if log_open {
                     log_open = false;
@@ -799,12 +794,25 @@ async fn main() {
         // sea and sky, so everything world-anchored is over-scanned past the screen
         // edges by this much (sized to cover the clamped roll + translate).
         let overscan = w.max(h) * 0.25 + 60.0;
+        // Graphics settings for this frame (always off on the web — see the pause menu).
+        let bloom_on = pause.bloom();
+        let msaa_on = pause.msaa();
+        // Natively the world is always rendered into an offscreen scene target, so the
+        // MSAA setting governs the wave AA directly (a plain, single-sampled target
+        // means MSAA-off truly aliases, rather than the window's default-framebuffer
+        // MSAA leaking in). Bloom then reads that target, or it's blitted straight over.
+        // On the web there's no render-to-texture, so the world draws to the screen.
+        #[cfg(target_arch = "wasm32")]
+        let to_target = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let to_target = true;
         let mut world_cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, w, h));
-        if bloom_on {
-            // Render the world into the bloom's scene texture. Rendering to a target
-            // flips `invert_y`, which cancels the screen flip below — so leave `zoom.y`
-            // as `from_display_rect` set it and the net matrix matches the screen path.
-            world_cam.render_target = Some(bloom.scene_target(w, h));
+        if to_target {
+            // Render the world into the scene texture (MSAA-resolved when enabled).
+            // Rendering to a target flips `invert_y`, which cancels the screen flip
+            // below — so leave `zoom.y` as `from_display_rect` set it and the net matrix
+            // matches the screen path. The bloom composite / plain blit flips it back.
+            world_cam.render_target = Some(bloom.scene_target(w, h, msaa_on));
         } else {
             // `from_display_rect` builds its zoom for render-to-texture; drawn straight
             // to the screen it comes out vertically flipped. Flip `zoom.y` back so the
@@ -936,10 +944,15 @@ async fn main() {
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
-        // viewport rather than riding the swell. With bloom on, this also extracts and
-        // blurs the bright parts of the scene texture and composites them to the screen.
-        if bloom_on {
-            bloom.render_to_screen(w, h);
+        // viewport rather than riding the swell. If the world went to the scene target,
+        // bring it to the screen now: bloom extracts/blurs the bright parts and
+        // composites, otherwise (MSAA-only) the resolved scene is blitted straight over.
+        if to_target {
+            if bloom_on {
+                bloom.render_to_screen(w, h);
+            } else {
+                bloom.blit_scene_to_screen(w, h);
+            }
         } else {
             set_default_camera();
         }
