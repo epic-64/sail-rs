@@ -167,11 +167,12 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// (`main::draw_sky`) and the sky the water reflects (`main`) all key off this, so
 /// they drop to the dark-blue/cyan night palette together — no warm tint lingering on
 /// the water once the sky has gone dark. The window holds the full sunset colour
-/// through the moment the sun touches the horizon, then fades to full night over the
-/// following dusk (~25 s at the day's pace) — long enough to enjoy the red glow off
-/// the water without it overstaying into the night.
+/// through the moment the sun touches the horizon, then fades to full night only once
+/// the sun is well below it — a long, slow dusk so the red glow and the purpleish
+/// after-light both get a good spell on the water before the blue/cyan night palette
+/// takes over.
 pub fn night_factor(sun_alt: f32) -> f32 {
-    1.0 - smoothstep(-0.32, -0.02, sun_alt)
+    1.0 - smoothstep(-0.7, -0.04, sun_alt)
 }
 
 /// The sun's altitude-sine at clock `tod` (0 = midnight, ¼ sunrise, ½ noon, ¾ sunset).
