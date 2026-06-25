@@ -628,79 +628,148 @@ impl PortScreen {
         }
     }
 
+    /// Two cleanly split sections: **Drydock** (hull repair, always at the top)
+    /// and **Shipyard** (the three orthogonal fittings). Each fitting gets its own
+    /// roomy multi-row block — a title, two data lines, and a cost/chip — so every
+    /// element reads at one body size instead of a cramped single line.
     fn render_yard(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
-        let fs = 20;
-        let label_x = x;
-        let detail_r = x + w * 0.66;
-        let cost_r = x + w * 0.80;
-        let action_x = x + w * 0.82;
+        let title_fs = 20;
+        let body_fs = 18;
+        let head_fs = 18;
+        let right = x + w;
+        let val_x = x + w * 0.34; // inner column where stat values begin
+        let chip_w = 112.0;
+        let chip_x = right - chip_w;
+        let cost_r = chip_x - 16.0; // cost right-aligned just left of the chip
 
-        draw_text("Drydock & Shipyard", label_x, y, fs as f32, dim_ink());
-        draw_line(x, y + 8.0, x + w, y + 8.0, 1.0, dim_ink());
-
-        let row_h = 40.0;
-        let mut ry = y + 38.0;
-
-        // A right-aligned action chip for a yard row (styling kept simple: a
-        // disabled row just no-ops when activated).
-        let chip = |ry: f32, focused: bool, label: &str| {
-            button(action_x, ry - 18.0, x + w - action_x, 26.0, label, focused);
+        // An eyebrow section header with an underline rule spanning the board.
+        let header = |label: &str, ry: f32| {
+            draw_text(label, x, ry, head_fs as f32, dim_ink());
+            draw_line(x, ry + 8.0, right, ry + 8.0, 1.0, dim_ink());
+        };
+        // One data line: dim label on the left, value at the inner column.
+        let stat = |label: &str, value: &str, ry: f32| {
+            draw_text(label, x, ry, body_fs as f32, dim_ink());
+            draw_text(value, val_x, ry, body_fs as f32, ink());
+        };
+        // The block's right edge: a cost, with the action chip below it, the pair
+        // vertically centred against the block's three rows.
+        let cost_chip = |ry: f32, cost: &str, label: &str, focused: bool| {
+            right_text(cost, cost_r, ry + 38.0, body_fs);
+            button(chip_x, ry + 18.0, chip_w, 30.0, label, focused);
         };
 
-        // Drydock: mend the hull.
+        // A focusable block is 80 px tall: title at +18, two data lines at +40/+60.
+        const BLOCK_H: f32 = 80.0;
+        let highlight = |ry: f32| {
+            draw_rectangle(x - 8.0, ry - 2.0, w + 16.0, 70.0, row_highlight());
+        };
+
+        let mut ry = y;
+
+        // ===== Drydock — hull repair (always available) =====================
+        header("DRYDOCK · HULL REPAIR", ry);
+        ry += 30.0;
         {
             let active = self.focus == Focus::Repair;
             if active {
-                draw_rectangle(x - 6.0, ry - 20.0, w + 12.0, row_h - 6.0, row_highlight());
+                highlight(ry);
             }
-            let dmg = hull::damage(gs);
-            draw_text("Hull · Mend", label_x, ry, fs as f32, ink());
+            draw_text("Hull · Mend", x, ry + 18.0, title_fs as f32, ink());
             let cond = format!(
                 "{} / {} ({}%)",
                 gs.hull,
                 gs.max_hull(),
                 (hull::fraction(gs) * 100.0).round() as i32
             );
-            right_text(&cond, detail_r, ry, fs);
-            let cost = if dmg <= 0 {
-                "—".to_string()
+            stat("Condition", &cond, ry + 40.0);
+            // The handicaps a battered hull is currently suffering (sound when none).
+            let pens = hull::penalty_lines(hull::fraction(gs));
+            let handling = if pens.is_empty() {
+                "sound — no work needed".to_string()
             } else {
-                format!("{}", hull::repair_cost(gs))
+                pens.iter()
+                    .map(|(k, v)| format!("{} {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("  ·  ")
             };
-            right_text(&cost, cost_r, ry, fs);
-            chip(ry, active, if dmg <= 0 { "Sound" } else { "Repair" });
-            ry += row_h;
+            stat("Handling", &handling, ry + 60.0);
+            let dmg = hull::damage(gs);
+            let cost = if dmg <= 0 { "—".to_string() } else { hull::repair_cost(gs).to_string() };
+            cost_chip(ry, &cost, if dmg <= 0 { "Sound" } else { "Repair" }, active);
+            ry += BLOCK_H;
         }
 
-        // Shipyard: hull (speed), sail (haul) & cargo (slots) upgrades. Levels are
-        // shown 1-indexed (the starter ship is Lv 1) to match the captain's parlance.
+        // ===== Shipyard — hull / sails / hold fittings ======================
+        header("SHIPYARD · OUTFITTING", ry);
+        ry += 30.0;
         if self.is_shipyard(world) {
             for kind in [UpgradeKind::Hull, UpgradeKind::Sail, UpgradeKind::Cargo] {
                 let active = self.focus == Focus::Upgrade(kind);
                 if active {
-                    draw_rectangle(x - 6.0, ry - 20.0, w + 12.0, row_h - 6.0, row_highlight());
+                    highlight(ry);
                 }
                 let lvl0 = upgrades::level_of(kind, gs);
-                let name = match kind {
-                    UpgradeKind::Hull => format!("{} · {}", kind.label(), hull_mark(lvl0)),
+                // Levels shown 1-indexed (the starter ship is Lv 1); the hull reads
+                // as a mark (Mk I..IV) to match the captain's parlance.
+                let title = match kind {
+                    UpgradeKind::Hull => format!("Hull · {}", hull_mark(lvl0)),
                     _ => format!("{} · Lv {}", kind.label(), lvl0 + 1),
                 };
-                draw_text(&name, label_x, ry, fs as f32, ink());
-                right_text(&upgrades::effect(kind, gs), detail_r, ry, 16);
+                draw_text(&title, x, ry + 18.0, title_fs as f32, ink());
+
+                // Two data lines per fitting: the upgrade's current->next gain, then
+                // a live readout of how the ship stands against it today.
+                let maxed = upgrades::next_cost(kind, gs).is_none();
+                match kind {
+                    UpgradeKind::Hull => {
+                        let s0 = upgrades::peak_knots(lvl0) as i32;
+                        let h0 = hull::max_hull(lvl0);
+                        if maxed {
+                            stat("Top speed", &format!("{} kn", s0), ry + 40.0);
+                            stat("Hull points", &h0.to_string(), ry + 60.0);
+                        } else {
+                            let s1 = upgrades::peak_knots(lvl0 + 1) as i32;
+                            let h1 = hull::max_hull(lvl0 + 1);
+                            stat("Top speed", &format!("{} -> {} kn", s0, s1), ry + 40.0);
+                            stat("Hull points", &format!("{} -> {}", h0, h1), ry + 60.0);
+                        }
+                    }
+                    UpgradeKind::Sail => {
+                        let haul = upgrades::max_haul(gs.sail_level);
+                        if maxed {
+                            stat("Haul capacity", &format!("{} units", haul), ry + 40.0);
+                        } else {
+                            let h1 = upgrades::max_haul(gs.sail_level + 1);
+                            stat("Haul capacity", &format!("{} -> {} units", haul, h1), ry + 40.0);
+                        }
+                        stat("Now carrying", &format!("{} / {} units", gs.hold_used(), haul), ry + 60.0);
+                    }
+                    UpgradeKind::Cargo => {
+                        let cap = gs.hold_capacity;
+                        if maxed {
+                            stat("Cargo slots", &cap.to_string(), ry + 40.0);
+                        } else {
+                            let next = upgrades::cargo_capacity(lvl0 + 1);
+                            stat("Cargo slots", &format!("{} -> {}", cap, next), ry + 40.0);
+                        }
+                        stat("In use", &format!("{} / {} slots", gs.hold_used(), cap), ry + 60.0);
+                    }
+                }
+
                 let (cost, label) = match upgrades::next_cost(kind, gs) {
                     None => ("MAX".to_string(), "Maxed"),
                     Some(c) => (c.to_string(), "Fit"),
                 };
-                right_text(&cost, cost_r, ry, fs);
-                chip(ry, active, label);
-                ry += row_h;
+                cost_chip(ry, &cost, label, active);
+                ry += BLOCK_H;
             }
         } else {
             draw_text(
                 "No shipyard here — find a shipyard port to outfit.",
-                label_x,
-                ry + 6.0,
-                16.0,
+                x,
+                ry + 16.0,
+                body_fs as f32,
                 dim_ink(),
             );
         }
