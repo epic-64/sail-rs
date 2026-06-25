@@ -5,8 +5,8 @@
 //! the **calm** sea bed is the base ambience (ducked as a gale rises), and the
 //! **storm** bed swells with the gale's fury. Over the top sit one-shot cues:
 //! a canvas *flap* when sail is raised or lowered, a transition *whoosh* when the
-//! wind shifts quarter, and a coin *chime* on a successful trade, repair or
-//! upgrade.
+//! wind shifts quarter, a coin *chime* on a successful trade, repair or upgrade,
+//! and a brighter *chime* when the hull scoops up floating salvage.
 //!
 //! macroquad's bundled mixer (quad-snd → audrey) only decodes WAV/OGG, but the
 //! shipped clips are MP3, so each is decoded to PCM with `symphonia` at load and
@@ -52,6 +52,9 @@ const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
 const WIND_SHIFT_MP3: &[u8] = snd!("universfield-transition-02-141076.mp3");
 // The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`).
 const COIN_MP3: &[u8] = snd!("collect-coin.mp3");
+// The bright chime as the hull scoops floating salvage (`SailingView.collectSound`)
+// — a distinct clip from the trade coin.
+const SALVAGE_MP3: &[u8] = snd!("collect-item.mp3");
 // Race result one-shots: a triumphant chime on a win, a glum jingle on a loss
 // (`SailingView.raceWonSound` / `raceLostSound`).
 const RACE_WON_MP3: &[u8] = snd!("pw23check-winning-218995.mp3");
@@ -64,7 +67,7 @@ const INVALID_MP3: &[u8] = snd!("invalid-input.mp3");
 // ceiling) and the gain of the one-shot cues. These mirror the per-clip volumes
 // the original `SailingView`/`PortView` assigned to each `<audio>` element: the
 // sailing/calm/storm beds at 0.5/0.5/0.6, the flap/wind-shift/coin one-shots at
-// the browser default 1.0, salvage (the old `collect-item` clip) at 0.6, and the
+// the browser default 1.0, salvage (the `collect-item` clip) at 0.6, and the
 // race stings toned right down to 0.25 since their clips are mastered hot.
 const SAIL_MAX_VOL: f32 = 0.5;
 const CALM_MAX_VOL: f32 = 0.5;
@@ -92,6 +95,7 @@ pub struct SoundBank {
     flap_down: Sound,
     wind_shift: Sound,
     coin: Sound,
+    salvage: Sound,
     race_won: Sound,
     race_lost: Sound,
     invalid: Sound,
@@ -115,6 +119,7 @@ impl SoundBank {
         let flap_down = load_clip(FLAP_DOWN_MP3).await;
         let wind_shift = load_clip(WIND_SHIFT_MP3).await;
         let coin = load_clip(COIN_MP3).await;
+        let salvage = load_clip(SALVAGE_MP3).await;
         let race_won = load_clip(RACE_WON_MP3).await;
         let race_lost = load_clip(RACE_LOST_MP3).await;
         let invalid = load_clip(INVALID_MP3).await;
@@ -133,6 +138,7 @@ impl SoundBank {
             flap_down,
             wind_shift,
             coin,
+            salvage,
             race_won,
             race_lost,
             invalid,
@@ -217,14 +223,14 @@ impl SoundBank {
         );
     }
 
-    /// A coin *chime* — salvage hauled aboard from the swell. Shares the trade
-    /// chime's clip (the same "gold in the purse" cue) but plays at the original
-    /// `collect-item` level, restarted so a rapid run of pickups retriggers
-    /// cleanly rather than piling up.
+    /// A bright *chime* — salvage hauled aboard from the swell. Its own clip
+    /// (`collect-item`), distinct from the trade coin, played at the original
+    /// level and restarted so a rapid run of pickups retriggers cleanly rather
+    /// than piling up.
     pub fn salvage(&self) {
-        stop_sound(&self.coin);
+        stop_sound(&self.salvage);
         play_sound(
-            &self.coin,
+            &self.salvage,
             PlaySoundParams { looped: false, volume: SALVAGE_VOL * self.master },
         );
     }
@@ -368,6 +374,7 @@ mod tests {
             ("flap_down", FLAP_DOWN_MP3),
             ("wind_shift", WIND_SHIFT_MP3),
             ("coin", COIN_MP3),
+            ("salvage", SALVAGE_MP3),
             ("race_won", RACE_WON_MP3),
             ("race_lost", RACE_LOST_MP3),
             ("invalid", INVALID_MP3),
