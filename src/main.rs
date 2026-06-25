@@ -294,8 +294,42 @@ fn compass(bearing_rad: f32) -> &'static str {
     POINTS[(deg as usize) % 8]
 }
 
+/// How a single voyage ended: the captain quit outright, or entered a new world
+/// seed in the options (begin a fresh voyage on that seed).
+enum GameExit {
+    Quit,
+    NewWorld(i64),
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
+    // The audio bed and the pause menu outlive any one world: the bank is costly to
+    // decode (do it once), and the menu carries the options plus the world-seed
+    // field the captain edits between charts. Bloom owns offscreen render targets,
+    // so it persists too rather than reallocating them on every new world.
+    let mut sounds = sound::SoundBank::load().await;
+    let mut pause = pause_menu::PauseMenu::new();
+    let mut bloom = bloom::Bloom::new();
+
+    // The world seed. Start on 1; changing it in the options ends the current voyage
+    // and loops back here to begin a fresh one on the new chart.
+    let mut seed: i64 = 1;
+    loop {
+        match run_game(seed, &mut sounds, &mut pause, &mut bloom).await {
+            GameExit::Quit => break,
+            GameExit::NewWorld(s) => seed = s,
+        }
+    }
+}
+
+/// Run one voyage on `seed` until the captain quits or enters a new world seed.
+/// `sounds`/`pause`/`bloom` are owned by `main` and persist across worlds.
+async fn run_game(
+    seed: i64,
+    sounds: &mut sound::SoundBank,
+    pause: &mut pause_menu::PauseMenu,
+    bloom: &mut bloom::Bloom,
+) -> GameExit {
     // The day/night clock: a value in [0,1) that runs continuously (0 = midnight,
     // ¼ sunrise, ½ noon, ¾ sunset), wrapping every `DAY_LENGTH` seconds. The sky,
     // sea, sun, moon and stars are all derived from it.
@@ -312,12 +346,12 @@ async fn main() {
     // unavailable in many web environments (itch's iframe / fingerprint blockers don't
     // expose `WEBGL_draw_buffers`). So on the web both are OFF and unsupported — the
     // scene draws straight to the default framebuffer (no RTT, no WebGL2 calls) — and
-    // the pause menu shows them as "Not supported" there.
-    let mut bloom = bloom::Bloom::new();
+    // the pause menu shows them as "Not supported" there. (`bloom` is owned by
+    // `main` and handed in, so it survives a change of world.)
 
     // Build the world and start the captain just off the home cluster's shipyard
     // port, bow pointed at it, so there's land in view from the first frame.
-    let world = world::generate(1);
+    let world = world::generate(seed);
     // A fixed dome of stars, seeded off the world so it's the same each run.
     let stars = celestial::StarField::new(world.seed ^ 0x5741, 260);
     // Each island's scenery is deterministic; generate it once. `islands` is in id
@@ -344,13 +378,8 @@ async fn main() {
     // a starting purse and larder, free to sail in and dock.
     let mut gs = GameState::start();
     let mut harbor = Harbor::new();
-    // The pause menu (Esc in open water): freezes the voyage and offers
-    // Resume / Options (master volume) / Quit.
-    let mut pause = pause_menu::PauseMenu::new();
-
-    // The audio bed: three ambient loops (sailing/calm/storm) cross-faded by sea
-    // state, plus one-shot cues for wind shifts and trades. Loaded once up front.
-    let mut sounds = sound::SoundBank::load().await;
+    // The pause menu (`pause`, Esc in open water) and the audio bed (`sounds`) are
+    // owned by `main` and handed in so they survive a change of world.
 
     // The weather drifts automatically along a calm→storm ladder, biased toward
     // calm so fair seas dominate (see weather.rs). It drives the eased sea-state
@@ -453,9 +482,12 @@ async fn main() {
         // again by the helm's own Esc handler and reopen the menu the same frame.
         let paused = pause.open;
         if paused {
-            match pause.handle_input(&mut sounds) {
+            match pause.handle_input(sounds) {
                 pause_menu::PauseAction::Resume => pause.open = false,
-                pause_menu::PauseAction::Quit => break,
+                pause_menu::PauseAction::Quit => return GameExit::Quit,
+                // A new seed ends this voyage; `main` loops back to build the new
+                // world. The menu has already closed itself on apply.
+                pause_menu::PauseAction::NewWorld(s) => return GameExit::NewWorld(s),
                 pause_menu::PauseAction::None => {}
             }
         }
@@ -515,7 +547,7 @@ async fn main() {
                 let set_sail = harbor
                     .screen
                     .as_mut()
-                    .map(|s| s.handle_input(&mut gs, &world, &market, &sounds))
+                    .map(|s| s.handle_input(&mut gs, &world, &market, sounds))
                     .unwrap_or(true);
                 if set_sail {
                     harbor.set_sail(&mut gs);
@@ -1185,7 +1217,7 @@ async fn main() {
 
         // The pause menu sits over everything (it only opens in open water).
         if pause.open {
-            pause.render(&sounds, w, h);
+            pause.render(sounds, w, h);
         }
 
         next_frame().await
