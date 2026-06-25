@@ -205,7 +205,12 @@ impl PortScreen {
             Tab::Market => (0..Good::ALL.len()).map(Focus::Good).collect(),
             Tab::Contracts => {
                 let mut v = Vec::new();
-                v.extend(mission::offered_at(gs, world).iter().map(|m| Focus::Contract(m.id)));
+                // A hull too battered to be hired can't take on *new* contracts, so
+                // those rows aren't focusable — but deliveries owed and abandoning
+                // reserved cargo stay open.
+                if hull::can_take_jobs(gs) {
+                    v.extend(mission::offered_at(gs, world).iter().map(|m| Focus::Contract(m.id)));
+                }
                 v.extend(mission::deliverable_at(gs, world).iter().map(|m| Focus::Delivery(m.id)));
                 v.extend(mission::reserved_at(gs, world).iter().map(|m| Focus::Manifest(m.id)));
                 v
@@ -224,6 +229,9 @@ impl PortScreen {
             Tab::Race => {
                 if gs.race.is_some() {
                     vec![Focus::RaceWithdraw]
+                } else if !hull::can_take_jobs(gs) {
+                    // Too battered to be staked in a race — no rival rows to pick.
+                    Vec::new()
                 } else {
                     race::offers(gs, world)
                         .iter()
@@ -734,6 +742,18 @@ impl PortScreen {
             return;
         }
 
+        if !hull::can_take_jobs(gs) {
+            // No harbour will stake a wreck — flag it where the rival card would be.
+            draw_text(
+                "Hull too battered — no harbour will stake you in a race.",
+                x,
+                ry,
+                18.0,
+                flash_red(),
+            );
+            return;
+        }
+
         let offers = race::offers(gs, world);
         if offers.is_empty() {
             draw_text(
@@ -839,7 +859,18 @@ impl PortScreen {
         ry += 30.0;
 
         let offered = mission::offered_at(gs, world);
-        if offered.is_empty() {
+        if !hull::can_take_jobs(gs) {
+            // A hull below 30% is too disreputable to be hired — flag it plainly so
+            // the failed Accept isn't a mystery.
+            draw_text(
+                "Hull too battered — no cargo will be entrusted to you.",
+                x,
+                ry,
+                fs as f32,
+                flash_red(),
+            );
+            ry += row_h;
+        } else if offered.is_empty() {
             draw_text("No contracts on the board.", x, ry, fs as f32, dim_ink());
             ry += row_h;
         } else {
@@ -927,9 +958,22 @@ impl PortScreen {
 
 /// Render the "press Space to dock" call-to-action when a port is in range,
 /// drawn in screen space over the sea. `sail_struck` gates the action text.
-pub fn render_prompt(harbor: &Harbor, world: &World, sail_struck: bool, w: f32, h: f32) {
+/// `race_target` is the finish-line island of a race in progress (if any): we
+/// suppress the prompt there so a novice doesn't strike sail short of the line.
+pub fn render_prompt(
+    harbor: &Harbor,
+    world: &World,
+    sail_struck: bool,
+    race_target: Option<i32>,
+    w: f32,
+    h: f32,
+) {
     let Some(id) = harbor.dockable else { return };
     if harbor.is_open() {
+        return;
+    }
+    // Don't urge "strike sail to enter port" at the very island we're racing to.
+    if race_target == Some(id) {
         return;
     }
     let name = &world.islands[id as usize].name;

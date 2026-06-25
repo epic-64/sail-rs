@@ -172,6 +172,10 @@ mod tests {
         let mut gs = GameState::start();
         gs.gold = 100_000;
         gs.hold_capacity = 1000;
+        // A roomy hold raises max hull, so fill it: a flush captain's hull is sound
+        // (else the 30%-hull job ban would refuse these contracts). See
+        // `game_state::hull::can_take_jobs`.
+        gs.hull = gs.max_hull();
         gs.location = Location::Docked(0);
         gs
     }

@@ -286,6 +286,35 @@ fn page_vessel(p: &Page, gs: &GameState) {
         (format!("-{pen_pct}%"), alarm_ink())
     };
     row_colored("Speed penalty", &pen_txt, pen_col, p.x, y, p.col_w, fs);
+    y += lh * 0.7;
+
+    // Hull-condition handicaps: the no-go zone, helm and top-speed penalties a
+    // battered hull suffers (see `game_state::hull::debuff`). Listed only when in
+    // force, with the harbourmaster's job ban flagged below a quarter hull… er,
+    // below 30% hull.
+    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    y += lh * 0.8;
+    heading_minor(p, "Hull condition", y);
+    y += lh * 0.9;
+    let penalties = hull::penalty_lines(frac);
+    if penalties.is_empty() {
+        row_colored("Handling", "sound", ink(), p.x, y, p.col_w, fs);
+        y += lh;
+    } else {
+        for (label, value) in &penalties {
+            row_colored(label, value, warn_ink(), p.x, y, p.col_w, fs);
+            y += lh;
+        }
+    }
+    if frac <= hull::JOB_REFUSE_FRACTION {
+        row_colored("Contracts & races", "refused", alarm_ink(), p.x, y, p.col_w, fs);
+    }
+}
+
+/// A smaller sub-heading within a page body, used to group the hull-condition
+/// readout below the rig figures.
+fn heading_minor(p: &Page, text: &str, y: f32) {
+    draw_text(text, p.x, y, 20.0, dim_ink());
 }
 
 /// **The Hold** — the laden fraction with a fill bar, then the manifest.
