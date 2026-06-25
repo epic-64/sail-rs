@@ -26,6 +26,7 @@ mod race;
 mod rival_render;
 mod rng;
 mod sailing;
+mod save;
 mod ship_render;
 mod sound;
 mod spray;
@@ -309,11 +310,15 @@ async fn main() {
     // the sans and serif faces via `font::use_*`. See `font.rs`.
     font::init();
 
-    // The world seed. Start on 1; changing it in the options ends the current voyage
-    // and loops back here to begin a fresh one on the new chart.
-    let mut seed: i64 = 1;
+    // Continue a saved voyage if one is on disk / in localStorage: its seed picks
+    // the chart and the save is handed to `run_game` to restore the captain's
+    // progress. Otherwise start a fresh voyage on seed 1. Entering a new seed in
+    // the options begins a fresh chart (no restore); each voyage autosaves as it
+    // runs (see `run_game`), so the continued state is always current.
+    let mut restore = save::Save::load();
+    let mut seed: i64 = restore.as_ref().map(|s| s.seed).unwrap_or(1);
     loop {
-        match run_game(seed, &mut sounds, &mut pause, &mut bloom).await {
+        match run_game(seed, restore.take(), &mut sounds, &mut pause, &mut bloom).await {
             GameExit::Quit => break,
             GameExit::NewWorld(s) => seed = s,
         }
@@ -324,6 +329,7 @@ async fn main() {
 /// `sounds`/`pause`/`bloom` are owned by `main` and persist across worlds.
 async fn run_game(
     seed: i64,
+    restore: Option<save::Save>,
     sounds: &mut sound::SoundBank,
     pause: &mut pause_menu::PauseMenu,
     bloom: &mut bloom::Bloom,
@@ -440,6 +446,63 @@ async fn run_game(
     let mut race_ready = false;
     let mut race_running = false;
 
+    // --- Continue a saved voyage -------------------------------------------------
+    // If `main` handed us a save (its seed already chose this chart), overwrite the
+    // fresh-start defaults with the persisted progress: the purse/cargo/hull/missions/
+    // booked race, the ship's position and trim, the day clock, the sail notch, and
+    // the wind's quarter. The world itself was regenerated from the seed, so only
+    // voyage state is restored — and this runs before the traders, flotsam and the
+    // main loop read the ship's position, so they spawn around where she really is.
+    if let Some(s) = restore {
+        gs = s.gs;
+        kin = s.kin;
+        tod = s.tod;
+        sail_mode = s.sail_mode.min(SAIL_FRACTIONS.len() - 1);
+        wind.toward_rad = s.wind_toward;
+        // The rival and race phase ride along, so a race that was already under way
+        // resumes mid-course (rival where it was, still running) rather than rewinding
+        // to the approach.
+        rival = s.rival;
+        race_ready = s.race_ready;
+        race_running = s.race_running;
+        // Was docked when saved: reopen the trading board so she reads as in port,
+        // not parked at sea on a port's coordinates.
+        if let Some(id) = gs.docked_island_id() {
+            harbor.reopen_docked(id);
+        } else if let Some(r) = gs.race {
+            // A race was booked and she was at sea but the rival wasn't saved (an
+            // older save, or a race booked but never cast off): put the rival back at
+            // the line so the (paid-for) mark can still be contested — the approach
+            // restarts. A rival saved on the water above is left untouched.
+            if rival.is_none() {
+                let target = &world.islands[r.target_id as usize];
+                rival = Some(race::rival_start(&kin, target, RACE_START_GAP));
+                race_ready = false;
+                race_running = false;
+            }
+        }
+    }
+    // Make the on-disk save match the voyage actually being played from the first
+    // frame — a fresh start, a new-seed chart, or this restored save — so a quick
+    // quit can't leave a stale save from a previous seed behind.
+    save::store(
+        seed,
+        &gs,
+        &kin,
+        tod,
+        sail_mode,
+        wind.toward_rad,
+        rival,
+        race_ready,
+        race_running,
+    );
+
+    // Seconds since the last autosave; the voyage is persisted every
+    // `AUTOSAVE_PERIOD` so closing the browser tab (which fires no quit) loses at
+    // most that much progress.
+    let mut autosave_timer: f32 = 0.0;
+    const AUTOSAVE_PERIOD: f32 = 15.0;
+
     // The local cluster's wandering traders: a small fleet of merchant craft that
     // ply fixed circuits of nearby ports, tacking up to those that lie upwind and
     // lying to for a minute or so on arrival before the next leg. Only the fleet of
@@ -490,7 +553,21 @@ async fn run_game(
         if paused {
             match pause.handle_input(sounds) {
                 pause_menu::PauseAction::Resume => pause.open = false,
-                pause_menu::PauseAction::Quit => return GameExit::Quit,
+                pause_menu::PauseAction::Quit => {
+                    // Persist the voyage before leaving so quitting resumes here.
+                    save::store(
+                        seed,
+                        &gs,
+                        &kin,
+                        tod,
+                        sail_mode,
+                        wind.toward_rad,
+                        rival,
+                        race_ready,
+                        race_running,
+                    );
+                    return GameExit::Quit;
+                }
                 // A new seed ends this voyage; `main` loops back to build the new
                 // world. The menu has already closed itself on apply.
                 pause_menu::PauseAction::NewWorld(s) => return GameExit::NewWorld(s),
@@ -1262,6 +1339,27 @@ async fn run_game(
         // The pause menu sits over everything (it only opens in open water).
         if pause.open {
             pause.render(sounds, w, h);
+        }
+
+        // Periodic autosave: while the world is live (not frozen by the pause menu),
+        // persist the now-updated voyage every few seconds so an unexpected exit —
+        // closing the browser tab, a crash — resumes within seconds of here.
+        if !paused {
+            autosave_timer += dt;
+            if autosave_timer >= AUTOSAVE_PERIOD {
+                autosave_timer = 0.0;
+                save::store(
+                    seed,
+                    &gs,
+                    &kin,
+                    tod,
+                    sail_mode,
+                    wind.toward_rad,
+                    rival,
+                    race_ready,
+                    race_running,
+                );
+            }
         }
 
         next_frame().await

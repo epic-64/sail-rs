@@ -89,6 +89,13 @@ impl Harbor {
         }
     }
 
+    /// Re-open the trading board at `id` for a voyage restored from a save that was
+    /// docked when stored. The world is rebuilt fresh from the seed, so the
+    /// [`PortScreen`] must be recreated; `gs.location` is already `Docked(id)`.
+    pub fn reopen_docked(&mut self, id: i32) {
+        self.screen = Some(PortScreen::new(id));
+    }
+
     /// Cast off: close the board and hand the helm back.
     pub fn set_sail(&mut self, gs: &mut GameState) {
         gs.location = Location::Sailing;
