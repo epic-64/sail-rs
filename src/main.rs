@@ -602,7 +602,7 @@ async fn run_game(
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
             // whole hold — ordinary cargo *and* reserved mission goods riding along.
-            let top_speed = upgrades::top_speed(gs.sail_level, gs.hold_used());
+            let top_speed = upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used());
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             let prev_pos = kin.pos;
             kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
@@ -648,7 +648,9 @@ async fn run_game(
                 let target = &world.islands[r.target_id as usize];
                 match rival {
                     Some(rk) if race_running => {
-                        let top_speed = upgrades::top_speed(gs.sail_level, 0);
+                        // The rival sails a hull of the race's required tier (empty
+                        // hold), so a higher-tier leg fields a genuinely faster boat.
+                        let top_speed = upgrades::top_speed(r.required_level, 0, 0);
                         let rhelm = race::rival_helm(&rk, target.pos, wind);
                         let stepped = sailing::step_with(rk, rhelm, wind, dt, top_speed);
                         let rnear = world.islands_near(stepped.pos, 400.0);

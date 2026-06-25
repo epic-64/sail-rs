@@ -119,18 +119,27 @@ pub enum TradeError {
     RaceInProgress,
     NoSuchRace,
     NoRace,
+    /// The race demands a sturdier hull than the captain has fitted.
+    HullTierTooLow,
 }
 
 /// Which fitting a shipyard upgrade improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UpgradeKind {
+    /// A sturdier hull — the *only* fitting that raises top speed (and with it the
+    /// hull's points, hence its upkeep). See [`upgrades::peak_knots`].
+    Hull,
+    /// A taller rig — raises only the haul the ship carries before the overload
+    /// penalty. See [`upgrades::max_haul`].
     Sail,
+    /// A deeper hold — more cargo slots.
     Cargo,
 }
 
 impl UpgradeKind {
     pub fn label(self) -> &'static str {
         match self {
+            UpgradeKind::Hull => "Hull",
             UpgradeKind::Sail => "Sails",
             UpgradeKind::Cargo => "Hold",
         }
@@ -148,19 +157,31 @@ pub const STARTING_FOOD: i32 = 4;
 // `BASE_TOP_KNOTS` (an exact integer-valued f32, so the `as f64` is lossless); the
 // economy reads it back here in knots. Don't redefine it — keep one number.
 const BASE_TOP_KNOTS: f64 = crate::sailing::BASE_TOP_KNOTS as f64;
-const KNOTS_PER_SAIL_LEVEL: f64 = 4.0;
+/// Top speed gained per hull tier — the hull upgrade *alone* drives speed now:
+/// 24 / 29 / 34 / 39 kn across the four tiers. Sails no longer touch speed.
+const KNOTS_PER_HULL_LEVEL: f64 = 5.0;
 const HAUL_BASE: i32 = 12;
+/// Haul tolerance gained per sail tier — sails *only* raise the load the rig can
+/// carry before the overload penalty bites.
 const HAUL_PER_SAIL_LEVEL: i32 = 6;
 const MAX_PENALTY: f64 = 0.66;
 
+/// Top tier (0-indexed) for the sails and the hold — six steps each.
 pub const MAX_LEVEL: i32 = 6;
+/// Top hull tier (0-indexed): four tiers in all, Lv 1–4 to the captain.
+pub const HULL_MAX_LEVEL: i32 = 3;
 const SAIL_BASE_COST: f64 = 300.0;
 const CARGO_BASE_COST: f64 = 250.0;
+/// The hull is the premium fitting (it buys speed *and* hull points), so it is the
+/// dearest to step up.
+const HULL_BASE_COST: f64 = 500.0;
 const COST_GROWTH: f64 = 2.2;
 
 const BASE_MAX_HULL: i32 = 180;
-const HULL_PER_CARGO_LEVEL: i32 = 60;
-const HULL_PER_SAIL_LEVEL: i32 = 40;
+/// Hull points gained per hull tier: 180 / 240 / 300 / 360. Because wear is a
+/// *fraction* of the (now larger) hull, a sturdier ship costs proportionally more
+/// to keep mended — the higher upkeep the captain trades for the speed.
+const HULL_PER_HULL_LEVEL: i32 = 60;
 const REPAIR_COST_PER_HULL: i32 = 2;
 
 // --- Upgrades (free functions; the logic of `shared.Upgrades`) ---------------
@@ -180,19 +201,26 @@ pub mod upgrades {
         MAX_PENALTY * over_ratio
     }
 
-    /// Peak speed (knots) for a rig at `sail_level` carrying `load` units.
-    pub fn top_knots(sail_level: i32, load: i32) -> f64 {
-        let peak = BASE_TOP_KNOTS + sail_level as f64 * KNOTS_PER_SAIL_LEVEL;
-        peak * (1.0 - overload_penalty(sail_level, load))
+    /// The hull tier's peak speed (knots) before any overload penalty — the headline
+    /// number the hull upgrade buys: 24 / 29 / 34 / 39 across the four tiers.
+    pub fn peak_knots(hull_level: i32) -> f64 {
+        BASE_TOP_KNOTS + hull_level as f64 * KNOTS_PER_HULL_LEVEL
+    }
+
+    /// Peak speed (knots) for a ship at `hull_level` whose `sail_level` rig is
+    /// carrying `load` units. Speed comes from the hull tier; the sails only set how
+    /// much can ride before [`overload_penalty`] trims that peak.
+    pub fn top_knots(hull_level: i32, sail_level: i32, load: i32) -> f64 {
+        peak_knots(hull_level) * (1.0 - overload_penalty(sail_level, load))
     }
 
     /// The ship's peak speed in engine units (m/s) — [`top_knots`] converted for
     /// the sailing engine, which the ship hands to [`crate::sailing::step_with`] /
-    /// [`crate::sailing::step_debuffed`] as its own ceiling. A stronger rig runs
-    /// faster, an overladen hull crawls; a bare ship within haulage makes
+    /// [`crate::sailing::step_debuffed`] as its own ceiling. A better hull runs
+    /// faster, an overladen hold crawls; a bare ship within haulage makes
     /// [`crate::sailing::BASE_TOP_SPEED`].
-    pub fn top_speed(sail_level: i32, load: i32) -> f32 {
-        (top_knots(sail_level, load) * crate::sailing::KNOT as f64) as f32
+    pub fn top_speed(hull_level: i32, sail_level: i32, load: i32) -> f32 {
+        (top_knots(hull_level, sail_level, load) * crate::sailing::KNOT as f64) as f32
     }
 
     pub fn cargo_capacity(cargo_level: i32) -> i32 {
@@ -208,21 +236,35 @@ pub mod upgrades {
     pub fn cargo_cost(level: i32) -> i32 {
         (CARGO_BASE_COST * COST_GROWTH.powi(level)).round() as i32
     }
+    pub fn hull_cost(level: i32) -> i32 {
+        (HULL_BASE_COST * COST_GROWTH.powi(level)).round() as i32
+    }
 
     pub fn level_of(kind: UpgradeKind, s: &GameState) -> i32 {
         match kind {
+            UpgradeKind::Hull => s.hull_level,
             UpgradeKind::Sail => s.sail_level,
             UpgradeKind::Cargo => cargo_level_of(s.hold_capacity),
+        }
+    }
+
+    /// The top tier a fitting can reach (0-indexed). The hull stops at four tiers;
+    /// the sails and hold run the full ladder.
+    pub fn max_level(kind: UpgradeKind) -> i32 {
+        match kind {
+            UpgradeKind::Hull => HULL_MAX_LEVEL,
+            UpgradeKind::Sail | UpgradeKind::Cargo => MAX_LEVEL,
         }
     }
 
     /// The price of the next upgrade of `kind`, or None if maxed.
     pub fn next_cost(kind: UpgradeKind, s: &GameState) -> Option<i32> {
         let lvl = level_of(kind, s);
-        if lvl >= MAX_LEVEL {
+        if lvl >= max_level(kind) {
             None
         } else {
             Some(match kind {
+                UpgradeKind::Hull => hull_cost(lvl),
                 UpgradeKind::Sail => sail_cost(lvl),
                 UpgradeKind::Cargo => cargo_cost(lvl),
             })
@@ -232,11 +274,19 @@ pub mod upgrades {
     /// A one-line description of the fitting's current → next effect.
     pub fn effect(kind: UpgradeKind, s: &GameState) -> String {
         match kind {
-            UpgradeKind::Sail => {
-                let now = BASE_TOP_KNOTS as i32 + s.sail_level * KNOTS_PER_SAIL_LEVEL as i32;
-                let next = now + KNOTS_PER_SAIL_LEVEL as i32;
+            UpgradeKind::Hull => {
+                let lvl = s.hull_level;
                 format!(
-                    "{now}->{next} kn  haul {}->{}",
+                    "{}->{} kn  hull {}->{}",
+                    peak_knots(lvl) as i32,
+                    peak_knots(lvl + 1) as i32,
+                    hull::max_hull(lvl),
+                    hull::max_hull(lvl + 1),
+                )
+            }
+            UpgradeKind::Sail => {
+                format!(
+                    "haul {}->{} units",
                     max_haul(s.sail_level),
                     max_haul(s.sail_level + 1)
                 )
@@ -253,9 +303,10 @@ pub mod upgrades {
 pub mod hull {
     use super::*;
 
-    /// Maximum hull for a ship at the given rig and hold levels.
-    pub fn max_hull(sail_level: i32, cargo_level: i32) -> i32 {
-        BASE_MAX_HULL + cargo_level * HULL_PER_CARGO_LEVEL + sail_level * HULL_PER_SAIL_LEVEL
+    /// Maximum hull for a ship at the given hull tier. Only the hull upgrade enlarges
+    /// the planking now — a taller rig or deeper hold leave the structure unchanged.
+    pub fn max_hull(hull_level: i32) -> i32 {
+        BASE_MAX_HULL + hull_level * HULL_PER_HULL_LEVEL
     }
 
     pub fn fraction(s: &GameState) -> f64 {
@@ -360,7 +411,8 @@ pub struct GameState {
     pub cargo: [i32; 7],
     pub hold_capacity: i32,
     pub location: Location,
-    pub sail_level: i32, // rig upgrades bought; drives top speed (see `upgrades`)
+    pub hull_level: i32, // hull tier bought; drives top speed & max hull (see `upgrades`)
+    pub sail_level: i32, // sail tier bought; drives haul tolerance only (see `upgrades`)
     pub hull: i32,       // current hull integrity; worn by storms & starvation
     /// Fractional hull wear sailed off but not yet a whole point. The hull is
     /// integer-valued, so distance decay (see [`GameState::wear_distance`])
@@ -386,8 +438,9 @@ impl GameState {
             cargo,
             hold_capacity: BASE_CARGO,
             location: Location::Sailing,
+            hull_level: 0,
             sail_level: 0,
-            hull: hull::max_hull(0, 0),
+            hull: hull::max_hull(0),
             hull_wear: 0.0,
             active_missions: Vec::new(),
             race: None,
@@ -416,7 +469,7 @@ impl GameState {
     }
 
     pub fn max_hull(&self) -> i32 {
-        hull::max_hull(self.sail_level, upgrades::cargo_level_of(self.hold_capacity))
+        hull::max_hull(self.hull_level)
     }
 
     /// Wear the hull from distance sailed: every kilometre under way costs 1%
@@ -517,6 +570,7 @@ impl GameState {
         }
         self.gold -= cost;
         match kind {
+            UpgradeKind::Hull => self.hull_level += 1,
             UpgradeKind::Sail => self.sail_level += 1,
             UpgradeKind::Cargo => self.hold_capacity += CARGO_STEP,
         }
@@ -624,7 +678,14 @@ impl GameState {
             .into_iter()
             .find(|p| p.id == target_id)
             .ok_or(TradeError::NoSuchRace)?;
-        let wager = race::stake_for(origin_pos.distance_to(target.pos));
+        let distance = origin_pos.distance_to(target.pos);
+        // The longer the leg the sturdier the hull the harbour demands — and the
+        // tougher the rival and the richer the purse (see `race::offer_terms`).
+        let required_level = race::required_level_for(distance);
+        if self.hull_level < required_level {
+            return Err(TradeError::HullTierTooLow);
+        }
+        let wager = race::stake_for(distance);
         if wager > self.gold {
             return Err(TradeError::NotEnoughGold);
         }
@@ -633,6 +694,7 @@ impl GameState {
             origin_id,
             target_id,
             stake: wager,
+            required_level,
         });
         Ok(())
     }
@@ -728,8 +790,11 @@ mod tests {
         gs.gold = 1_000_000;
         gs.location = Location::Docked(yard.id);
         gs.hull = gs.max_hull() / 4; // battered before the refit
-        gs.buy_upgrade(&world, UpgradeKind::Cargo).unwrap();
-        // The bigger hull comes sound — full, not the old quarter.
+        let before = gs.max_hull();
+        gs.buy_upgrade(&world, UpgradeKind::Hull).unwrap();
+        // The hull tier enlarges the planking, and it comes sound — full, not the
+        // old quarter, and bigger than before.
+        assert!(gs.max_hull() > before);
         assert_eq!(gs.hull, gs.max_hull());
         assert_eq!(gs.hull_wear, 0.0);
     }
