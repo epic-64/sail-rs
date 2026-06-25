@@ -9,6 +9,7 @@ mod captains_log;
 mod celestial;
 mod flotsam;
 mod flotsam_render;
+mod font;
 mod game_state;
 mod geometry;
 mod isle_features;
@@ -311,6 +312,11 @@ async fn main() {
     let mut pause = pause_menu::PauseMenu::new();
     let mut bloom = bloom::Bloom::new();
 
+    // Replace macroquad's default ProggyClean (no symbols, blurry when scaled) with
+    // the DejaVu faces. Loaded once here (it uploads to the GPU); panels swap between
+    // the sans and serif faces via `font::use_*`. See `font.rs`.
+    font::init();
+
     // The world seed. Start on 1; changing it in the options ends the current voyage
     // and loops back here to begin a fresh one on the new chart.
     let mut seed: i64 = 1;
@@ -476,6 +482,11 @@ async fn run_game(
         let w = screen_width();
         let h = screen_height();
         let horizon = h * 0.54;
+
+        // Default every surface to the sans face each frame; the captain's log and the
+        // port boards re-skin themselves to serif as they draw (see `font.rs`). Reset
+        // here so last frame's serif board doesn't leak into this frame's HUD.
+        font::use_sans();
 
         // --- Input -------------------------------------------------------------
         // While the pause menu is up the voyage is frozen: handle only its input
