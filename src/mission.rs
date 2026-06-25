@@ -30,7 +30,13 @@ pub struct Mission {
 }
 
 /// How many contracts a port offers at once (`Missions.perPort`).
-pub const PER_PORT: i32 = 5;
+pub const PER_PORT: i32 = 7;
+
+/// Of the [`PER_PORT`] slots, the last `BULK_SLOTS` carry heavy bulk hauls — much
+/// larger quantities (and proportionally larger rewards) than the everyday small
+/// jobs. A 64-unit haul fills a fully-upgraded hold, so these are the province of
+/// dedicated haulers who have sunk gold into both hold and sails.
+const BULK_SLOTS: i32 = 2;
 
 /// The contracts on the board at the captain's current port, with any already
 /// accepted removed. Empty while at sea.
@@ -112,7 +118,14 @@ pub fn generate(origin: &Island, world: &World) -> Vec<Mission> {
     for slot in 0..PER_PORT {
         let good = *rng.pick(&Good::ALL);
         let target: &Island = *rng.pick(&others);
-        let qf = rng.between(5.0, 15.0);
+        // The last `BULK_SLOTS` slots are heavy bulk hauls (up to 64 units, a maxed
+        // hold); the rest are the everyday small jobs.
+        let is_bulk = slot >= PER_PORT - BULK_SLOTS;
+        let qf = if is_bulk {
+            rng.between(24.0, 64.0)
+        } else {
+            rng.between(5.0, 15.0)
+        };
         let quantity = qf.round() as i32;
         let value = quantity * market.price(good);
         // The deposit is the goods' value plus 10%, so abandoning a contract (and
