@@ -281,3 +281,21 @@ Roughly in suggested build order; each is a milestone.
 - macroquad 2D drawing has no depth buffer; island/feature occlusion is solved by
   drawing each island **interleaved between wave bands by distance** in
   `OceanRenderer::render`.
+- **Port overlay style** (`port_view.rs` `mod style`): every type size, spacing step,
+  column split and symbol the port board draws is a named token in one `style` module —
+  there are no bare pixel literals in the render functions (sizes derive from a tight
+  `FS_*` ladder and a `UNIT`-based spacing grid; `line_h`/`row_h`/`tab_h` derive the
+  rhythm; column positions are `*_X`/`*_R` width fractions). Transitions/routes use the
+  `ARROW` token (`→`); inline separators are `·`. Reduce or restyle the whole board by
+  editing the tokens, not the call sites.
+- **Fonts** (`font.rs`): two embedded faces (`assets/fonts/`, `include_bytes!`)
+  replace macroquad's default ProggyClean (no symbols, blurry when scaled): **DejaVu
+  Sans** is the body face for *everything*, and **IM Fell English SC** (a 1600s
+  press small-caps face) is used **only for headings** — page/board titles, port
+  names, and section headers. Swapped via macroquad's global `set_default_font`, so
+  the ~180 `draw_text`/`measure_text(.., None, ..)` call sites need no font argument.
+  Sans is the standing default, **reset at the top of every frame** (load-bearing —
+  drop it and a heading's face would bleed into the rest of the frame). A heading is
+  drawn by wrapping its `draw_text`/`measure_text` in `font::heading(|| …)`, which
+  flips to the display face and restores sans after. Headings ≠ table column labels,
+  row labels, item titles, tabs, buttons or hints — those stay sans.
