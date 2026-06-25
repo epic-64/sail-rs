@@ -23,6 +23,16 @@ use crate::world::World;
 /// How many two-page spreads the book holds; `main` clamps the page cursor to this.
 pub const NUM_SPREADS: usize = 3;
 
+/// How many pressable buttons the given spread carries — `main` uses it to clamp
+/// the Up/Down selection cursor. Only the Vessel spread (1) has one so far: the
+/// **Caulk hull** field repair.
+pub fn button_count(spread: usize) -> usize {
+    match spread {
+        1 => 1,
+        _ => 0,
+    }
+}
+
 /// Parchment + ink colours for the open book.
 fn ink() -> Color {
     Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 1.0)
@@ -68,6 +78,27 @@ fn row_colored(label: &str, value: &str, value_col: Color, x: f32, y: f32, col_w
     draw_text(value, x + col_w - dims.width, y, fs as f32, value_col);
 }
 
+/// A parchment action button, styled like the port board's chips: filled when
+/// focused (the cursor on it), outlined otherwise; the label greys when the action
+/// is unavailable (`enabled` false), so a button can show *why* it can't be pressed.
+fn button(x: f32, y: f32, w: f32, h: f32, label: &str, focused: bool, enabled: bool) {
+    if focused {
+        draw_rectangle(x, y, w, h, ink());
+    } else {
+        draw_rectangle_lines(x, y, w, h, 1.5, parchment_edge());
+    }
+    let fs = 18;
+    let dims = measure_text(label, None, fs, 1.0);
+    let c = if focused {
+        parchment()
+    } else if enabled {
+        ink()
+    } else {
+        dim_ink()
+    };
+    draw_text(label, x + (w - dims.width) / 2.0, y + h / 2.0 + fs as f32 * 0.35, fs as f32, c);
+}
+
 /// The geometry of one page: its left edge `x`, its content width `col_w`, the
 /// baseline of its heading, and the baseline of its first body row.
 struct Page {
@@ -100,6 +131,7 @@ pub fn render(
     chart_marks: &[i32],
     race_marks: &[i32],
     spread: usize,
+    sel: usize,
     frame_dt: f32,
     w: f32,
     h: f32,
@@ -147,7 +179,7 @@ pub fn render(
             page_chart(&right, world, kin, wind, chart_marks, race_marks, y0, ph, pad);
         }
         1 => {
-            page_vessel(&left, gs);
+            page_vessel(&left, gs, sel);
             page_hold(&right, gs);
         }
         _ => {
@@ -170,7 +202,13 @@ pub fn render(
         }
         dx += gap;
     }
-    draw_text("\u{25C4} \u{25BA} turn the page", x0 + pad, foot_y, 18.0, dim_ink());
+    // Left footer: paging, plus the button cursor's keys on spreads that have one.
+    let nav = if button_count(spread) > 0 {
+        "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use"
+    } else {
+        "\u{25C4} \u{25BA} turn the page"
+    };
+    draw_text(nav, x0 + pad, foot_y, 18.0, dim_ink());
     let close = "L  close";
     let cd = measure_text(close, None, 18, 1.0);
     draw_text(close, x0 + pw - pad - cd.width, foot_y, 18.0, dim_ink());
@@ -235,8 +273,9 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
     );
 }
 
-/// **The Vessel** — purse, hull, larder, and the rig's figures.
-fn page_vessel(p: &Page, gs: &GameState) {
+/// **The Vessel** — purse, hull, larder, and the rig's figures. `sel` is the open
+/// spread's button cursor (this page owns button 0, the **Caulk hull** repair).
+fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
     heading(p, "The Vessel");
 
     let fs = 22;
@@ -254,7 +293,28 @@ fn page_vessel(p: &Page, gs: &GameState) {
         ink()
     };
     row_colored("Hull", &format!("{hull_pct}%"), hull_col, p.x, y, p.col_w, fs);
-    y += lh * 0.6;
+    y += lh;
+
+    // Field repair: a button that caulks the hull with a plank from the hold (see
+    // `GameState::caulk_with_plank`) — a +10 mend at sea, no drydock. Kept right
+    // under the hull readout so it stays in view however the condition list grows.
+    // The planks tally sits beside it; the button is live only with timber aboard
+    // and a hull worth mending.
+    let planks = gs.quantity_of(Good::Plank);
+    let can_caulk = planks > 0 && hull::damage(gs) > 0;
+    row("Planks", &format!("{planks} aboard"), p.x, y, p.col_w, fs);
+    y += lh * 0.25;
+    let btn_w = p.col_w.min(220.0);
+    let btn_h = 26.0;
+    let label = if planks <= 0 {
+        "Caulk hull — no timber".to_string()
+    } else if hull::damage(gs) <= 0 {
+        "Caulk hull — sound".to_string()
+    } else {
+        format!("Caulk hull  +{}", GameState::HULL_PER_PLANK)
+    };
+    button(p.x, y, btn_w, btn_h, &label, sel == 0 && can_caulk, can_caulk);
+    y += btn_h + lh * 0.5;
     draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
     y += lh * 0.8;
 
