@@ -47,21 +47,26 @@ use weather::{Weather, WeatherState};
 use world::Island;
 
 fn window_conf() -> Conf {
+    // MSAA needs a WebGL2 context on the web (its resolve uses the WebGL2-only
+    // `blitFramebuffer`/`readBuffer`). But `getContext("webgl2")` is not granted
+    // everywhere — itch.io embeds the game in a cross-origin iframe and some
+    // browser/extension setups return a *null* WebGL2 context, which crashes on
+    // the first GL query. So the web build uses a plain WebGL1 context (the
+    // miniquad default, far more widely granted) and skips MSAA — the maximally
+    // compatible config. Native is unaffected: it keeps 4× MSAA, and
+    // `webgl_version` is ignored off-web anyway.
+    #[cfg(target_arch = "wasm32")]
+    let sample_count = 1; // no MSAA on the web → no WebGL2 dependency
+    #[cfg(not(target_arch = "wasm32"))]
+    let sample_count = 4; // MSAA: smooth the wave-quad edges (native)
+
     Conf {
         window_title: "sail-rs".to_owned(),
         window_width: 1280,
         window_height: 720,
         fullscreen: true, // launch full-screen (toggle in the pause menu's Options)
         high_dpi: true,
-        sample_count: 4, // MSAA: smooth the wave-quad edges
-        // On the web the renderer's MSAA resolve uses WebGL2-only calls
-        // (`blitFramebuffer`/`readBuffer`); miniquad defaults the canvas to
-        // WebGL1, which would crash on the first `clear_background`. Request a
-        // WebGL2 context. Ignored on native (desktop GL is unaffected).
-        platform: macroquad::miniquad::conf::Platform {
-            webgl_version: macroquad::miniquad::conf::WebGLVersion::WebGL2,
-            ..Default::default()
-        },
+        sample_count,
         ..Default::default()
     }
 }
@@ -300,6 +305,15 @@ async fn main() {
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
     // the water's reflections). Toggle with B.
     let mut bloom = bloom::Bloom::new();
+    // Bloom renders the scene into an offscreen target, and miniquad issues a
+    // WebGL2/MRT `drawBuffers` call for any render-to-texture pass. That call is
+    // unavailable in many web environments (itch's iframe / fingerprint blockers
+    // don't expose `WEBGL_draw_buffers`), so bloom is OFF on the web — the scene
+    // draws straight to the default framebuffer (no RTT, no WebGL2 calls). Native
+    // keeps bloom and its B-key toggle.
+    #[cfg(target_arch = "wasm32")]
+    let bloom_on = false;
+    #[cfg(not(target_arch = "wasm32"))]
     let mut bloom_on = true;
 
     // Build the world and start the captain just off the home cluster's shipyard
@@ -699,6 +713,7 @@ async fn main() {
                     log_spread = log_spread.saturating_sub(1);
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if is_key_pressed(KeyCode::B) {
                 bloom_on = !bloom_on;
             }

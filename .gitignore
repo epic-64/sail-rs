@@ -1,4 +1,7 @@
 /target
 .idea
-/dist/mq_js_bundle.js
-/dist/sail-rs.wasm
+# dist/ is fully generated build output (shell copied from web/, wasm/bundle/icon
+# built). The web shell source lives in web/.
+/dist
+/.tools
+/sail-rs-web.zip

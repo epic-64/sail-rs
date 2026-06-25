@@ -20,3 +20,17 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 opt-level = 3
 [profile.dev.package.symphonia-bundle-mp3]
 opt-level = 3
+
+# Size-tuned profile for the web (wasm) build — see build-web.sh. Keeps the
+# native `release` profile untouched (opt-level 3 for the dense wave mesh) while
+# squeezing the wasm: fat LTO + a single codegen unit drop cross-crate dead
+# code, `panic = "abort"` removes the unwinding tables (a panic just traps in the
+# browser anyway), and `strip` drops symbols. opt-level "s" keeps the renderer
+# fast while still optimizing for size. Build with `--profile web`.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
