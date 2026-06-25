@@ -21,18 +21,43 @@ use crate::sailing::{self, Helm, Kinematics, Wind};
 use crate::world::{Island, World};
 
 /// A wager race booked at a port: sail from `origin_id` to `target_id` against
-/// the rival for `stake` gold. Small and `Copy`, like the Scala `case class`.
+/// the rival for `stake` gold. The `required_level` is the hull tier the harbour
+/// demands to enter (0 = open to a starter); the rival sails a hull of that very
+/// tier. The `stake` is the bare leg wager (already quadratic in distance) — no
+/// tier premium. Small and `Copy`, like the Scala `case class`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Race {
     pub origin_id: i32,
     pub target_id: i32,
     pub stake: i32,
+    pub required_level: i32,
 }
 
 /// Gold staked per kilometre of the crossing, plus a gently quadratic bonus per
 /// kilometre-squared so a longer leg is worth more than its length alone.
 pub const GOLD_PER_KM: f64 = 30.0;
 pub const BONUS_PER_KM_SQ: f64 = 6.0;
+
+/// Leg lengths (km) at which the demanded hull tier steps up — by leg length, the
+/// longer the crossing the sturdier the hull the harbour insists on. Three rungs
+/// take the requirement from Lv 1 (open) up to Lv 4 (the dearest hull).
+pub const HULL_REQ_KM: [f64; 3] = [4.0, 6.5, 9.0];
+
+/// The hull tier (0-indexed; 0 = open to a starter) a leg of `distance_m` demands —
+/// one rung per [`HULL_REQ_KM`] threshold the crossing exceeds.
+pub fn required_level_for(distance_m: f32) -> i32 {
+    let km = distance_m as f64 / 1000.0;
+    HULL_REQ_KM.iter().filter(|&&t| km >= t).count() as i32
+}
+
+/// The terms of racing from `origin` to `target`: the stake and the hull tier the
+/// harbour demands. The stake is the bare leg wager ([`stake_for`]); it carries no
+/// tier premium — the wager is already quadratic in distance, and the higher-tier
+/// legs are the longer ones, so they pay more for their length alone.
+pub fn offer_terms(origin: &Island, target: &Island) -> (i32, i32) {
+    let distance = origin.pos.distance_to(target.pos);
+    (stake_for(distance), required_level_for(distance))
+}
 
 /// How many rival ports a harbour puts on offer at once (`Race.offerCount`).
 pub const OFFER_COUNT: usize = 4;
@@ -52,11 +77,6 @@ const PINCH: f32 = 0.12;
 pub fn stake_for(distance_m: f32) -> i32 {
     let km = distance_m as f64 / 1000.0;
     (GOLD_PER_KM * km + BONUS_PER_KM_SQ * km * km).round() as i32
-}
-
-/// The wager for racing from `origin` to `target`.
-pub fn stake_between(origin: &Island, target: &Island) -> i32 {
-    stake_for(origin.pos.distance_to(target.pos))
 }
 
 /// The ports the docked port can offer a race to — every *other* port in the same
@@ -268,7 +288,7 @@ mod tests {
         let world = race_world();
         let mut gs = flush_docked();
         let target = targets_at(&gs, &world)[0];
-        let stake = stake_between(&world.islands[0], target);
+        let stake = stake_for(world.islands[0].pos.distance_to(target.pos));
         let gold = gs.gold;
         gs.accept_race(&world, target.id).unwrap();
         assert_eq!(gs.gold, gold - stake);
@@ -277,7 +297,8 @@ mod tests {
             Some(Race {
                 origin_id: 0,
                 target_id: target.id,
-                stake
+                stake,
+                required_level: 0,
             })
         );
     }
@@ -385,5 +406,35 @@ mod tests {
         let lay = lay_heading(kin.pos.bearing_to(mark), wind);
         assert!(wind.factor(lay) > 0.0);
         assert!(helm.turn != 0.0);
+    }
+
+    #[test]
+    fn the_hull_requirement_steps_up_with_the_leg() {
+        assert_eq!(required_level_for(2000.0), 0);
+        assert_eq!(required_level_for(5000.0), 1);
+        assert_eq!(required_level_for(7000.0), 2);
+        assert_eq!(required_level_for(10000.0), 3);
+    }
+
+    #[test]
+    fn a_long_leg_demands_a_sturdier_hull() {
+        let world = race_world();
+        let mut gs = flush_docked();
+        let target = targets_at(&gs, &world).into_iter().last().unwrap(); // furthest port
+        let (stake, required) = offer_terms(&world.islands[0], target);
+        assert!(required >= 1, "the furthest leg should demand a better hull");
+        // The stake carries no tier premium — it is just the bare quadratic leg wager.
+        assert_eq!(stake, stake_for(world.islands[0].pos.distance_to(target.pos)));
+        // A starter hull is turned away…
+        assert_eq!(
+            gs.accept_race(&world, target.id),
+            Err(TradeError::HullTierTooLow)
+        );
+        // …but a hull of the demanded tier is admitted, and charged the bare stake.
+        gs.hull_level = required;
+        let gold = gs.gold;
+        gs.accept_race(&world, target.id).unwrap();
+        assert_eq!(gs.gold, gold - stake);
+        assert_eq!(gs.race.unwrap().required_level, required);
     }
 }
