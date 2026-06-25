@@ -258,7 +258,7 @@ fn page_vessel(p: &Page, gs: &GameState) {
     draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
     y += lh * 0.8;
 
-    let top = upgrades::top_knots(gs.sail_level, 0);
+    let top = upgrades::top_knots(gs.hull_level, gs.sail_level, 0);
     row("Max speed", &format!("{:.1} kn", top), p.x, y, p.col_w, fs);
     y += lh;
     row(

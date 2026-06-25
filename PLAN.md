@@ -142,9 +142,10 @@ while keeping the game's mechanics and feel.
   at it and the sails struck, press **Space**, and a parchment board opens over
   the live sea (the world keeps running underneath). Two tabs: **Market**
   (buy/sell the seven goods) and **Shipyard/Drydock** (mend the hull, and at
-  shipyard ports buy sail/cargo upgrades). Keyboard-driven (arrows + Tab + Enter,
-  Esc sets sail). The rig's **top speed now scales** with sail upgrades and the
-  weight in the hold (`upgrades::speed_scale` → `sailing::step_scaled`), so a
+  shipyard ports buy hull/sail/cargo upgrades). Keyboard-driven (arrows + Tab + Enter,
+  Esc sets sail). **Top speed comes from the hull tier alone** (24/29/34/39 kn);
+  sails raise only haul tolerance and an overladen hold trims the hull's peak
+  (`upgrades::top_speed(hull_level, sail_level, load)` → `sailing::step_with`), so a
   full hold crawls until the sails are upgraded. Purse + hold shown on the HUD.
 - **Missions** — `mission.rs` + `port_view.rs` Contracts tab: a faithful
   `shared.Mission`/`Missions` port. Each port deterministically offers 3 haulage
@@ -223,14 +224,18 @@ Roughly in suggested build order; each is a milestone.
 - **Ports & docking + trade** (`Goods.scala`, `Trade.scala`, `Market`, `client/PortView.scala`):
   ✅ done — `game_state.rs` + `port_view.rs`. Dock within `dock_range`; buy/sell at
   deterministic per-port prices.
-- **Upgrades** (`Upgrades.scala`): ✅ done — shipyard sail/cargo upgrades wired into
-  top speed; laden-hull speed penalty via `step_scaled`.
+- **Upgrades** (`Upgrades.scala`): ✅ done — three orthogonal shipyard fittings:
+  **hull** (top speed 24/29/34/39 kn + max hull points), **sails** (haul tolerance),
+  **hold** (cargo slots); laden-hull speed penalty via `upgrades::top_speed` →
+  `sailing::step_with`. Diverged from the original's sail-driven speed (see CLAUDE.md).
 - **Drydock / hull repair** (`Hull.scala`): 🟡 repair UI works at every port, but no
   damage source yet — wire storm/starvation wear so the hull actually wants mending.
 - **Races** (`Race.scala`): ✅ done — `race.rs` + `port_view.rs` Racing tab +
   `rival_render.rs` + the race loop in `main.rs`. Wager races vs a computer rival
   (rebuilt as a low-poly sloop billboard, not the `ship-*.svg` sprites) + a
-  standings banner.
+  standings banner. Longer legs demand a higher **hull tier** to enter (and field a
+  rival of that tier); the stake is the bare quadratic leg wager — a port-side
+  extension, see CLAUDE.md.
 - **Hull & rations** (`Hull.scala`): hull integrity worn by storms/starvation, slow
   when battered; food eaten per daytime.
 - **Flotsam salvage** (`Flotsam.scala`): ✅ done — `flotsam.rs` + `flotsam_render.rs`.

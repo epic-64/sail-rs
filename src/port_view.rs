@@ -133,6 +133,7 @@ enum FlashTarget {
     Deposit(i32),  // a contract's deposit (can't cover the buy-in)
     Units(i32),    // a contract's haulage units (won't fit the hold)
     Stake(i32),    // a rival port's race stake (can't cover the wager)
+    Tier(i32),     // a rival port's hull requirement (hull not sturdy enough)
 }
 
 /// A live red-jiggle on one constraint, started at `start` (seconds, `get_time`).
@@ -218,6 +219,7 @@ impl PortScreen {
             Tab::Yard => {
                 let mut v = vec![Focus::Repair];
                 if self.is_shipyard(world) {
+                    v.push(Focus::Upgrade(UpgradeKind::Hull));
                     v.push(Focus::Upgrade(UpgradeKind::Sail));
                     v.push(Focus::Upgrade(UpgradeKind::Cargo));
                 }
@@ -404,8 +406,10 @@ impl PortScreen {
                 }
                 Err(e) => {
                     sounds.invalid();
-                    if e == TradeError::NotEnoughGold {
-                        self.flash(FlashTarget::Stake(id));
+                    match e {
+                        TradeError::NotEnoughGold => self.flash(FlashTarget::Stake(id)),
+                        TradeError::HullTierTooLow => self.flash(FlashTarget::Tier(id)),
+                        _ => {}
                     }
                 }
             },
@@ -668,14 +672,19 @@ impl PortScreen {
             ry += row_h;
         }
 
-        // Shipyard: sail & cargo upgrades.
+        // Shipyard: hull (speed), sail (haul) & cargo (slots) upgrades. Levels are
+        // shown 1-indexed (the starter ship is Lv 1) to match the captain's parlance.
         if self.is_shipyard(world) {
-            for kind in [UpgradeKind::Sail, UpgradeKind::Cargo] {
+            for kind in [UpgradeKind::Hull, UpgradeKind::Sail, UpgradeKind::Cargo] {
                 let active = self.focus == Focus::Upgrade(kind);
                 if active {
                     draw_rectangle(x - 6.0, ry - 20.0, w + 12.0, row_h - 6.0, row_highlight());
                 }
-                let name = format!("{} · Lv {}", kind.label(), upgrades::level_of(kind, gs));
+                let lvl0 = upgrades::level_of(kind, gs);
+                let name = match kind {
+                    UpgradeKind::Hull => format!("{} · {}", kind.label(), hull_mark(lvl0)),
+                    _ => format!("{} · Lv {}", kind.label(), lvl0 + 1),
+                };
                 draw_text(&name, label_x, ry, fs as f32, ink());
                 right_text(&upgrades::effect(kind, gs), detail_r, ry, 16);
                 let (cost, label) = match upgrades::next_cost(kind, gs) {
@@ -716,6 +725,8 @@ impl PortScreen {
             draw_text("Race booked", x, ry, 22.0, ink());
             ry += 32.0;
             line("Race to", &target.name, ry);
+            ry += 26.0;
+            line("Rival hull", &hull_mark(race.required_level), ry);
             ry += 26.0;
             line("Stake", &race.stake.to_string(), ry);
             ry += 26.0;
@@ -783,11 +794,13 @@ impl PortScreen {
         );
         ry += 28.0;
 
-        // Columns: port name, the stake right-aligned, then an Accept chip — the
-        // same shape as a contract row.
-        let stake_r = x + w * 0.70;
-        let action_x = x + w * 0.74;
+        // Columns: port name, the required hull tier, the stake right-aligned, then
+        // an Accept chip — the same shape as a contract row.
+        let tier_r = x + w * 0.56;
+        let stake_r = x + w * 0.74;
+        let action_x = x + w * 0.78;
         draw_text("Race to", x, ry, 18.0, dim_ink());
+        right_text("Hull", tier_r, ry, 18);
         right_text("Stake", stake_r, ry, 18);
         draw_line(x, ry + 8.0, x + w, ry + 8.0, 1.0, dim_ink());
         ry += 32.0;
@@ -801,9 +814,24 @@ impl PortScreen {
                 draw_rectangle(x - 6.0, ry - 16.0, w + 12.0, row_h - 4.0, row_highlight());
             }
             draw_text(&p.name, x, ry, 18.0, ink());
+            let (stake, required) = race::offer_terms(origin, p);
+            // The hull tier the leg demands, always shown (`Mk I` for an open race):
+            // normal ink when the captain can meet it, alarm-red (and jiggling on a
+            // rejected Accept) when his hull is too light for the leg.
+            let tier_txt = hull_mark(required);
+            if required > 0 && gs.hull_level < required {
+                let dx = self
+                    .flash_of(FlashTarget::Tier(p.id))
+                    .map(|(dx, _)| dx)
+                    .unwrap_or(0.0);
+                let dims = measure_text(&tier_txt, None, 18, 1.0);
+                draw_text(&tier_txt, tier_r - dims.width + dx, ry, 18.0, flash_red());
+            } else {
+                right_text(&tier_txt, tier_r, ry, 18);
+            }
             // The stake jiggles red when the purse can't cover the wager.
             right_text_flash(
-                &race::stake_between(origin, p).to_string(),
+                &stake.to_string(),
                 stake_r,
                 ry,
                 18,
@@ -1098,6 +1126,25 @@ fn row_highlight() -> Color {
 fn right_text(text: &str, right_x: f32, y: f32, fs: u16) {
     let dims = measure_text(text, None, fs, 1.0);
     draw_text(text, right_x - dims.width, y, fs as f32, ink());
+}
+
+/// Roman numeral for a small tier (covers every fitting ladder).
+fn roman(n: i32) -> &'static str {
+    match n {
+        1 => "I",
+        2 => "II",
+        3 => "III",
+        4 => "IV",
+        5 => "V",
+        6 => "VI",
+        7 => "VII",
+        _ => "VIII",
+    }
+}
+
+/// A hull tier as the captain reads it: a 0-indexed level shown as `Mk I`..`Mk IV`.
+fn hull_mark(level0: i32) -> String {
+    format!("Mk {}", roman(level0 + 1))
 }
 
 /// The alarm red an out-of-bounds constraint flashes toward.
