@@ -150,7 +150,7 @@ impl UpgradeKind {
 
 pub const STARTING_GOLD: i32 = 200;
 pub const BASE_CARGO: i32 = 16; // hold slots on a fresh ship
-pub const CARGO_STEP: i32 = 4; // slots added per cargo upgrade
+pub const CARGO_STEP: i32 = 8; // slots added per cargo upgrade
 pub const STARTING_FOOD: i32 = 4;
 
 // The single source of the base top speed is the sailing engine's
@@ -162,8 +162,10 @@ const BASE_TOP_KNOTS: f64 = crate::sailing::BASE_TOP_KNOTS as f64;
 const KNOTS_PER_HULL_LEVEL: f64 = 5.0;
 const HAUL_BASE: i32 = 12;
 /// Haul tolerance gained per sail tier — sails *only* raise the load the rig can
-/// carry before the overload penalty bites.
-const HAUL_PER_SAIL_LEVEL: i32 = 6;
+/// carry before the overload penalty bites. Deliberately less than the +8 slots a
+/// cargo upgrade adds, so haulers must over-invest in sails to keep a growing hold
+/// at full speed; a racer (light hold) barely needs them.
+const HAUL_PER_SAIL_LEVEL: i32 = 4;
 const MAX_PENALTY: f64 = 0.66;
 
 /// Top tier (0-indexed) for the sails and the hold — six steps each.
