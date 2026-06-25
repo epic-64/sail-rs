@@ -81,6 +81,9 @@ void main() {
 struct Targets {
     w: u32,
     h: u32,
+    /// Whether the scene target is multisampled (the MSAA setting). Tracked so the
+    /// targets are rebuilt when the setting is toggled mid-voyage.
+    msaa: bool,
     bw: u32,
     bh: u32,
     scene: RenderTarget,
@@ -105,6 +108,19 @@ pub struct Bloom {
 
 fn make_target(w: u32, h: u32) -> RenderTarget {
     let rt = render_target(w.max(1), h.max(1));
+    rt.texture.set_filter(FilterMode::Linear);
+    rt
+}
+
+/// The scene target, optionally multisampled (the MSAA 4× setting). The bright/blur
+/// chain stays single-sampled — they're texture-to-texture passes with nothing to
+/// alias — so only the scene where the world is rasterized carries the samples.
+fn make_scene_target(w: u32, h: u32, msaa: bool) -> RenderTarget {
+    let rt = if msaa {
+        render_target_msaa(w.max(1), h.max(1))
+    } else {
+        render_target(w.max(1), h.max(1))
+    };
     rt.texture.set_filter(FilterMode::Linear);
     rt
 }
@@ -177,28 +193,52 @@ impl Bloom {
         }
     }
 
-    /// Ensure the render targets match the window, then hand back the scene target
-    /// for the caller to render the world into.
-    pub fn scene_target(&mut self, w: f32, h: f32) -> RenderTarget {
+    /// Ensure the render targets match the window (and the MSAA setting), then hand
+    /// back the scene target for the caller to render the world into.
+    pub fn scene_target(&mut self, w: f32, h: f32, msaa: bool) -> RenderTarget {
         let (fw, fh) = (w.max(1.0) as u32, h.max(1.0) as u32);
         let (bw, bh) = ((fw / 2).max(1), (fh / 2).max(1));
         let stale = match &self.targets {
-            Some(t) => t.w != fw || t.h != fh,
+            Some(t) => t.w != fw || t.h != fh || t.msaa != msaa,
             None => true,
         };
         if stale {
             self.targets = Some(Targets {
                 w: fw,
                 h: fh,
+                msaa,
                 bw,
                 bh,
-                scene: make_target(fw, fh),
+                scene: make_scene_target(fw, fh, msaa),
                 bright: make_target(bw, bh),
                 blur_a: make_target(bw, bh),
                 blur_b: make_target(bw, bh),
             });
         }
         self.targets.as_ref().unwrap().scene.clone()
+    }
+
+    /// Draw the scene target straight to the screen with no bloom — the path used
+    /// when bloom is off but the world was still rendered offscreen (so the MSAA
+    /// setting is honoured). Flips Y like the bloom composite, since render-target
+    /// textures are stored bottom-up.
+    pub fn blit_scene_to_screen(&self, w: f32, h: f32) {
+        let t = match &self.targets {
+            Some(t) => t,
+            None => return,
+        };
+        set_default_camera();
+        draw_texture_ex(
+            &t.scene.texture,
+            0.0,
+            0.0,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(w, h)),
+                flip_y: true,
+                ..Default::default()
+            },
+        );
     }
 
     /// Extract → blur → composite the scene target onto the screen. Call after the

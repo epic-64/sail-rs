@@ -6,7 +6,10 @@
 //!
 //!   - **Main** — *Resume* (back to the helm), *Options*, *Quit*.
 //!   - **Options** — a master-volume slider (in steps of 10%) that scales the whole
-//!     mix, a fullscreen toggle, plus *Back*.
+//!     mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, plus *Back*. The
+//!     bloom and MSAA rows are graphics settings that take effect immediately; both
+//!     rely on render-to-texture / a WebGL2 resolve that the web build can't grant,
+//!     so on the web they show "Not supported" and can't be toggled.
 //!
 //! Keyboard-driven like the rest of the game: Up/Down move the cursor, Left/Right
 //! work the slider, Enter selects, Esc backs out (Options → Main, Main → Resume).
@@ -24,9 +27,20 @@ enum View {
 
 /// The main-menu rows, in cursor order.
 const MAIN_ITEMS: [&str; 3] = ["Resume", "Options", "Quit"];
-/// The options rows: the master-volume slider, the fullscreen toggle, then Back.
-const OPTIONS_ROWS: usize = 3; // 0 = master volume, 1 = fullscreen, 2 = back
+/// The options rows, in cursor order:
+/// 0 = master volume, 1 = bloom, 2 = MSAA 4×, 3 = fullscreen, 4 = back.
+const OPTIONS_ROWS: usize = 5;
+const ROW_MASTER: usize = 0;
+const ROW_BLOOM: usize = 1;
+const ROW_MSAA: usize = 2;
+const ROW_FULLSCREEN: usize = 3;
+const ROW_BACK: usize = 4;
 const MASTER_STEP: f32 = 0.1; // the slider moves in 10% notches
+
+/// Whether the graphics features (bloom, MSAA) can run in this build. They need
+/// render-to-texture / a WebGL2 resolve the web build deliberately avoids (see
+/// `window_conf`/`bloom` in `main.rs`), so they're disabled on the web.
+const GRAPHICS_SUPPORTED: bool = !cfg!(target_arch = "wasm32");
 
 /// What the main loop should do after handling a frame of pause-menu input.
 pub enum PauseAction {
@@ -46,6 +60,12 @@ pub struct PauseMenu {
     /// Our own record of the window state — macroquad offers no getter, so we track
     /// it here and toggle `set_fullscreen` against it.
     fullscreen: bool,
+    /// Post-process bloom over the scene. Read each frame by the render loop. Off on
+    /// the web (the build has no render-to-texture there).
+    bloom: bool,
+    /// 4× MSAA on the offscreen scene. Read each frame by the render loop. Off on the
+    /// web (the resolve needs WebGL2, which the build avoids).
+    msaa: bool,
 }
 
 impl PauseMenu {
@@ -55,7 +75,21 @@ impl PauseMenu {
             view: View::Main,
             cursor: 0,
             fullscreen: true, // matches the window launching full-screen (see window_conf)
+            // Both default on where supported (matching the previous always-on native
+            // bloom + 4× MSAA), and forced off on the web.
+            bloom: GRAPHICS_SUPPORTED,
+            msaa: GRAPHICS_SUPPORTED,
         }
+    }
+
+    /// Whether post-process bloom is enabled (always false on the web).
+    pub fn bloom(&self) -> bool {
+        self.bloom
+    }
+
+    /// Whether 4× MSAA on the scene is enabled (always false on the web).
+    pub fn msaa(&self) -> bool {
+        self.msaa
     }
 
     /// Raise the menu, always opening on the main view with the cursor at the top.
@@ -105,8 +139,12 @@ impl PauseMenu {
         if is_key_pressed(KeyCode::Up) {
             self.cursor = (self.cursor + OPTIONS_ROWS - 1) % OPTIONS_ROWS;
         }
-        // The slider (row 0): Left/Right nudge the master gain a notch.
-        if self.cursor == 0 {
+        // A row's toggle is worked with Enter or Left/Right.
+        let toggled = is_key_pressed(KeyCode::Enter)
+            || is_key_pressed(KeyCode::Left)
+            || is_key_pressed(KeyCode::Right);
+        // The slider (master volume): Left/Right nudge the master gain a notch.
+        if self.cursor == ROW_MASTER {
             if is_key_pressed(KeyCode::Right) {
                 sounds.set_master(snap(sounds.master() + MASTER_STEP));
             }
@@ -114,18 +152,22 @@ impl PauseMenu {
                 sounds.set_master(snap(sounds.master() - MASTER_STEP));
             }
         }
-        // The fullscreen toggle (row 1): Enter or Left/Right flips it.
-        if self.cursor == 1
-            && (is_key_pressed(KeyCode::Enter)
-                || is_key_pressed(KeyCode::Left)
-                || is_key_pressed(KeyCode::Right))
-        {
+        // The bloom toggle — only togglable where graphics RTT is supported (not web).
+        if self.cursor == ROW_BLOOM && toggled && GRAPHICS_SUPPORTED {
+            self.bloom = !self.bloom;
+        }
+        // The MSAA 4× toggle — likewise native-only.
+        if self.cursor == ROW_MSAA && toggled && GRAPHICS_SUPPORTED {
+            self.msaa = !self.msaa;
+        }
+        // The fullscreen toggle.
+        if self.cursor == ROW_FULLSCREEN && toggled {
             self.fullscreen = !self.fullscreen;
             set_fullscreen(self.fullscreen);
         }
         // Back to the main view, whether by Esc or Enter on the Back row.
         let back = is_key_pressed(KeyCode::Escape)
-            || (is_key_pressed(KeyCode::Enter) && self.cursor == 2);
+            || (is_key_pressed(KeyCode::Enter) && self.cursor == ROW_BACK);
         if back {
             self.view = View::Main;
             self.cursor = 1; // land back on Options
@@ -138,8 +180,10 @@ impl PauseMenu {
         // Dim the world behind the board so the parchment reads clearly.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
 
-        let pw = 380.0_f32.min(w * 0.7);
-        let ph = 300.0_f32.min(h * 0.7);
+        let pw = 420.0_f32.min(w * 0.82);
+        // Tall enough for the Options view's five rows; the Main view just has more
+        // breathing room.
+        let ph = 440.0_f32.min(h * 0.85);
         let x0 = (w - pw) * 0.5;
         let y0 = (h - ph) * 0.5;
         draw_rectangle(x0, y0, pw, ph, parchment());
@@ -195,8 +239,8 @@ impl PauseMenu {
         draw_text("Options", cx, y0 + 50.0, 36.0, ink());
 
         // --- Master volume slider (row 0) ---
-        let row_y = y0 + 120.0;
-        if self.cursor == 0 {
+        let row_y = y0 + 104.0;
+        if self.cursor == ROW_MASTER {
             draw_rectangle(x0 + 12.0, row_y - 26.0, pw - 24.0, 70.0, row_highlight());
         }
         let master = sounds.master();
@@ -218,27 +262,34 @@ impl PauseMenu {
         draw_rectangle(track_x, track_y, track_w * master, track_h, ink());
         let knob_x = track_x + track_w * master;
         draw_circle(knob_x, track_y + track_h * 0.5, 8.0, ink());
-        if self.cursor == 0 {
+        if self.cursor == ROW_MASTER {
             draw_text("◄ / ►", track_x, track_y + 34.0, 16.0, dim_ink());
         }
 
-        // --- Fullscreen toggle (row 1) ---
-        let fs_y = row_y + 76.0;
-        if self.cursor == 1 {
-            draw_rectangle(x0 + 12.0, fs_y - 26.0, pw - 24.0, 38.0, row_highlight());
+        // --- Bloom toggle (row 1) ---
+        // On the web these graphics rows are inert: show why instead of On/Off.
+        let bloom_y = row_y + 80.0;
+        if GRAPHICS_SUPPORTED {
+            self.toggle_row(ROW_BLOOM, "Bloom", on_off(self.bloom), cx, x0, bloom_y, pw, pad);
+        } else {
+            self.disabled_row(ROW_BLOOM, "Bloom", cx, x0, bloom_y, pw, pad);
         }
-        draw_text("Fullscreen", cx, fs_y, 24.0, ink());
-        draw_text(
-            if self.fullscreen { "On" } else { "Off" },
-            x0 + pw - pad - 56.0,
-            fs_y,
-            24.0,
-            ink(),
-        );
 
-        // --- Back (row 2) ---
-        let back_y = y0 + ph - 64.0;
-        if self.cursor == 2 {
+        // --- MSAA 4× toggle (row 2) ---
+        let msaa_y = bloom_y + 40.0;
+        if GRAPHICS_SUPPORTED {
+            self.toggle_row(ROW_MSAA, "MSAA 4×", on_off(self.msaa), cx, x0, msaa_y, pw, pad);
+        } else {
+            self.disabled_row(ROW_MSAA, "MSAA 4×", cx, x0, msaa_y, pw, pad);
+        }
+
+        // --- Fullscreen toggle (row 3) ---
+        let fs_y = msaa_y + 40.0;
+        self.toggle_row(ROW_FULLSCREEN, "Fullscreen", on_off(self.fullscreen), cx, x0, fs_y, pw, pad);
+
+        // --- Back (row 4) ---
+        let back_y = y0 + ph - 56.0;
+        if self.cursor == ROW_BACK {
             draw_rectangle(x0 + 12.0, back_y - 26.0, pw - 24.0, 38.0, row_highlight());
         }
         draw_text("Back", cx, back_y, 28.0, ink());
@@ -250,6 +301,39 @@ impl PauseMenu {
             16.0,
             dim_ink(),
         );
+    }
+
+    /// Draw a label/value toggle row at `y`, highlighting it if the cursor is on it
+    /// and right-aligning `value` to the panel's inner edge.
+    #[allow(clippy::too_many_arguments)]
+    fn toggle_row(&self, row: usize, label: &str, value: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
+        if self.cursor == row {
+            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
+        }
+        draw_text(label, cx, y, 24.0, ink());
+        let vw = measure_text(value, None, 24, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, 24.0, ink());
+    }
+
+    /// Like `toggle_row`, but for a row that can't be changed in this build (web): the
+    /// value reads "Not supported" in dim ink so it's clearly inert.
+    fn disabled_row(&self, row: usize, label: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
+        if self.cursor == row {
+            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
+        }
+        draw_text(label, cx, y, 24.0, dim_ink());
+        let value = "Not supported";
+        let vw = measure_text(value, None, 18, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, 18.0, dim_ink());
+    }
+}
+
+/// "On"/"Off" for a toggle value.
+fn on_off(v: bool) -> &'static str {
+    if v {
+        "On"
+    } else {
+        "Off"
     }
 }
 
