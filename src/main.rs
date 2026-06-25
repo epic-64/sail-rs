@@ -30,6 +30,7 @@ mod ship_render;
 mod sound;
 mod spray;
 mod trader;
+mod ui;
 mod weather;
 mod world;
 
@@ -44,6 +45,7 @@ use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
 use spray::{Spray, SprayInput};
+use ui::format_dist;
 use weather::{Weather, WeatherState};
 use world::Island;
 
@@ -276,16 +278,6 @@ fn read_turn(log_open: bool) -> f32 {
         turn -= 1.0;
     }
     turn
-}
-
-/// A short distance readout for the race standings: kilometres past 1 km, metres
-/// below it. (`SailingView.formatDist`.)
-fn format_dist(m: f32) -> String {
-    if m >= 1000.0 {
-        format!("{:.1} km", m / 1000.0)
-    } else {
-        format!("{} m", m.round() as i32)
-    }
 }
 
 /// 8-point compass label for a bearing (radians, 0 = N, CW).
