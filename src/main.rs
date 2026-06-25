@@ -659,6 +659,13 @@ async fn main() {
             if is_key_pressed(KeyCode::E) {
                 weather.nudge_stormier();
             }
+            // Dev aid: stave in 10% of a full hull, to feel the damage debuffs
+            // (no-go zone / turn / top speed) and the drydock without sailing it off.
+            if is_key_pressed(KeyCode::X) {
+                let blow = (gs.max_hull() as f64 * 0.10).ceil() as i32;
+                gs.hull = (gs.hull - blow).max(0);
+                gs.hull_wear = 0.0;
+            }
             // Nudge the clock forward (T) / back (Y) ~30 min, to ease through the cycle.
             if is_key_pressed(KeyCode::T) {
                 tod = (tod + 0.02).rem_euclid(1.0);
@@ -955,29 +962,51 @@ async fn main() {
         }
 
         // --- HUD ---------------------------------------------------------------
+        // Pared back to the essentials: the purse, the speed, the wind's quarter
+        // and the point of sail — plus a warning badge for any handling debuff.
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
         let knots = kin.speed() / sailing::KNOT;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
-        let hud = format!(
-            "{}  Sail: {}  {:.1} kn  ·  Wind {}  ({})",
-            day.label(),
-            SAIL_NAMES[sail_mode],
-            knots,
-            wind_from,
-            point,
-        );
-        draw_text(&hud, 16.0, 28.0, 24.0, WHITE);
+        // Purse, kept gold so the captain reads his fortune at a glance.
         draw_text(
-            "W/S sail · A/D helm · Space dock · C look astern · Q/E weather · T time · [ ] wind · L log · B bloom · Esc menu",
+            &format!("Gold {}", gs.gold),
             16.0,
-            52.0,
-            20.0,
-            Color::new(1.0, 1.0, 1.0, 0.7),
+            28.0,
+            26.0,
+            Color::new(1.0, 0.92, 0.6, 1.0),
         );
-        // Purse + hold, so the captain can read his fortunes from the helm too.
-        let purse = format!("Gold {}  ·  Hold {}/{}", gs.gold, gs.hold_used(), gs.hold_capacity);
-        draw_text(&purse, 16.0, 76.0, 22.0, Color::new(1.0, 0.92, 0.6, 1.0));
+        // Speed · wind quarter · point of sail.
+        let line = format!("{:.1} kn  ·  Wind {}  ({})", knots, wind_from, point);
+        draw_text(&line, 16.0, 54.0, 24.0, WHITE);
+
+        // Active-debuff badges: a warning triangle (and a word) for a battered
+        // hull and/or an overladen hold — the handling penalties in force.
+        {
+            let mut badges: Vec<&str> = Vec::new();
+            if hull::fraction(&gs) <= 0.90 {
+                badges.push("Hull");
+            }
+            if upgrades::overload_penalty(gs.sail_level, gs.cargo_used()) > 0.0 {
+                badges.push("Overladen");
+            }
+            let warn = Color::new(1.0, 0.78, 0.2, 1.0);
+            let mut x = 16.0;
+            let y = 84.0;
+            let s = 16.0; // triangle size
+            for label in badges {
+                draw_triangle(
+                    vec2(x + s * 0.5, y - s),
+                    vec2(x, y),
+                    vec2(x + s, y),
+                    warn,
+                );
+                draw_text("!", x + s * 0.5 - 2.5, y - 2.0, 18.0, Color::new(0.1, 0.05, 0.0, 1.0));
+                let lx = x + s + 6.0;
+                draw_text(label, lx, y, 20.0, warn);
+                x = lx + measure_text(label, None, 20, 1.0).width + 18.0;
+            }
+        }
 
         // Salvage pickup toast: a gold note that floats up and fades over the deck
         // when a piece is hauled aboard.

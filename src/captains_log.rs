@@ -109,7 +109,7 @@ pub fn render(
 
     // The open book, centred.
     let pw = (w * 0.86).min(760.0);
-    let ph = (h * 0.86).min(400.0);
+    let ph = (h * 0.90).min(470.0);
     let x0 = (w - pw) / 2.0;
     let y0 = (h - ph) / 2.0;
     draw_rectangle(x0, y0, pw, ph, parchment());
@@ -243,9 +243,6 @@ fn page_vessel(p: &Page, gs: &GameState) {
     let lh = 30.0;
     let mut y = p.body_y;
 
-    row("Gold", &format!("{} g", gs.gold), p.x, y, p.col_w, fs);
-    y += lh;
-
     // Hull, inked by condition: sound (ink), damaged ≤50% (amber), crippled ≤25%.
     let frac = hull::fraction(gs);
     let hull_pct = (frac * 100.0).round() as i32;
@@ -257,11 +254,6 @@ fn page_vessel(p: &Page, gs: &GameState) {
         ink()
     };
     row_colored("Hull", &format!("{hull_pct}%"), hull_col, p.x, y, p.col_w, fs);
-    y += lh;
-
-    let food = gs.food();
-    let food_col = if food == 0 { alarm_ink() } else { ink() };
-    row_colored("Food", &format!("{food}"), food_col, p.x, y, p.col_w, fs);
     y += lh * 0.6;
     draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
     y += lh * 0.8;
@@ -324,6 +316,11 @@ fn page_hold(p: &Page, gs: &GameState) {
     let fs = 22;
     let lh = 30.0;
     let mut y = p.body_y;
+
+    row("Gold", &format!("{} g", gs.gold), p.x, y, p.col_w, fs);
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    y += lh * 0.8;
 
     let used = gs.hold_used();
     let cap = gs.hold_capacity;
