@@ -269,7 +269,7 @@ mod tests {
         let world = two_port_world();
         let mut gs = flush_state();
         let contract = offered_at(&gs, &world)[0];
-        gs.cargo = [0; 7];
+        gs.cargo = [0; 8];
         gs.active_missions = vec![contract];
 
         let hold_before = gs.hold_used();

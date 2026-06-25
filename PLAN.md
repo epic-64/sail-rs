@@ -141,7 +141,9 @@ while keeping the game's mechanics and feel.
   (buy/fill/dump/sell). Sail in within a port's `dock_range` with the bow pointed
   at it and the sails struck, press **Space**, and a parchment board opens over
   the live sea (the world keeps running underneath). Two tabs: **Market**
-  (buy/sell the seven goods) and **Shipyard/Drydock** (mend the hull, and at
+  (buy/sell the eight goods — including **planks**, ordinary cargo that doubles as
+  a field repair: caulk the hull at sea for +10 from the captain's log) and
+  **Shipyard/Drydock** (mend the hull, and at
   shipyard ports buy hull/sail/cargo upgrades). Keyboard-driven (arrows + Tab + Enter,
   Esc sets sail). **Top speed comes from the hull tier alone** (24/29/34/39 kn);
   sails raise only haul tolerance and an overladen hold trims the hull's peak
@@ -261,8 +263,10 @@ Roughly in suggested build order; each is a milestone.
   180° over the wake, helm unchanged · **Q/E** nudge the weather calmer/stormier
   (it auto-drifts) · **T/Y** daytime forward/back · **[ ]** back/veer the wind (dev aid for feeling
   the points of sail) ·
-  **L** open/close the captain's log (**←/→** turn its pages while open) · **Esc**
-  close the log / quit. In port: arrows
+  **L** open/close the captain's log (**←/→** turn its pages while open; on the
+  Vessel spread **↑/↓** select and **Enter** presses the *Caulk hull* button — a +10
+  field repair that spends a plank from the hold) · **Esc** close the log / quit. In
+  port: arrows
   move the cursor, **Tab** switches board, **Enter** trades, **Esc** sets sail.
 - Tuning knobs live in `OceanRenderer::new` (mesh density, `row_bias`, `f_far`,
   `depth_far`) and `world.rs` (island radius/height by terrain).

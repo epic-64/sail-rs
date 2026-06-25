@@ -398,6 +398,9 @@ async fn run_game(
     // and which two-page spread it is turned to (paged with the arrow keys).
     let mut log_open = false;
     let mut log_spread: usize = 0;
+    // Which button on the open spread the cursor is on (Up/Down move it, Enter
+    // presses it); reset whenever the book opens or a page is turned.
+    let mut log_sel: usize = 0;
     // The always-on corner chart's ink scheme.
     let minimap_pal = minimap::MinimapPalette::hud();
 
@@ -735,6 +738,7 @@ async fn run_game(
                 // to spread 0 on close).
                 if log_open {
                     log_spread = 0;
+                    log_sel = 0;
                 }
             }
             // Page the open log with the left/right arrows (no mouse to click the
@@ -742,9 +746,27 @@ async fn run_game(
             if log_open {
                 if is_key_pressed(KeyCode::Right) {
                     log_spread = (log_spread + 1).min(captains_log::NUM_SPREADS - 1);
+                    log_sel = 0;
                 }
                 if is_key_pressed(KeyCode::Left) {
                     log_spread = log_spread.saturating_sub(1);
+                    log_sel = 0;
+                }
+                // Up/Down move the selection cursor among the spread's buttons (left/
+                // right turn the page), and Enter presses the focused one — the same
+                // arrows-then-Enter flow as the port board. The Vessel spread's button
+                // caulks the hull with a plank; a no-op without timber or on a sound hull.
+                let buttons = captains_log::button_count(log_spread);
+                if buttons > 0 {
+                    if is_key_pressed(KeyCode::Up) {
+                        log_sel = log_sel.saturating_sub(1);
+                    }
+                    if is_key_pressed(KeyCode::Down) {
+                        log_sel = (log_sel + 1).min(buttons - 1);
+                    }
+                    if is_key_pressed(KeyCode::Enter) && log_spread == 1 && log_sel == 0 {
+                        let _ = gs.caulk_with_plank();
+                    }
                 }
             }
             if is_key_pressed(KeyCode::Escape) {
@@ -1214,6 +1236,7 @@ async fn run_game(
                 &chart_marks,
                 &race_marks,
                 log_spread,
+                log_sel,
                 dt,
                 w,
                 h,

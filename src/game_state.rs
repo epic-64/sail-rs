@@ -28,10 +28,15 @@ pub enum Good {
     Silk,
     Cotton,
     Tobacco,
+    /// Ship's timber: an ordinary, tradeable commodity that doubles as a field
+    /// repair — caulk the hull with a plank at sea for [`GameState::HULL_PER_PLANK`]
+    /// points (see [`GameState::caulk_with_plank`]). Appended last so the existing
+    /// goods keep their cargo-array ordinals.
+    Plank,
 }
 
 impl Good {
-    pub const ALL: [Good; 7] = [
+    pub const ALL: [Good; 8] = [
         Good::Food,
         Good::Rum,
         Good::Sugar,
@@ -39,6 +44,7 @@ impl Good {
         Good::Silk,
         Good::Cotton,
         Good::Tobacco,
+        Good::Plank,
     ];
 
     /// This good's slot in the cargo array (== Scala enum ordinal).
@@ -56,6 +62,7 @@ impl Good {
             Good::Silk => "Silk",
             Good::Cotton => "Cotton",
             Good::Tobacco => "Tobacco",
+            Good::Plank => "Planks",
         }
     }
 
@@ -69,6 +76,10 @@ impl Good {
             Good::Silk => 45,
             Good::Cotton => 12,
             Good::Tobacco => 24,
+            // A plank mends 10 hull points; the drydock charges 2 g/point (20 g for
+            // the same), so timber priced just under that is a worthwhile thing to
+            // stock for repairs far from a shipyard.
+            Good::Plank => 15,
         }
     }
 }
@@ -77,7 +88,7 @@ impl Good {
 /// island+good (`Market.forIsland`).
 #[derive(Clone, Debug)]
 pub struct Market {
-    pub prices: [i32; 7],
+    pub prices: [i32; 8],
 }
 
 impl Market {
@@ -85,7 +96,7 @@ impl Market {
     /// same RNG draw order as Scala so a seed reproduces the chart's economy.
     pub fn for_island(island: &Island, seed: i64) -> Market {
         let mut rng = Rng::from_seed(seed ^ (island.id as i64).wrapping_mul(0x100000001b3));
-        let mut prices = [0i32; 7];
+        let mut prices = [0i32; 8];
         for (slot, good) in Good::ALL.iter().enumerate() {
             let factor = rng.between(0.55, 1.45);
             prices[slot] = ((good.base_price() as f64 * factor).round() as i32).max(1);
@@ -184,6 +195,9 @@ const BASE_MAX_HULL: i32 = 180;
 /// to keep mended — the higher upkeep the captain trades for the speed.
 const HULL_PER_HULL_LEVEL: i32 = 60;
 const REPAIR_COST_PER_HULL: i32 = 2;
+/// Hull points mended by caulking with a single plank from the hold (a field
+/// repair the captain makes from the log; see [`GameState::caulk_with_plank`]).
+const HULL_PER_PLANK: i32 = 10;
 
 // --- Upgrades (free functions; the logic of `shared.Upgrades`) ---------------
 
@@ -383,7 +397,7 @@ pub enum Location {
 pub struct GameState {
     pub gold: i32,
     /// Units of each good in the hold, indexed by [`Good::index`].
-    pub cargo: [i32; 7],
+    pub cargo: [i32; 8],
     pub hold_capacity: i32,
     pub location: Location,
     pub hull_level: i32, // hull tier bought; drives top speed & max hull (see `upgrades`)
@@ -408,7 +422,7 @@ impl GameState {
     pub fn start() -> GameState {
         GameState {
             gold: STARTING_GOLD,
-            cargo: [0i32; 7],
+            cargo: [0i32; 8],
             hold_capacity: BASE_CARGO,
             location: Location::Sailing,
             hull_level: 0,
@@ -569,6 +583,27 @@ impl GameState {
         }
         self.gold -= points * REPAIR_COST_PER_HULL;
         self.hull += points;
+        Ok(())
+    }
+
+    /// Hull points mended by a single plank — surfaced so the captain's log can
+    /// caption the field repair.
+    pub const HULL_PER_PLANK: i32 = HULL_PER_PLANK;
+
+    /// Caulk the hull at sea with one plank from the hold, mending
+    /// [`HULL_PER_PLANK`](Self::HULL_PER_PLANK) points (capped at the hull's
+    /// maximum). This is the captain's-log field repair — no gold and no drydock,
+    /// just timber spent from the cargo. Refused with no planks aboard or a hull
+    /// already sound (so a plank is never wasted patching a full hull).
+    pub fn caulk_with_plank(&mut self) -> Result<(), TradeError> {
+        if self.quantity_of(Good::Plank) <= 0 {
+            return Err(TradeError::NotEnoughCargo);
+        }
+        if hull::damage(self) <= 0 {
+            return Err(TradeError::HullSound);
+        }
+        self.cargo[Good::Plank.index()] -= 1;
+        self.hull = (self.hull + HULL_PER_PLANK).min(self.max_hull());
         Ok(())
     }
 
@@ -770,6 +805,39 @@ mod tests {
         assert!(gs.max_hull() > before);
         assert_eq!(gs.hull, gs.max_hull());
         assert_eq!(gs.hull_wear, 0.0);
+    }
+
+    #[test]
+    fn a_plank_caulks_ten_hull_points_and_is_spent() {
+        let mut gs = GameState::start();
+        gs.cargo[Good::Plank.index()] = 2;
+        gs.hull = gs.max_hull() - 25;
+        gs.caulk_with_plank().unwrap();
+        // One plank spent, ten points mended.
+        assert_eq!(gs.quantity_of(Good::Plank), 1);
+        assert_eq!(gs.hull, gs.max_hull() - 15);
+    }
+
+    #[test]
+    fn caulking_never_overfills_the_hull_and_refuses_a_sound_one() {
+        let mut gs = GameState::start();
+        gs.cargo[Good::Plank.index()] = 1;
+        // Only 4 points down: the plank tops it off without overshooting.
+        gs.hull = gs.max_hull() - 4;
+        gs.caulk_with_plank().unwrap();
+        assert_eq!(gs.hull, gs.max_hull());
+        assert_eq!(gs.quantity_of(Good::Plank), 0);
+        // A second caulk on a sound hull is refused — and no plank is wasted.
+        gs.cargo[Good::Plank.index()] = 1;
+        assert_eq!(gs.caulk_with_plank(), Err(TradeError::HullSound));
+        assert_eq!(gs.quantity_of(Good::Plank), 1);
+    }
+
+    #[test]
+    fn caulking_without_timber_is_refused() {
+        let mut gs = GameState::start();
+        gs.hull = gs.max_hull() / 2;
+        assert_eq!(gs.caulk_with_plank(), Err(TradeError::NotEnoughCargo));
     }
 
     #[test]
