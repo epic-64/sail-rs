@@ -600,8 +600,9 @@ async fn run_game(
             }
 
             // Top speed scales with the rig's upgrades and the weight in the hold:
-            // a stronger rig runs faster, an overladen hull crawls.
-            let scale = upgrades::speed_scale(gs.sail_level, gs.cargo_used());
+            // a stronger rig runs faster, an overladen hull crawls. The weight is the
+            // whole hold — ordinary cargo *and* reserved mission goods riding along.
+            let scale = upgrades::speed_scale(gs.sail_level, gs.hold_used());
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             let prev_pos = kin.pos;
             kin = sailing::step_debuffed(kin, helm, wind, dt, scale, hull_debuff);
@@ -1036,17 +1037,27 @@ async fn run_game(
         let knots = kin.speed() / sailing::KNOT;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
-        // Purse, kept gold so the captain reads his fortune at a glance.
-        draw_text(
-            &format!("Gold {}", gs.gold),
-            16.0,
-            28.0,
-            26.0,
-            Color::new(1.0, 0.92, 0.6, 1.0),
+        // Everything in one row, at one font size, dot-separated: a coin icon and
+        // the purse, then speed · wind quarter · point of sail.
+        let fs = 24.0;
+        let baseline = 32.0;
+        // Coin icon, vertically centred on the text's cap height.
+        let r = 9.0;
+        let cx = 16.0 + r;
+        let cy = baseline - fs * 0.34;
+        let rim = Color::new(0.78, 0.58, 0.12, 1.0); // darker milled edge
+        let face = Color::new(1.0, 0.84, 0.32, 1.0); // bright gold face
+        let shine = Color::new(1.0, 0.97, 0.78, 1.0); // glint
+        draw_circle(cx, cy, r, rim);
+        draw_circle(cx, cy, r * 0.82, face);
+        draw_circle_lines(cx, cy, r * 0.82, 1.0, rim);
+        draw_circle(cx - r * 0.3, cy - r * 0.3, r * 0.2, shine);
+        // The rest of the row, starting just right of the coin.
+        let line = format!(
+            "{}  ·  {:.1} kn  ·  Wind {}  ({})",
+            gs.gold, knots, wind_from, point
         );
-        // Speed · wind quarter · point of sail.
-        let line = format!("{:.1} kn  ·  Wind {}  ({})", knots, wind_from, point);
-        draw_text(&line, 16.0, 54.0, 24.0, WHITE);
+        draw_text(&line, 16.0 + 2.0 * r + 8.0, baseline, fs, WHITE);
 
         // Active-debuff badges: a warning triangle (and a word) for a battered
         // hull and/or an overladen hold — the handling penalties in force.
@@ -1055,7 +1066,7 @@ async fn run_game(
             if hull::fraction(&gs) <= 0.90 {
                 badges.push("Hull");
             }
-            if upgrades::overload_penalty(gs.sail_level, gs.cargo_used()) > 0.0 {
+            if upgrades::overload_penalty(gs.sail_level, gs.hold_used()) > 0.0 {
                 badges.push("Overladen");
             }
             let warn = Color::new(1.0, 0.78, 0.2, 1.0);
