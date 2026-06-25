@@ -82,13 +82,16 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
 /// toward the storm overcast by `storm`. `sky` is the clock's fair-weather gradient.
 ///
-/// Around dawn and dusk the gradient is no longer uniform across the width: the warm
-/// "lit" sky is kept only toward the sun's bearing, fading sideways to a cool, dark
-/// twilight (the night gradient) on the far side. So at sunset the red glow sits on
-/// the sun's side and the opposite sky goes dark first; at sunrise the sun's side
-/// brightens while the rest is still night. The effect is gated to the low-sun
-/// window (`tw`) and weighted toward the horizon, so midday and deep night stay
-/// uniform. Built as one mesh, since macroquad has no built-in gradient.
+/// The sky is treated as a skybox locked to the sun's bearing: a warm "lit" dome
+/// toward the sun and a cool, dark dome away from it, the split sharpening as the
+/// sun nears the horizon. So at sunrise the eastern sky around the sun glows while
+/// the west, the sides and the zenith stay night-dark; at sunset the red sits on
+/// the sun's side and the opposite sky has already gone dark. The directional split
+/// is gated to the low-sun `twilight` window (active whether the sun is just above
+/// *or* just below the horizon) and weighted toward the horizon, so high-noon and
+/// deep-night skies stay uniform. Because the bearing is taken relative to the
+/// heading, the bright side stays pinned to the sun as the helm swings the view.
+/// Built as one mesh, since macroquad has no built-in gradient.
 #[allow(clippy::too_many_arguments)]
 fn draw_sky(
     sky: [(f32, f32, f32); 3],
@@ -123,11 +126,16 @@ fn draw_sky(
     };
 
     // The whole sky darkens to the night gradient as the sun sinks past the horizon,
-    // so no warm tint lingers overhead or to the sides once it's down. Only a low
-    // band toward the sun's bearing is spared, keeping the directional afterglow —
-    // and only briefly, as `glow_window` shuts once the sun is well below.
+    // so no warm tint lingers overhead once it's down (a uniform vertical fall).
     let base_night = palette::night_factor(sun_alt); // 0 by day, 1 once set
-    let glow_window = smoothstep(-0.42, -0.05, sun_alt); // warm patch only near sunset
+    // The strength of the *directional* split: a bell centred on the sun sitting on
+    // the horizon, so it rises as the sun approaches the sea line (from above on the
+    // way down, from below on the way up) and fades both at high noon and at the dead
+    // of night. This is what makes the warm side appear while the sun is still up —
+    // the old code keyed the split off `base_night`, which is zero until the sun has
+    // already set, so a sunrise lit every bearing equally.
+    const TWILIGHT_WIDTH: f32 = 0.34;
+    let twilight = (-(sun_alt / TWILIGHT_WIDTH).powi(2)).exp();
     // The sun's bearing across the view (relative to the heading).
     let rel_sun = wrap_angle(sun_az - heading);
     // Angular half-width of the warm glow around the sun's bearing.
@@ -138,9 +146,9 @@ fn draw_sky(
     let back = lerp3(grad(&lit, 0.0), grad(&dark, 0.0), base_night);
     draw_rectangle(-m, -m, w + 2.0 * m, horizon + m, rgb(back));
 
-    if base_night <= 0.001 || glow_window <= 0.001 {
-        // No directional warmth (full day, or fully dark night): a plain vertical
-        // gradient — eased uniformly toward night by `base_night` — is enough.
+    if twilight <= 0.001 {
+        // No twilight split (high day, or deep night): a plain vertical gradient —
+        // eased uniformly toward night by `base_night` — is enough.
         let strips = 96;
         let strip_h = horizon / strips as f32;
         for i in 0..strips {
@@ -170,8 +178,9 @@ fn draw_sky(
         let t = clamp(y / horizon, 0.0, 1.0);
         let lit_c = grad(&lit, t);
         let dark_c = grad(&dark, t);
-        // The afterglow is confined to the lower sky (overhead darkens like the rest).
-        let horizon_band = smoothstep(0.45, 0.95, t);
+        // The split is confined to the lower sky (the zenith stays uniform, tracking
+        // `base_night` only) and fades out toward the very top.
+        let horizon_band = smoothstep(0.30, 0.95, t);
         for c in 0..=cols {
             let fx = c as f32 / cols as f32;
             let x = x0 + (x1 - x0) * fx;
@@ -180,9 +189,17 @@ fn draw_sky(
             let rel_col = (x - w * 0.5) / (w * 0.5) * half_fov;
             let sep = wrap_angle(rel_col - rel_sun);
             let glow = (-(sep / GLOW_WIDTH).powi(2)).exp();
-            // How much of the warm sky to spare from the night darkening, here.
-            let warm_keep = glow * horizon_band * glow_window;
-            let night_amt = clamp(base_night * (1.0 - warm_keep), 0.0, 1.0);
+            // Two directional pushes, both scaled by the twilight strength and limited
+            // to the lower sky:
+            //   warm_keep — near the sun, hold the warm "lit" sky even after the sun
+            //               has dipped (spares the afterglow from `base_night`);
+            //   dark_push — away from the sun, pull toward the cool night sky even
+            //               while the sun is still up, so the anti-solar sky and the
+            //               sides darken at sunrise/sunset instead of brightening.
+            let warm_keep = glow * horizon_band * twilight;
+            let dark_push = (1.0 - glow) * horizon_band * twilight;
+            let night_amt =
+                clamp(base_night * (1.0 - warm_keep) + dark_push * (1.0 - base_night), 0.0, 1.0);
             let col = lerp3(lit_c, dark_c, night_amt);
             vertices.push(Vertex::new(x, y, 0.0, fx, fy, rgb(col)));
         }

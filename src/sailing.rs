@@ -181,9 +181,10 @@ impl Helm {
 
 pub const KNOT: f32 = 0.5144; // m/s per knot
 pub const MAX_SPEED: f32 = 23.0 * KNOT; // ~11.83 m/s top speed (a dead run = 100%)
-pub const DRAG: f32 = 0.28; // 1/s water resistance while the sails are working
-pub const GLIDE_DRAG: f32 = 0.10; // 1/s reduced resistance when starved of drive, so she keeps her way
-pub const GLIDE_FACTOR: f32 = FLOOR_DRIVE; // wind factor below which drag eases toward GLIDE_DRAG
+pub const DRAG: f32 = 0.16; // 1/s water resistance. Low for a heavy, high-momentum hull:
+// the drive impulse scales with DRAG too, so steady-state speed (drive/DRAG) is
+// unchanged — lowering it only makes her slower to gain *and* shed way, so she
+// coasts through the wind's eye on a tack/jibe instead of stalling at once.
 pub const KEEL: f32 = 0.9; // 1/s how strongly the keel bleeds side-slip
 pub const MAX_YAW_RATE: f32 = 0.24; // rad/s heading change at full rudder once up to speed
 pub const REF_SPEED: f32 = 7.0; // m/s at which the rudder reaches full bite
@@ -220,14 +221,10 @@ pub fn step_scaled(kin: Kinematics, helm: Helm, wind: Wind, dt: f32, speed_scale
     let factor = wind.factor(heading);
     let drive = throttle * (top * DRAG) * factor;
     let thrust_v = kin.vel + fwd * (drive * dt);
-    // Water resistance: full DRAG at any working point of sail, easing to the lower
-    // GLIDE_DRAG as the drive falls away in the no-go zone — so a ship that shoots
-    // into irons keeps her way and can coast through the wind's eye rather than
-    // stalling at once. Real points of sail (factor ≥ GLIDE_FACTOR) are unaffected,
-    // so steady-state sailing speeds are unchanged.
-    let glide = clamp(factor / GLIDE_FACTOR, 0.0, 1.0);
-    let decay = GLIDE_DRAG + (DRAG - GLIDE_DRAG) * glide;
-    let dragged = thrust_v * (1.0 - decay * dt).max(0.0);
+    // Water resistance: a single low DRAG at every point of sail gives the hull plenty
+    // of momentum, so she carries her way through the wind's eye on a tack/jibe rather
+    // than stalling at once. Steady-state speed is unaffected (drive scales with DRAG).
+    let dragged = thrust_v * (1.0 - DRAG * dt).max(0.0);
     let fwd_comp = fwd.dot(dragged);
     let lateral = dragged - fwd * fwd_comp; // sideways slip
     let gripped = dragged - lateral * clamp(KEEL * dt, 0.0, 1.0);
