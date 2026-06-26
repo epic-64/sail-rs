@@ -1,0 +1,2 @@
+- when rotating the ship, rivals get bigger and smaller rapidly. It cannot be explained by their distance alone
+- when sailing away from an island, there are sometimes visual artifacts that look like slices of land appearing in the middle of the ocean. This is likely a rendering bug.
