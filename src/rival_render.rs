@@ -57,12 +57,16 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
 
     // Foot on the local wave surface (gained like the sea), masthead a fixed run of
     // real metres above it. Project both through the same cylindrical map the waves
-    // use, so the rival sits *in* the swell rather than floating over it.
+    // use, so the rival sits *in* the swell rather than floating over it. The
+    // depression angle is purely `atan(height_below_eye / d)` — a function of
+    // distance alone, *not* of the bearing `phi` (column = bearing, row =
+    // depression are independent axes in this cylindrical map, exactly as
+    // `islands_render::project` does it). An earlier `* phi.cos()` foreshortening
+    // here made the rival swell and shrink as the player merely rotated the ship.
     let wave = ocean::height(rk.pos, t, sea);
     let foot_disp = (wave - heave) * WAVE_GAIN;
-    let cphi = phi.cos();
-    let foot_y = horizon + ((BASE_EYE - foot_disp) * cphi / d).atan() * px_per_rad;
-    let top_y = horizon + ((BASE_EYE - foot_disp - RIVAL_TOP_M) * cphi / d).atan() * px_per_rad;
+    let foot_y = horizon + ((BASE_EYE - foot_disp) / d).atan() * px_per_rad;
+    let top_y = horizon + ((BASE_EYE - foot_disp - RIVAL_TOP_M) / d).atan() * px_per_rad;
     let raw_h = (foot_y - top_y).max(0.0);
     let height = (raw_h * RIVAL_MAG).max(RIVAL_MIN_PX);
     let alpha = clamp((1.0 - d / MAX_VIEW) * 1.6, 0.18, 1.0);
