@@ -4,9 +4,6 @@
 //! bearing, row = depression angle). Only the constants the scene + wave system
 //! need are ported here; island projection comes later.
 
-/// Default horizontal half field of view (~94° total) at the design aspect ratio.
-pub const HALF_FOV_H: f32 = 0.82;
-
 /// Cap on the live half-FOV (~60° to the side, ~120° total). Past this the
 /// cylindrical ground-plane projection degenerates (near water rears up to the
 /// horizon at the sides), so a wider window stretches the capped span instead.

@@ -146,6 +146,7 @@ fn port_structures(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 
 // --- placement helpers -------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)] // scatter parameters (bounds + density knobs)
 fn scatter(
     rng: &mut Rng,
     count: i32,

@@ -451,9 +451,6 @@ impl GameState {
     pub fn hold_free(&self) -> i32 {
         self.hold_capacity - self.hold_used()
     }
-    pub fn food(&self) -> i32 {
-        self.quantity_of(Good::Food)
-    }
 
     pub fn max_hull(&self) -> i32 {
         hull::max_hull(self.hull_level)

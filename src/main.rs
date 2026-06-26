@@ -27,6 +27,7 @@ mod rival_render;
 mod rng;
 mod sailing;
 mod save;
+mod scene;
 mod ship_render;
 mod sound;
 mod spray;
@@ -109,18 +110,20 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// deep-night skies stay uniform. Because the bearing is taken relative to the
 /// heading, the bright side stays pinned to the sun as the helm swings the view.
 /// Built as one mesh, since macroquad has no built-in gradient.
-#[allow(clippy::too_many_arguments)]
 fn draw_sky(
+    view: &scene::SkyView,
     sky: [(f32, f32, f32); 3],
     storm: f32,
-    w: f32,
-    horizon: f32,
     m: f32,
     sun_az: f32,
     sun_alt: f32,
-    heading: f32,
-    half_fov: f32,
 ) {
+    let scene::SkyView {
+        heading,
+        half_fov_h: half_fov,
+        w,
+        horizon,
+    } = *view;
     // The two gradients blended between horizontally: the clock's "lit" sky and the
     // cool night sky stood in for the un-sunlit side. Both eased toward the overcast.
     let storm_blend = |g: [(f32, f32, f32); 3]| {
@@ -749,7 +752,7 @@ async fn run_game(
                             race_result_msg =
                                 format!("Race won — first to {}!  Purse: {} gold", target.name, payout);
                             race_result_flash = RACE_RESULT_FLASH_TIME;
-                        } else if rival.map_or(false, |rk| race::reached(&rk, target)) {
+                        } else if rival.is_some_and(|rk| race::reached(&rk, target)) {
                             let lost = r.stake;
                             gs.lose_race();
                             rival = None;
@@ -976,19 +979,15 @@ async fn run_game(
         let mut view_kin = kin;
         view_kin.heading_rad = view_heading;
 
-        draw_sky(
-            sky_grad,
-            storm,
+        let sky_view = scene::SkyView {
+            heading: view_heading,
+            half_fov_h: half_fov_h_view,
             w,
             horizon,
-            overscan,
-            sky.sun_az,
-            sky.sun_alt,
-            view_heading,
-            half_fov_h_view,
-        );
+        };
+        draw_sky(&sky_view, sky_grad, storm, overscan, sky.sun_az, sky.sun_alt);
         // Stars, then the moon and sun arcing over on the clock.
-        celestial::draw(&sky, &stars, t, view_heading, half_fov_h_view, w, h, horizon, storm);
+        celestial::draw(&sky, &stars, t, &sky_view, h, storm);
 
         // Distant-water backdrop behind the wave mesh, over-scanned so a rolled view
         // still finds deep sea in the corners.

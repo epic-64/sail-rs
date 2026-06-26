@@ -355,6 +355,7 @@ impl PauseMenu {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // layout geometry passed down from the caller
     fn render_options(
         &self,
         sounds: &SoundBank,
@@ -375,7 +376,7 @@ impl PauseMenu {
         let master = sounds.master();
         draw_text("Master Volume", cx, row_y, 19.0, ink());
         draw_text(
-            &format!("{}%", (master * 100.0).round() as i32),
+            format!("{}%", (master * 100.0).round() as i32),
             x0 + pw - pad - 56.0,
             row_y,
             19.0,
@@ -451,6 +452,7 @@ impl PauseMenu {
 
     /// Like `toggle_row`, but for a row that can't be changed in this build (web): the
     /// value reads "Not supported" in dim ink so it's clearly inert.
+    #[allow(clippy::too_many_arguments)] // row layout geometry is inherent
     fn disabled_row(&self, row: usize, label: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
         if self.cursor == row {
             draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());

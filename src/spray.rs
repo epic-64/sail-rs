@@ -190,6 +190,7 @@ impl Spray {
 
     /// Emit `n` droplets off a bow shoulder. `side` is -1 (port) or +1 (starboard);
     /// they fly outward and up, fanning away from the hull.
+    #[allow(clippy::too_many_arguments)] // emit anchor + drive + viewport is inherent
     fn emit_shoulder(&mut self, n: usize, side: f32, ax: f32, ay: f32, drive: f32, w: f32, h: f32) {
         for _ in 0..n {
             let energy = self.range(0.5, 1.0) * (0.45 + 0.55 * drive);
