@@ -2,8 +2,6 @@ A native **Rust + [macroquad](https://github.com/not-fl3/macroquad)** sailing ga
 Run with `cargo run --release` (the dense wave mesh wants release for smooth FPS;
 debug runs but is choppier). Tests: `cargo test`.
 
-Please read PLAN.md for the current task.
-
 ## Engine conventions / gotchas
 
 - **Determinism is load-bearing.** World generation must be reproducible from a seed:
@@ -17,13 +15,75 @@ Please read PLAN.md for the current task.
   `OceanRenderer::render`.
 - **Port overlay style** (`port_view.rs` `mod style`): every type size, spacing step,
   column split and symbol is a named token — there are **no bare pixel literals** in the
-  render functions. Restyle by editing tokens, not call sites.
+  render functions. Restyle by editing tokens, not call sites. The pixel tokens are
+  **scaled functions** (`pad()`, `chip_h()`, `panel_max_w()`…), multiplied by
+  [`ui::scale`]; only ratios/fractions (`CAP_RATIO`, `MKT_PRICE_R`) stay `const`. See
+  **UI scale** below.
 - **Fonts** (`font.rs`): two embedded faces via `set_default_font` — **DejaVu Sans** is
   the body face for everything; **IM Fell English SC** is for headings only (page/board
   titles, port names, section headers). Sans is **reset at the top of every frame**
   (load-bearing — drop it and a heading's face bleeds into the rest of the frame). Draw a
   heading by wrapping `draw_text`/`measure_text` in `font::heading(|| …)`. Table column
   labels, row labels, item titles, tabs, buttons and hints stay sans.
+
+## UI scale (`ui.rs`)
+
+Every parchment UI (port board, captain's log, pause menu) and the sailing HUD size
+themselves off **one screen-derived scale**, so they read well from a phone up to a
+4K display. The gotcha that forces this: with `high_dpi: true` (`window_conf`),
+`screen_width()/height()` report **physical** pixels, so an unscaled board on a 4K
+panel is a tiny island of 15 px text.
+
+- **`ui::scale()`** — `min(screen_w, screen_h) / 720` clamped to `0.85..=3.0` (720 px
+  is the design baseline; 1080p ≈ 1.5, 4K ≈ 3.0).
+- **`ui::px(v)`** scales a design-space pixel length; **`ui::fs_title/heading/body/
+  small/chip()`** scale the type ladder (they return `u16`). These are the shared
+  design tokens — **all UI sizing goes through them; no bare pixel literals** in the
+  parchment UIs or HUD. Ratios (a `CAP_RATIO`-style baseline drop), alphas, and
+  layout *fractions* (`w * 0.86`) stay raw — only lengths/sizes are scaled.
+- The shared parchment **palette** (`ink`/`dim_ink`/`parchment`/`parchment_edge`) and
+  `format_dist` also live in `ui.rs`; `port_view`, `captains_log` and `pause_menu` all
+  import them rather than keeping copies.
+- **Panel size caps scale too** (`panel_max_w/h`, the log/menu caps, the minimap), so
+  a big screen gets a big board rather than a small one marooned mid-screen.
+
+## Input & on-screen controls (`touch.rs`, `touch_ui.rs`)
+
+The game is keyboard-driven; touch/mouse are an **additive layer that emits the same
+verbs**, so no game logic is touch-aware. Three input contexts: sailing, the port
+board, and the menus (pause menu + captain's log).
+
+- **`touch.rs` — `TouchState`** is the pointer layer, ticked once per frame at the top
+  of the loop (`touch.update(dt)`). It folds real touches **and the mouse** (one
+  synthetic pointer) into `pointers`, classifies a quick stationary release as a
+  **tap**, and exposes the hit-tests every control queries: `tapped_in(rect)`,
+  `tap_pos_in(rect)` (where in the rect), `held_in(rect)` (press-and-hold), and
+  `steering(wheel)` (a finger that goes down in the wheel is captured as a virtual
+  tiller, value = horizontal offset).
+- **`active()` follows the last input device.** A touch or mouse click shows the
+  on-screen controls and makes the hit-tests live; **any key press hides them again**
+  (`get_keys_pressed()` non-empty). `SAIL_TOUCH=1` (native env var) forces them on for
+  desktop testing. A keyboard-only player never sees them. Every hit-test returns
+  nothing while `!active()`.
+- **`touch_ui.rs`** owns the on-screen layouts + drawing (rects derived from screen
+  size, so they track rotation; geometry is shared between the hit-test and the draw):
+  the **sailing HUD** (`sail_hud`/`draw_sail_hud`: a drag steering wheel, sail ▲/▼,
+  dock, and a pause/log/astern stack), and the **menu nav cluster** (`nav_cluster`/
+  `draw_nav_cluster`: a d-pad + ✓/✕). `main.rs` draws the HUD while sailing and the
+  cluster over any open menu, only when `touch.active()`.
+- **Direct tapping of boards/menus uses retained hitboxes.** `render` records each
+  tappable region into a `RefCell<Vec<…>>` *as it draws it* (so geometry lives in one
+  place), and the next frame's `handle_input` hit-tests them — the one-frame lag is
+  invisible for a static panel. The board (`port_view.rs`, `HitEffect`) records tabs,
+  rows and market chips; **a row body selects (so the chart previews the leg), only an
+  action chip commits** — taps resolve to the **smallest** matching rect so a chip
+  nested in its row wins. The pause menu (`pause_menu.rs`, `Tap`) records its rows and
+  the volume track the same way. Both *also* honour the nav cluster as a fallback, so
+  d-pad and direct tapping coexist.
+- **Web**: `web/index.html` sets `touch-action: none` on the canvas (else the browser
+  eats drags as scroll/zoom and the wheel won't work). Touch positions match the
+  `screen_*` space under `high_dpi`. *Not yet done:* on-mobile world-seed entry needs a
+  soft keyboard.
 
 ## Cargo vs. hold (`game_state.rs`)
 
