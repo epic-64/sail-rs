@@ -1134,7 +1134,8 @@ async fn run_game(
         // low, warm local light and baked into the per-facet shading, so the road is
         // occluded by nearer crests for free instead of shining through the swell.
         let lamp = port_lights::dusk_glow(sky.sun_alt);
-        let harbour_lights = port_lights::build(&world.islands, &view_kin, &sky, t, half_fov_h_view);
+        let harbour_lights =
+            port_lights::build(&world.islands, &features, &view_kin, &sky, t, half_fov_h_view);
 
         // --- Waves -------------------------------------------------------------
         renderer.render(
