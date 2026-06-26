@@ -93,8 +93,13 @@ impl Save {
             &mut o,
             "stats",
             &format!(
-                "{},{},{},{}",
-                s.contracts_fulfilled, s.races_won, s.races_lost, s.meters_traveled
+                "{},{},{},{},{},{}",
+                s.contracts_fulfilled,
+                s.contract_earnings,
+                s.races_won,
+                s.races_lost,
+                s.race_winnings,
+                s.meters_traveled
             ),
         );
         // A rival on the water: its position and the race phase, so a running race
@@ -185,7 +190,7 @@ impl Save {
             race,
             // The tally is optional: a save written before stats existed (or any
             // malformed line) loads a fresh, zeroed ledger rather than failing.
-            stats: map.get("stats").and_then(|v| parse_stats(v)).unwrap_or_default(),
+            stats: map.get("stats").map(|v| parse_stats(v)).unwrap_or_default(),
         };
 
         let kin = parse_kin(map.get("kin")?)?;
@@ -310,18 +315,22 @@ fn parse_mission(v: &str) -> Option<Mission> {
     })
 }
 
-/// Parse a `stats=` line's four comma-separated fields (the lifetime tally).
-fn parse_stats(v: &str) -> Option<Stats> {
+/// Parse a `stats=` line (the lifetime tally) leniently: each field is read by
+/// position, and any field that's missing or malformed defaults to zero. So a save
+/// from a build with fewer tally fields (or a future one with more) keeps whatever
+/// it can rather than discarding the whole record — a format bump never silently
+/// wipes the captain's tally, it just zero-fills the parts it doesn't recognise.
+fn parse_stats(v: &str) -> Stats {
     let p: Vec<&str> = v.split(',').collect();
-    if p.len() != 4 {
-        return None;
+    let field = |i: usize| p.get(i).copied().unwrap_or("");
+    Stats {
+        contracts_fulfilled: field(0).parse().unwrap_or(0),
+        contract_earnings: field(1).parse().unwrap_or(0),
+        races_won: field(2).parse().unwrap_or(0),
+        races_lost: field(3).parse().unwrap_or(0),
+        race_winnings: field(4).parse().unwrap_or(0),
+        meters_traveled: field(5).parse().unwrap_or(0.0),
     }
-    Some(Stats {
-        contracts_fulfilled: p[0].parse().ok()?,
-        races_won: p[1].parse().ok()?,
-        races_lost: p[2].parse().ok()?,
-        meters_traveled: p[3].parse().ok()?,
-    })
 }
 
 /// Parse a `race=` line's four comma-separated fields.
@@ -450,8 +459,10 @@ mod tests {
         });
         gs.stats = Stats {
             contracts_fulfilled: 17,
+            contract_earnings: 9_300,
             races_won: 4,
             races_lost: 2,
+            race_winnings: -150,
             meters_traveled: 123_456.5,
         };
         Save {
@@ -492,10 +503,7 @@ mod tests {
         assert_eq!(back.gs.location, s.gs.location);
         assert_eq!(back.gs.active_missions, s.gs.active_missions);
         assert_eq!(back.gs.race, s.gs.race);
-        assert_eq!(back.gs.stats.contracts_fulfilled, s.gs.stats.contracts_fulfilled);
-        assert_eq!(back.gs.stats.races_won, s.gs.stats.races_won);
-        assert_eq!(back.gs.stats.races_lost, s.gs.stats.races_lost);
-        assert!((back.gs.stats.meters_traveled - s.gs.stats.meters_traveled).abs() < 1e-6);
+        assert_eq!(back.gs.stats, s.gs.stats);
         assert_eq!(back.sail_mode, s.sail_mode);
         assert_eq!(back.kin.pos, s.kin.pos);
         assert!((back.kin.heading_rad - s.kin.heading_rad).abs() < 1e-6);
@@ -520,6 +528,32 @@ mod tests {
         assert!(back.rival.is_none());
         assert!(!back.race_ready);
         assert!(!back.race_running);
+    }
+
+    #[test]
+    fn a_short_stats_line_keeps_what_it_can_and_zero_fills_the_rest() {
+        // A stats line from an earlier build with fewer fields must not discard the
+        // tally wholesale — it reads the leading fields and zeroes the unknown tail.
+        let s = parse_stats("7,1200");
+        assert_eq!(s.contracts_fulfilled, 7);
+        assert_eq!(s.contract_earnings, 1200);
+        assert_eq!(s.races_won, 0);
+        assert_eq!(s.meters_traveled, 0.0);
+    }
+
+    #[test]
+    fn a_save_without_a_stats_line_loads_a_zeroed_tally() {
+        // Pre-stats saves carry no `stats=` line at all; they must still load.
+        let mut s = sample();
+        s.gs.stats = Stats::default();
+        let text = s.serialize();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.starts_with("stats="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let back = Save::deserialize(&stripped).expect("should parse");
+        assert_eq!(back.gs.stats, Stats::default());
     }
 
     #[test]
