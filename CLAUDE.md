@@ -1,4 +1,27 @@
-read PLAN.md
+A native **Rust + [macroquad](https://github.com/not-fl3/macroquad)** sailing game.
+Run with `cargo run --release` (the dense wave mesh wants release for smooth FPS;
+debug runs but is choppier). Tests: `cargo test`.
+
+## Engine conventions / gotchas
+
+- **Determinism is load-bearing.** World generation must be reproducible from a seed:
+  **do not reorder RNG draws** in `world.rs` / `isle_features.rs` — it shifts every
+  island. Tune ranges/values, not the draw sequence. `world.islands` is in id order
+  (index == id); `features` is generated once and aligned by that index.
+- Our `geometry::Vec2` (0=N, clockwise) **shadows glam's `Vec2`** — an explicit `use`
+  wins over the macroquad prelude glob. World maths uses ours.
+- **macroquad 2D drawing has no depth buffer.** Island/feature/billboard occlusion is
+  solved by drawing each island **interleaved between wave bands by distance** in
+  `OceanRenderer::render`.
+- **Port overlay style** (`port_view.rs` `mod style`): every type size, spacing step,
+  column split and symbol is a named token — there are **no bare pixel literals** in the
+  render functions. Restyle by editing tokens, not call sites.
+- **Fonts** (`font.rs`): two embedded faces via `set_default_font` — **DejaVu Sans** is
+  the body face for everything; **IM Fell English SC** is for headings only (page/board
+  titles, port names, section headers). Sans is **reset at the top of every frame**
+  (load-bearing — drop it and a heading's face bleeds into the rest of the frame). Draw a
+  heading by wrapping `draw_text`/`measure_text` in `font::heading(|| …)`. Table column
+  labels, row labels, item titles, tabs, buttons and hints stay sans.
 
 ## Cargo vs. hold (`game_state.rs`)
 
