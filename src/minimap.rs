@@ -51,7 +51,7 @@ impl MinimapPalette {
             ship: rgba(255, 255, 255, 0.95),
             mission_mark: rgba(255, 210, 90, 0.95),
             race_mark: rgba(255, 92, 92, 0.95),
-            trader: rgba(120, 220, 188, 0.95),
+            trader: rgba(96, 210, 120, 0.95),
         }
     }
 
@@ -148,8 +148,8 @@ pub fn render(
     race_targets: &[i32],
     route: Option<(Vec2, Vec2)>,
     // World positions of the local cluster's wandering traders, drawn as small
-    // marks so the captain can spot the traffic crossing the bay. Empty on the
-    // charts that don't track them (the log, the port board).
+    // green triangles so the captain can spot the traffic crossing the bay. Empty on
+    // the charts that don't track them (the log, the port board).
     traders: &[Vec2],
     // The racing rival's live world position and heading while a race is afoot,
     // drawn as a red heading-arrow (a twin of the player's) so the captain can see
@@ -265,13 +265,24 @@ pub fn render(
         }
     }
 
-    // The local traders: a small mark each at their world position, drawn under
-    // the player's arrow. Only those whose mark falls inside the chart are shown.
+    // The local traders: a small green triangle each at their world position, drawn
+    // under the player's arrow. Sized at half the ship/rival arrow and pointed north
+    // (the chart doesn't track a trader's heading), so the traffic reads as small
+    // green darts without masquerading as a heading-arrow. Only those whose mark
+    // falls inside the chart are shown.
     for &tp in traders {
         let x = sx(tp);
         let y = sy(tp);
         if rect.contains(vec2(x, y)) {
-            draw_circle(x, y, 2.2 * s, pal.trader);
+            let nose = 4.0 * s; // half the arrow's 8.0*s reach
+            let tail = 2.25 * s; // half the arrow's 4.5*s base set-back
+            let half = 1.2 * s; // half the arrow's 2.4*s half-width
+            draw_triangle(
+                vec2(x, y - nose),
+                vec2(x - half, y + tail),
+                vec2(x + half, y + tail),
+                pal.trader,
+            );
         }
     }
 
