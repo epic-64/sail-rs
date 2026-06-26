@@ -2,6 +2,8 @@ A native **Rust + [macroquad](https://github.com/not-fl3/macroquad)** sailing ga
 Run with `cargo run --release` (the dense wave mesh wants release for smooth FPS;
 debug runs but is choppier). Tests: `cargo test`.
 
+Please read PLAN.md for the current task.
+
 ## Engine conventions / gotchas
 
 - **Determinism is load-bearing.** World generation must be reproducible from a seed:
