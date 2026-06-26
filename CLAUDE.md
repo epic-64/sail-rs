@@ -2,6 +2,14 @@ A native **Rust + [macroquad](https://github.com/not-fl3/macroquad)** sailing ga
 Run with `cargo run --release` (the dense wave mesh wants release for smooth FPS;
 debug runs but is choppier). Tests: `cargo test`.
 
+## Writing
+
+- **No em dashes (`—`), ever.** This applies everywhere: code comments, user-facing
+  strings, commit messages, and chat replies. Reach for any other punctuation instead:
+  a colon (`A: B`), parentheses (`A (B)`), a semicolon (`A; B`), or just two sentences
+  (`A. B.`). Existing em dashes in the codebase are legacy; do not add new ones, and
+  prefer removing one when you touch a line that has it.
+
 ## Engine conventions / gotchas
 
 - **Determinism is load-bearing.** World generation must be reproducible from a seed:
