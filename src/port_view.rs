@@ -1024,21 +1024,19 @@ impl PortScreen {
             let here = &world.islands[self.island_id as usize];
             let cluster = world.cluster_at(here.pos);
             let yard = world.cluster_islands(cluster).into_iter().find(|i| i.is_shipyard);
+            let sh = line_h(fs_small());
+            let mut fy = ry + sh;
             draw_text(
                 "No shipyard here. A shipyard outfits your vessel: a sturdier hull,",
                 x,
-                ry + step,
-                fs_body() as f32,
+                fy,
+                fs_small() as f32,
                 dim_ink(),
             );
-            draw_text(
-                "more sail, and a larger hold.",
-                x,
-                ry + step * 2.0,
-                fs_body() as f32,
-                dim_ink(),
-            );
+            fy += sh;
+            draw_text("more sail, and a larger hold.", x, fy, fs_small() as f32, dim_ink());
             if let Some(y) = yard {
+                fy += sh;
                 let to_yard = here.pos.bearing_to(y.pos);
                 let msg = format!(
                     "The {}'s shipyard lies at {} ({} {}).",
@@ -1047,7 +1045,7 @@ impl PortScreen {
                     format_dist(here.pos.distance_to(y.pos)),
                     crate::geometry::compass(to_yard),
                 );
-                draw_text(&msg, x, ry + step * 3.0, fs_body() as f32, dim_ink());
+                draw_text(&msg, x, fy, fs_small() as f32, dim_ink());
             }
         }
     }
