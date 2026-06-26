@@ -163,17 +163,25 @@ impl CamLight {
         let ly = lvy * inv;
         let lz = lvz * inv;
         // Warm diffuse: faces tilted toward the town light up, the lee falls dark.
-        let diff = (nx * lx + ny * ly + nz * lz).max(0.0);
+        let ndl = nx * lx + ny * ly + nz * lz;
+        let diff = ndl.max(0.0);
         // Blinn-Phong specular: the half-vector between the lamp and the eye sparkles
-        // along the road that runs from the shore back toward the viewer.
-        let hx = lx + vx;
-        let hy = ly + vy;
-        let hz = lz + vz;
-        let hl = (hx * hx + hy * hy + hz * hz).sqrt();
-        let spec = if hl > 1e-4 {
-            let ndh = clamp((nx * hx + ny * hy + nz * hz) / hl, 0.0, 1.0);
-            if ndh > SPEC_GATE {
-                ndh.powf(LAMP_SHININESS)
+        // along the road that runs from the shore back toward the viewer. Gated to the
+        // lit side (`ndl > 0`): a facet on the near face of an intervening swell turns
+        // its back to a lamp that sits *beyond* the crest, so it cannot mirror the town
+        // toward the eye and must not catch the road, even where its slope would.
+        let spec = if ndl > 0.0 {
+            let hx = lx + vx;
+            let hy = ly + vy;
+            let hz = lz + vz;
+            let hl = (hx * hx + hy * hy + hz * hz).sqrt();
+            if hl > 1e-4 {
+                let ndh = clamp((nx * hx + ny * hy + nz * hz) / hl, 0.0, 1.0);
+                if ndh > SPEC_GATE {
+                    ndh.powf(LAMP_SHININESS)
+                } else {
+                    0.0
+                }
             } else {
                 0.0
             }
