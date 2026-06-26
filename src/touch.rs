@@ -6,11 +6,12 @@
 //! the sail buttons, the menu nav cluster) live in [`crate::touch_ui`]; this is
 //! just the raw pointer bookkeeping and the hit-tests they query.
 //!
-//! The mouse is folded in as one synthetic pointer, so the controls can be driven
-//! with a mouse on the desktop build (handy for testing). But every hit-test is
-//! gated on [`TouchState::active`], which is false until a real touch is seen (or
-//! the `SAIL_TOUCH` env var forces it on natively) — so desktop play is unchanged:
-//! the HUD never appears and a stray click does nothing.
+//! The mouse is folded in as one synthetic pointer, so the controls can also be
+//! driven with a mouse. Every hit-test is gated on [`TouchState::active`], which
+//! follows the *last input device*: a touch or mouse click shows the controls and
+//! makes them respond; a key press hides them again (the `SAIL_TOUCH` env var forces
+//! them on). So a keyboard-only player sees nothing, and a player who switches
+//! between mouse and keyboard sees the controls come and go to match.
 //!
 //! Screen-space maths here use macroquad's glam `Vec2`/`Rect` (pixels), *not* the
 //! game's `geometry::Vec2` — there's deliberately no `use` of the latter, so the
@@ -40,9 +41,9 @@ struct Pointer {
 /// steering wheel. Built once per frame by [`TouchState::update`].
 pub struct TouchState {
     pointers: HashMap<u64, Pointer>,
-    taps: Vec<Vec2>,       // pointers that *ended* this frame as a clean tap
-    wheel_id: Option<u64>, // the finger currently working the steering wheel
-    ever_touched: bool,
+    taps: Vec<Vec2>,        // pointers that *ended* this frame as a clean tap
+    wheel_id: Option<u64>,  // the finger currently working the steering wheel
+    pointer_active: bool,   // last input was a touch / mouse click (show the controls)
     force: bool,
 }
 
@@ -64,7 +65,7 @@ impl TouchState {
             pointers: HashMap::new(),
             taps: Vec::new(),
             wheel_id: None,
-            ever_touched: false,
+            pointer_active: false,
             force,
         }
     }
@@ -80,20 +81,32 @@ impl TouchState {
         // Gather raw down / ended events: real touches first…
         let mut downs: Vec<(u64, Vec2)> = Vec::new();
         let mut ends: Vec<(u64, Vec2)> = Vec::new();
+        let mut pointer_event = false; // any touch / mouse activity this frame
         for t in touches() {
-            self.ever_touched = true;
+            pointer_event = true;
             match t.phase {
                 TouchPhase::Ended | TouchPhase::Cancelled => ends.push((t.id, t.position)),
                 _ => downs.push((t.id, t.position)),
             }
         }
-        // …then the mouse, as one synthetic pointer (for desktop testing).
+        // …then the mouse, as one synthetic pointer.
         let (mx, my) = mouse_position();
         let m = vec2(mx, my);
         if is_mouse_button_released(MouseButton::Left) {
             ends.push((MOUSE_ID, m));
+            pointer_event = true;
         } else if is_mouse_button_down(MouseButton::Left) {
             downs.push((MOUSE_ID, m));
+            pointer_event = true;
+        }
+
+        // The on-screen controls follow the *last* input device: a touch or mouse
+        // click shows them; any key press hides them again. (On mobile there are no
+        // keys, so once touched they stay; `force` keeps them on for testing.)
+        if pointer_event {
+            self.pointer_active = true;
+        } else if !get_keys_pressed().is_empty() {
+            self.pointer_active = false;
         }
 
         for (id, pos) in downs {
@@ -127,15 +140,25 @@ impl TouchState {
         }
     }
 
-    /// Have the touch controls woken up? False on a plain desktop (no touch, not
-    /// forced), so the HUD stays hidden and every hit-test below returns nothing.
+    /// Should the on-screen controls show (and respond)? True while the last input
+    /// was a touch or mouse click; a key press turns it back off. `SAIL_TOUCH` forces
+    /// it on. A keyboard-only player never sees the controls.
     pub fn active(&self) -> bool {
-        self.ever_touched || self.force
+        self.pointer_active || self.force
     }
 
     /// A clean tap landed inside `r` this frame.
     pub fn tapped_in(&self, r: Rect) -> bool {
         self.active() && self.taps.iter().any(|&p| r.contains(p))
+    }
+
+    /// The position of a clean tap inside `r` this frame, if any — for controls that
+    /// care *where* in the rect they were hit (e.g. a slider track).
+    pub fn tap_pos_in(&self, r: Rect) -> Option<Vec2> {
+        if !self.active() {
+            return None;
+        }
+        self.taps.iter().copied().find(|&p| r.contains(p))
     }
 
     /// A finger is currently held down with its position inside `r` (for press-and-

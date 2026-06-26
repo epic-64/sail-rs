@@ -18,6 +18,8 @@
 //! it. A rejected seed entry (a non-digit, an over-long value, or an empty field)
 //! gets the same audio buzzer + red jiggle the port board uses for an illegal trade.
 
+use std::cell::RefCell;
+
 use macroquad::prelude::*;
 
 use crate::sound::SoundBank;
@@ -57,6 +59,19 @@ impl Nav {
 enum View {
     Main,
     Options,
+}
+
+/// A region `render` recorded as tappable, hit-tested next frame in `handle_input`
+/// (immediate-mode retained hitboxes, as the port board does). Geometry lives where
+/// it's drawn — no second copy of the layout.
+#[derive(Clone, Copy)]
+enum Tap {
+    /// Focus this row and press it (Enter-equivalent) — so a click on a menu item /
+    /// toggle / Back acts in one go. A no-op "press" (the volume label, the seed row)
+    /// simply leaves the cursor there.
+    Select(usize),
+    /// The master-volume track: set the gain from where along it the click landed.
+    Slider(Rect),
 }
 
 /// The main-menu rows, in cursor order.
@@ -121,6 +136,8 @@ pub struct PauseMenu {
     /// When a rejected seed entry last flashed (`get_time` seconds), driving the
     /// red jiggle; `None` once it has decayed or never fired.
     seed_flash: Option<f64>,
+    /// Tappable regions from the last `render`, consumed by touch in `handle_input`.
+    taps: RefCell<Vec<(Rect, Tap)>>,
 }
 
 impl PauseMenu {
@@ -137,7 +154,13 @@ impl PauseMenu {
             // Matches the world the loop boots on (`run_game(1, …)` in main).
             seed_text: String::from("1"),
             seed_flash: None,
+            taps: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Record a tappable region for this frame (consumed by `handle_input`).
+    fn tap(&self, rect: Rect, t: Tap) {
+        self.taps.borrow_mut().push((rect, t));
     }
 
     /// Whether post-process bloom is enabled (always false on the web).
@@ -160,7 +183,29 @@ impl PauseMenu {
     /// Handle one frame of input while the menu is up. Returns the action the main
     /// loop should take. The master-volume slider writes straight to `sounds`.
     pub fn handle_input(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
-        let nav = Nav::read(touch);
+        let mut nav = Nav::read(touch);
+        // Direct taps on rows the last `render` recorded: a click on a menu item /
+        // toggle focuses it and presses it (so it acts like the d-pad's ✓), and a
+        // click on the volume track sets the gain. Both feed the same handlers below.
+        let hits: Vec<(Rect, Tap)> = self.taps.borrow().clone();
+        for (rect, t) in hits {
+            match t {
+                Tap::Slider(track) => {
+                    // Hit on the wide band (`rect`), fraction from the thin track.
+                    if let Some(p) = touch.tap_pos_in(rect) {
+                        let f = ((p.x - track.x) / track.w).clamp(0.0, 1.0);
+                        sounds.set_master(snap(f));
+                        self.cursor = ROW_MASTER;
+                    }
+                }
+                Tap::Select(row) => {
+                    if touch.tapped_in(rect) {
+                        self.cursor = row;
+                        nav.confirm = true;
+                    }
+                }
+            }
+        }
         match self.view {
             View::Main => self.input_main(&nav),
             View::Options => self.input_options(sounds, &nav, touch),
@@ -310,6 +355,10 @@ impl PauseMenu {
 
     /// Draw the menu over the (frozen) scene.
     pub fn render(&self, sounds: &SoundBank, w: f32, h: f32) {
+        // Fresh hit regions for this layout; the render below repopulates them as it
+        // draws, and `handle_input` taps them next frame.
+        self.taps.borrow_mut().clear();
+
         // Dim the world behind the board so the parchment reads clearly.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
 
@@ -343,8 +392,10 @@ impl PauseMenu {
         let mut ry = y0 + px(132.0);
         let row_h = px(44.0);
         for (i, label) in MAIN_ITEMS.iter().enumerate() {
+            let rect = Rect::new(x0 + px(12.0), ry - px(26.0), pw - px(24.0), row_h - px(6.0));
+            self.tap(rect, Tap::Select(i));
             if i == self.cursor {
-                draw_rectangle(x0 + px(12.0), ry - px(26.0), pw - px(24.0), row_h - px(6.0), row_highlight());
+                draw_rectangle(rect.x, rect.y, rect.w, rect.h, row_highlight());
             }
             draw_text(label, cx, ry, px(22.0), ink());
             ry += row_h;
@@ -364,6 +415,7 @@ impl PauseMenu {
     /// entry was just rejected.
     fn render_seed_row(&self, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
         let focused = self.cursor == ROW_SEED;
+        self.tap(Rect::new(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(58.0)), Tap::Select(ROW_SEED));
         if focused {
             // A taller highlight than the other rows to take in the edit hint below.
             draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(58.0), row_highlight());
@@ -401,6 +453,10 @@ impl PauseMenu {
 
         // --- Master volume slider (row 0) ---
         let row_y = y0 + px(110.0);
+        self.tap(
+            Rect::new(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0)),
+            Tap::Select(ROW_MASTER),
+        );
         if self.cursor == ROW_MASTER {
             draw_rectangle(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0), row_highlight());
         }
@@ -419,6 +475,12 @@ impl PauseMenu {
         let track_y = row_y + px(22.0);
         let track_w = pw - 2.0 * pad;
         let track_h = px(8.0);
+        // A click anywhere along a band around the thin track sets the gain; the
+        // fraction is read from the track's own x/width (carried in the rect).
+        self.tap(
+            Rect::new(track_x, track_y - px(14.0), track_w, track_h + px(28.0)),
+            Tap::Slider(Rect::new(track_x, track_y, track_w, track_h)),
+        );
         draw_rectangle(track_x, track_y, track_w, track_h, parchment_edge());
         draw_rectangle(track_x, track_y, track_w * master, track_h, ink());
         let knob_x = track_x + track_w * master;
@@ -455,6 +517,7 @@ impl PauseMenu {
 
         // --- Back (row 5) ---
         let back_y = y0 + ph - px(56.0);
+        self.tap(Rect::new(x0 + px(12.0), back_y - px(26.0), pw - px(24.0), px(38.0)), Tap::Select(ROW_BACK));
         if self.cursor == ROW_BACK {
             draw_rectangle(x0 + px(12.0), back_y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
@@ -473,6 +536,7 @@ impl PauseMenu {
     /// and right-aligning `value` to the panel's inner edge.
     #[allow(clippy::too_many_arguments)]
     fn toggle_row(&self, row: usize, label: &str, value: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
+        self.tap(Rect::new(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0)), Tap::Select(row));
         if self.cursor == row {
             draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
@@ -485,6 +549,7 @@ impl PauseMenu {
     /// value reads "Not supported" in dim ink so it's clearly inert.
     #[allow(clippy::too_many_arguments)] // row layout geometry is inherent
     fn disabled_row(&self, row: usize, label: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
+        self.tap(Rect::new(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0)), Tap::Select(row));
         if self.cursor == row {
             draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
