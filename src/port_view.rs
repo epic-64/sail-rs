@@ -1220,6 +1220,21 @@ impl PortScreen {
         let step = row_h();
         let mut ry = y;
 
+        // --- Deliveries owed at this very port (top: the most actionable line,
+        // so a captain who just made port sees the payout waiting first) ------
+        let deliveries = mission::deliverable_at(gs, world);
+        if !deliveries.is_empty() {
+            crate::font::heading(|| draw_text("Deliveries Awaiting", x, ry, fs_heading() as f32, ink()));
+            ry += line_h(fs_heading());
+            for m in &deliveries {
+                let from = format!("from {}", world.islands[m.origin_id as usize].name);
+                let focus = Focus::Delivery(m.id);
+                self.contract_line(m, &from, true, "Deliver", focus, x, ry, w);
+                ry += step;
+            }
+            ry += gap();
+        }
+
         // --- Cargo Contracts (jobs offered here) -----------------------------
         crate::font::heading(|| draw_text("Cargo Contracts", x, ry, fs_heading() as f32, ink()));
         ry += line_h(fs_heading());
@@ -1262,20 +1277,6 @@ impl PortScreen {
                 let to = world.islands[m.target_id as usize].name.clone();
                 let focus = Focus::Contract(m.id);
                 self.contract_line(m, &to, true, "Accept", focus, x, ry, w);
-                ry += step;
-            }
-        }
-
-        // --- Deliveries owed at this very port -------------------------------
-        let deliveries = mission::deliverable_at(gs, world);
-        if !deliveries.is_empty() {
-            ry += gap();
-            crate::font::heading(|| draw_text("Deliveries Awaiting", x, ry, fs_heading() as f32, ink()));
-            ry += line_h(fs_heading());
-            for m in &deliveries {
-                let from = format!("from {}", world.islands[m.origin_id as usize].name);
-                let focus = Focus::Delivery(m.id);
-                self.contract_line(m, &from, true, "Deliver", focus, x, ry, w);
                 ry += step;
             }
         }
