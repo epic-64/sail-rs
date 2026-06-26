@@ -220,10 +220,15 @@ pub const BASE_TOP_KNOTS: f32 = 24.0;
 /// [`BASE_TOP_KNOTS`] in engine units (m/s) — the default ceiling for the
 /// parameterless [`step`] (NPCs) and the reference the bow-spray normalises against.
 pub const BASE_TOP_SPEED: f32 = BASE_TOP_KNOTS * KNOT; // ~12.35 m/s
-pub const DRAG: f32 = 0.16; // 1/s water resistance. Low for a heavy, high-momentum hull:
-// the drive impulse scales with DRAG too, so steady-state speed (drive/DRAG) is
-// unchanged — lowering it only makes her slower to gain *and* shed way, so she
-// coasts through the wind's eye on a tack/jibe instead of stalling at once.
+// The bow speed chases the angle's max with two *separate* rates, so building way and
+// shedding it are decoupled — a brisk climb you can read, a lazy coast you can tack on.
+pub const ACCEL_GAIN: f32 = 0.75; // 1/s building way: τ ≈ 1/ACCEL_GAIN ≈ 1.3 s, so she
+// makes the angle's full speed in ~8 s — quick enough to tell whether a new heading pays.
+pub const COAST_DRAG: f32 = 0.14; // 1/s shedding way (sail can't hold her speed): τ ≈ 7 s,
+// well below ACCEL_GAIN so a heavy hull glides through the wind's eye on a tack/jibe
+// rather than stalling dead. This is the *only* knob on how far she carries through irons.
+const SETTLE_EPS: f32 = 0.03; // m/s: within this of the angle's max, snap to it exactly, so
+// a steady beam reach reads a clean 24.0 kn instead of asymptoting to 23.9 (≈ 0.06 kn).
 pub const KEEL: f32 = 0.9; // 1/s how strongly the keel bleeds side-slip
 pub const MAX_YAW_RATE: f32 = 0.24; // rad/s heading change at full rudder once up to speed
 pub const REF_SPEED: f32 = 7.0; // m/s at which the rudder reaches full bite
@@ -271,31 +276,41 @@ pub fn step_debuffed(
     let heading = wrap_angle(kin.heading_rad + yaw_rate * dt);
     let fwd = Vec2::from_heading(heading);
 
-    // Sails push along the bow, scaled by how much wind the bow's angle harvests —
-    // through a no-go zone widened by any hull damage.
+    // How much wind the bow's angle harvests — through a no-go zone widened by any hull
+    // damage — sets the speed this point of sail can hold under the present sail trim. A
+    // beam reach at full sail is the hull's top speed exactly (factor = MAX_BOOST = 1).
     let factor = wind_factor_rel_widened(wrap_angle(wind.toward_rad - heading), debuff.dead_angle_extra);
-    let drive = throttle * (top * DRAG) * factor;
-    let thrust_v = kin.vel + fwd * (drive * dt);
-    // Water resistance: a single low DRAG at every point of sail gives the hull plenty
-    // of momentum, so she carries her way through the wind's eye on a tack/jibe rather
-    // than stalling at once. Steady-state speed is unaffected (drive scales with DRAG).
-    let dragged = thrust_v * (1.0 - DRAG * dt).max(0.0);
-    let fwd_comp = fwd.dot(dragged);
-    let lateral = dragged - fwd * fwd_comp; // sideways slip
-    let gripped = dragged - lateral * clamp(KEEL * dt, 0.0, 1.0);
+    let target = top * factor * throttle;
 
-    // Full drive on a beam reach = the top speed.
-    let ceiling = top * MAX_BOOST;
-    let sp = gripped.length();
-    let capped = if sp > ceiling {
-        gripped * (ceiling / sp)
+    // The along-bow way homes on that target: briskly while building (ACCEL_GAIN), gently
+    // while she's carrying more than the sail holds (COAST_DRAG) — bearing into the eye on
+    // a tack, or with the sheet eased — so she glides through the no-go zone instead of
+    // stalling. Snap the last sliver so a steady reach makes the number exactly.
+    let bow = fwd.dot(kin.vel);
+    let bow = if bow < target {
+        let gained = bow + (target - bow) * clamp(ACCEL_GAIN * dt, 0.0, 1.0);
+        if target - gained < SETTLE_EPS {
+            target
+        } else {
+            gained
+        }
     } else {
-        gripped
+        bow - (bow - target) * clamp(COAST_DRAG * dt, 0.0, 1.0)
     };
+
+    // Sideways slip is bled by the keel; a little persists so a heavy hull skids through
+    // her turns rather than tracking on rails.
+    let slip = (kin.vel - fwd * fwd.dot(kin.vel)) * (1.0 - clamp(KEEL * dt, 0.0, 1.0));
+
+    // Recompose. The bow term never exceeds `top`; cap the whole so transient slip in a
+    // hard turn can't push her past the hull's max either.
+    let vel = fwd * bow + slip;
+    let sp = vel.length();
+    let vel = if sp > top { vel * (top / sp) } else { vel };
     Kinematics {
-        pos: kin.pos + capped * dt,
+        pos: kin.pos + vel * dt,
         heading_rad: heading,
-        vel: capped,
+        vel,
         yaw_rate,
     }
 }
@@ -377,14 +392,52 @@ mod tests {
     #[test]
     fn a_long_beam_reach_climbs_to_top_speed_without_exceeding_it() {
         let mut k = still(PI / 2.0);
-        // Long enough to settle near the asymptote: the discrete drive climbs to
-        // ~0.984·top, within ~1% of it only after ~60 s of beam reach (200 steps
-        // reached just ~0.945·top, short of the bar below).
+        // A beam reach at full sail targets exactly `top`; she climbs in ~8 s and snaps
+        // onto the number (SETTLE_EPS), so after this she sits at `top`, never above it.
         for _ in 0..600 {
             k = step(k, Helm { turn: 0.0, throttle: 1.0 }, NORTHERLY, 0.1);
         }
         assert!(k.speed() > BASE_TOP_SPEED * 0.95);
         assert!(k.speed() <= BASE_TOP_SPEED + 1e-6);
+    }
+
+    #[test]
+    fn a_settled_beam_reach_makes_top_speed_exactly() {
+        // The captain means 24 kn, not 23.9: a steady beam reach must land *on* the
+        // number, not asymptote short of it.
+        let mut k = still(PI / 2.0);
+        for _ in 0..600 {
+            k = step(k, Helm { turn: 0.0, throttle: 1.0 }, NORTHERLY, 0.1);
+        }
+        assert!((k.speed() - BASE_TOP_SPEED).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reaches_the_angle_max_within_ten_seconds() {
+        // Building way is brisk enough to read an angle: ≥ 99% of the beam-reach max
+        // after 10 s of full sail.
+        let mut k = still(PI / 2.0);
+        for _ in 0..100 {
+            k = step(k, Helm { turn: 0.0, throttle: 1.0 }, NORTHERLY, 0.1);
+        }
+        assert!(k.speed() >= BASE_TOP_SPEED * 0.99);
+    }
+
+    #[test]
+    fn she_coasts_far_slower_than_she_builds_way() {
+        // Decoupled rates: from rest, one second of full sail on a beam reach builds
+        // more way than one second drifting into irons sheds — so she carries her
+        // momentum through the wind's eye on a tack.
+        let built = step(still(PI / 2.0), Helm { turn: 0.0, throttle: 1.0 }, NORTHERLY, 1.0).speed();
+        // Start at that speed but pointed into the wind's eye (no drive), sails struck.
+        let moving = Kinematics {
+            vel: Vec2::from_heading(PI) * built,
+            ..still(PI)
+        };
+        let kept = step(moving, Helm::IDLE, NORTHERLY, 1.0).speed();
+        let shed = built - kept;
+        assert!(shed < built, "she should keep most of her way through the eye");
+        assert!(kept > built * 0.85, "a one-second coast should barely slow her");
     }
 
     #[test]
