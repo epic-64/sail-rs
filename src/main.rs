@@ -41,7 +41,7 @@ mod world;
 use macroquad::prelude::*;
 
 use game_state::{hull, upgrades, GameState, Market};
-use geometry::{clamp, wrap_angle, Vec2};
+use geometry::{clamp, compass, wrap_angle, Vec2};
 use port_view::Harbor;
 use ocean_renderer::OceanRenderer;
 use projection::MAX_VIEW;
@@ -284,13 +284,6 @@ fn read_turn(log_open: bool) -> f32 {
         turn -= 1.0;
     }
     turn
-}
-
-/// 8-point compass label for a bearing (radians, 0 = N, CW).
-fn compass(bearing_rad: f32) -> &'static str {
-    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    let deg = (bearing_rad.to_degrees().rem_euclid(360.0) + 22.5) / 45.0;
-    POINTS[(deg as usize) % 8]
 }
 
 /// How a single voyage ended: the captain quit outright, or entered a new world
@@ -1191,7 +1184,7 @@ async fn run_game(
         let point = wind.point_of_sail(kin.heading_rad).label();
         // Everything in one row, at one font size, dot-separated: a coin icon and
         // the purse, then speed · wind quarter · point of sail.
-        let fs = px(18.0);
+        let fs = px(16.0);
         let baseline = px(26.0);
         // Coin icon, vertically centred on the text's cap height.
         let r = px(7.0);

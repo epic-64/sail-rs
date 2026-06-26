@@ -86,3 +86,10 @@ pub fn wrap_angle(a: f32) -> f32 {
         m
     }
 }
+
+/// 8-point compass label for a bearing (radians, 0 = N, CW).
+pub fn compass(bearing_rad: f32) -> &'static str {
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    let deg = (bearing_rad.to_degrees().rem_euclid(360.0) + 22.5) / 45.0;
+    POINTS[(deg as usize) % 8]
+}
