@@ -523,8 +523,12 @@ fn page_ledger(p: &Page, gs: &GameState) {
 
     let st = &gs.stats;
     row("Contracts fulfilled", &format!("{}", st.contracts_fulfilled), p.x, y, p.col_w, fs);
-    y += lh * 1.4;
-    draw_line(p.x, y - lh * 0.5, p.x + p.col_w, y - lh * 0.5, px(1.0), dim_ink());
+    y += lh;
+    // Reward gold only: the returned deposit isn't a gain, so it isn't tallied.
+    row("Contract earnings", &format!("{} g", st.contract_earnings), p.x, y, p.col_w, fs);
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
 
     // Distance logged, shown in the same km/m form as the rest of the UI.
     row("Distance sailed", &format_dist(st.meters_traveled as f32), p.x, y, p.col_w, fs);
@@ -548,4 +552,15 @@ fn page_wagers(p: &Page, gs: &GameState) {
     y += lh * 0.8;
     let sailed = st.races_won + st.races_lost;
     row("Races sailed", &format!("{sailed}"), p.x, y, p.col_w, fs);
+    y += lh;
+    // Net stake gold across all wagers: green-ink in the black, alarm-ink in the red.
+    let w = st.race_winnings;
+    let (txt, col) = if w > 0 {
+        (format!("+{w} g"), ink())
+    } else if w < 0 {
+        (format!("-{} g", -w), alarm_ink())
+    } else {
+        ("0 g".to_string(), dim_ink())
+    };
+    row_colored("Winnings", &txt, col, p.x, y, p.col_w, fs);
 }
