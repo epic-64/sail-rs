@@ -21,8 +21,8 @@ use crate::sailing::{Kinematics, Wind, KNOT};
 // The ink/parchment palette, the type scale and `format_dist` are shared with the
 // port board; see `crate::ui`. Only the log's own warning inks live below.
 use crate::ui::{
-    dim_ink, format_dist, ink, line_h, parchment, parchment_edge, FS_BODY, FS_CHIP, FS_HEADING,
-    FS_SMALL, FS_TITLE,
+    dim_ink, format_dist, fs_body, fs_chip, fs_heading, fs_small, fs_title, ink, line_h, parchment,
+    parchment_edge, px,
 };
 use crate::world::World;
 
@@ -69,9 +69,9 @@ fn button(x: f32, y: f32, w: f32, h: f32, label: &str, focused: bool, enabled: b
     if focused {
         draw_rectangle(x, y, w, h, ink());
     } else {
-        draw_rectangle_lines(x, y, w, h, 1.5, parchment_edge());
+        draw_rectangle_lines(x, y, w, h, px(1.5), parchment_edge());
     }
-    let fs = FS_CHIP;
+    let fs = fs_chip();
     let dims = measure_text(label, None, fs, 1.0);
     let c = if focused {
         parchment()
@@ -96,8 +96,9 @@ struct Page {
 /// it off from the body (replacing the old centred "Captain's Log" that straddled
 /// the spine).
 fn heading(p: &Page, text: &str) {
-    crate::font::heading(|| draw_text(text, p.x, p.title_y, FS_TITLE as f32, ink()));
-    draw_line(p.x, p.title_y + 10.0, p.x + p.col_w, p.title_y + 10.0, 1.5, dim_ink());
+    crate::font::heading(|| draw_text(text, p.x, p.title_y, fs_title() as f32, ink()));
+    let under = p.title_y + px(10.0);
+    draw_line(p.x, under, p.x + p.col_w, under, px(1.5), dim_ink());
 }
 
 /// Render the open log over the scene. Dims the world behind it first. `spread` is
@@ -124,28 +125,28 @@ pub fn render(
     draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.45));
 
     // The open book, centred.
-    let pw = (w * 0.86).min(760.0);
-    let ph = (h * 0.90).min(470.0);
+    let pw = (w * 0.86).min(px(760.0));
+    let ph = (h * 0.90).min(px(470.0));
     let x0 = (w - pw) / 2.0;
     let y0 = (h - ph) / 2.0;
     draw_rectangle(x0, y0, pw, ph, parchment());
-    draw_rectangle_lines(x0, y0, pw, ph, 3.0, parchment_edge());
+    draw_rectangle_lines(x0, y0, pw, ph, px(3.0), parchment_edge());
     // The spine down the middle.
     let spine = x0 + pw / 2.0;
-    draw_line(spine, y0 + 10.0, spine, y0 + ph - 10.0, 1.5, dim_ink());
+    draw_line(spine, y0 + px(10.0), spine, y0 + ph - px(10.0), px(1.5), dim_ink());
 
-    let pad = 28.0;
+    let pad = px(28.0);
 
     // Each page carries its own heading near the top of the page; the old centred
     // "Captain's Log" title (which sat awkwardly across the spine) is gone. Headings
     // sit on `head_y`, the first body row on `body_y`.
-    let head_y = y0 + 52.0;
-    let body_y = y0 + 98.0;
+    let head_y = y0 + px(52.0);
+    let body_y = y0 + px(98.0);
 
     // The two page slots either side of the spine.
     let left = Page {
         x: x0 + pad,
-        col_w: pw / 2.0 - pad - 22.0,
+        col_w: pw / 2.0 - pad - px(22.0),
         title_y: head_y,
         body_y,
     };
@@ -173,16 +174,16 @@ pub fn render(
     }
 
     // --- Footer: page dots + the navigation hint ---------------------------
-    let foot_y = y0 + ph - 16.0;
+    let foot_y = y0 + ph - px(16.0);
     // Three dots centred on the spine, the current spread filled.
-    let gap = 18.0;
+    let gap = px(18.0);
     let dots_w = gap * (NUM_SPREADS as f32 - 1.0);
     let mut dx = spine - dots_w / 2.0;
     for i in 0..NUM_SPREADS {
         if i == spread {
-            draw_circle(dx, foot_y - 5.0, 4.0, ink());
+            draw_circle(dx, foot_y - px(5.0), px(4.0), ink());
         } else {
-            draw_circle_lines(dx, foot_y - 5.0, 4.0, 1.0, dim_ink());
+            draw_circle_lines(dx, foot_y - px(5.0), px(4.0), px(1.0), dim_ink());
         }
         dx += gap;
     }
@@ -192,10 +193,10 @@ pub fn render(
     } else {
         "\u{25C4} \u{25BA} turn the page"
     };
-    draw_text(nav, x0 + pad, foot_y, FS_SMALL as f32, dim_ink());
+    draw_text(nav, x0 + pad, foot_y, fs_small() as f32, dim_ink());
     let close = "L  close";
-    let cd = measure_text(close, None, FS_SMALL, 1.0);
-    draw_text(close, x0 + pw - pad - cd.width, foot_y, FS_SMALL as f32, dim_ink());
+    let cd = measure_text(close, None, fs_small(), 1.0);
+    draw_text(close, x0 + pw - pad - cd.width, foot_y, fs_small() as f32, dim_ink());
 }
 
 /// **Course & Conditions** — the live readouts (the opening left page, unchanged).
@@ -209,7 +210,7 @@ fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Day
         crate::compass(crate::geometry::wrap_angle(wind.toward_rad + std::f32::consts::PI));
     let point = wind.point_of_sail(kin.heading_rad).label();
 
-    let fs = FS_BODY;
+    let fs = fs_body();
     let lh = line_h(fs);
     let mut y = p.body_y;
     row("Speed", &format!("{knots:.1} kn"), p.x, y, p.col_w, fs);
@@ -218,7 +219,7 @@ fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Day
     y += lh;
     row("Sail", sail_name, p.x, y, p.col_w, fs);
     y += lh * 0.6;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
     row("Wind", &format!("from {wind_from}"), p.x, y, p.col_w, fs);
     y += lh;
@@ -237,8 +238,8 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
 
     // The chart square fills the page below the heading, leaving room for a
     // caption naming the local waters underneath.
-    let chart_top = p.title_y + 24.0;
-    let caption_h = 30.0;
+    let chart_top = p.title_y + px(24.0);
+    let caption_h = px(30.0);
     let chart_size = p.col_w.min((y0 + ph) - chart_top - pad - caption_h);
     let chart_x = p.x + (p.col_w - chart_size) / 2.0;
     let chart = Rect::new(chart_x, chart_top, chart_size, chart_size);
@@ -247,12 +248,12 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
 
     // Name the local waters under the chart.
     let cluster = world.cluster_at(kin.pos);
-    let cd = measure_text(&cluster.name, None, FS_SMALL, 1.0);
+    let cd = measure_text(&cluster.name, None, fs_small(), 1.0);
     draw_text(
         &cluster.name,
         chart_x + (chart_size - cd.width) / 2.0,
-        chart_top + chart_size + 22.0,
-        FS_SMALL as f32,
+        chart_top + chart_size + px(22.0),
+        fs_small() as f32,
         ink(),
     );
 }
@@ -262,7 +263,7 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
 fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
     heading(p, "The Vessel");
 
-    let fs = FS_BODY;
+    let fs = fs_body();
     let lh = line_h(fs);
     let mut y = p.body_y;
 
@@ -288,8 +289,8 @@ fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
     let can_caulk = planks > 0 && hull::damage(gs) > 0;
     row("Planks", &format!("{planks} aboard"), p.x, y, p.col_w, fs);
     y += lh * 0.25;
-    let btn_w = p.col_w.min(220.0);
-    let btn_h = 26.0;
+    let btn_w = p.col_w.min(px(220.0));
+    let btn_h = px(26.0);
     let label = if planks <= 0 {
         "Caulk hull — no timber".to_string()
     } else if hull::damage(gs) <= 0 {
@@ -299,7 +300,7 @@ fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
     };
     button(p.x, y, btn_w, btn_h, &label, sel == 0 && can_caulk, can_caulk);
     y += btn_h + lh * 0.5;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
 
     let top = upgrades::top_knots(gs.hull_level, gs.sail_level, 0);
@@ -328,7 +329,7 @@ fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
     // battered hull suffers (see `game_state::hull::debuff`). Listed only when in
     // force, with the harbourmaster's job ban flagged below a quarter hull… er,
     // below 30% hull.
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
     heading_minor(p, "Hull condition", y);
     y += lh * 0.9;
@@ -350,20 +351,20 @@ fn page_vessel(p: &Page, gs: &GameState, sel: usize) {
 /// A smaller sub-heading within a page body, used to group the hull-condition
 /// readout below the rig figures.
 fn heading_minor(p: &Page, text: &str, y: f32) {
-    crate::font::heading(|| draw_text(text, p.x, y, FS_HEADING as f32, dim_ink()));
+    crate::font::heading(|| draw_text(text, p.x, y, fs_heading() as f32, dim_ink()));
 }
 
 /// **The Hold** — the laden fraction with a fill bar, then the manifest.
 fn page_hold(p: &Page, gs: &GameState) {
     heading(p, "The Hold");
 
-    let fs = FS_BODY;
+    let fs = fs_body();
     let lh = line_h(fs);
     let mut y = p.body_y;
 
     row("Gold", &format!("{} g", gs.gold), p.x, y, p.col_w, fs);
     y += lh * 0.6;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
 
     let used = gs.hold_used();
@@ -384,7 +385,7 @@ fn page_hold(p: &Page, gs: &GameState) {
 
     // A fill bar reading the laden fraction; red when full. A notch marks where the
     // rig can no longer haul the full hold — load past it and she takes a penalty.
-    let bar_h = 12.0;
+    let bar_h = px(12.0);
     let bar_w = p.col_w;
     draw_rectangle(p.x, y, bar_w, bar_h, Color::new(0.0, 0.0, 0.0, 0.10));
     let frac = if cap > 0 {
@@ -394,14 +395,14 @@ fn page_hold(p: &Page, gs: &GameState) {
     };
     let fill_col = if full { alarm_ink() } else { parchment_edge() };
     draw_rectangle(p.x, y, bar_w * frac, bar_h, fill_col);
-    draw_rectangle_lines(p.x, y, bar_w, bar_h, 1.0, dim_ink());
+    draw_rectangle_lines(p.x, y, bar_w, bar_h, px(1.0), dim_ink());
     let haul = upgrades::max_haul(gs.sail_level);
     if cap > 0 && haul < cap {
         let nx = p.x + bar_w * (haul as f32 / cap as f32).clamp(0.0, 1.0);
-        draw_line(nx, y - 2.0, nx, y + bar_h + 2.0, 1.5, alarm_ink());
+        draw_line(nx, y - px(2.0), nx, y + bar_h + px(2.0), px(1.5), alarm_ink());
     }
     y += bar_h + lh * 0.8;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
 
     // The manifest: every good aboard, plus a line for any contract-bound cargo.
@@ -430,12 +431,12 @@ fn page_hold(p: &Page, gs: &GameState) {
 fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
     heading(p, "Bearings");
 
-    let fs = FS_BODY;
+    let fs = fs_body();
     let lh = line_h(fs);
     let mut y = p.body_y;
 
     // Contracts: each accepted haul's destination and how far it lies.
-    crate::font::heading(|| draw_text("Contracts", p.x, y, FS_HEADING as f32, dim_ink()));
+    crate::font::heading(|| draw_text("Contracts", p.x, y, fs_heading() as f32, dim_ink()));
     y += lh * 0.9;
     if gs.active_missions.is_empty() {
         draw_text("No active contracts.", p.x, y, fs as f32, dim_ink());
@@ -448,11 +449,11 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
         }
     }
     y += lh * 0.3;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.9;
 
     // Race: the mark, its distance, and the speed made good toward it (VMG).
-    crate::font::heading(|| draw_text("Race", p.x, y, FS_HEADING as f32, dim_ink()));
+    crate::font::heading(|| draw_text("Race", p.x, y, fs_heading() as f32, dim_ink()));
     y += lh * 0.9;
     match gs.race {
         Some(r) => {
@@ -475,11 +476,11 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
         }
     }
     y += lh * 0.3;
-    draw_line(p.x, y, p.x + p.col_w, y, 1.0, dim_ink());
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.9;
 
     // Nearest shipyard: where to mend the hull and buy fittings.
-    crate::font::heading(|| draw_text("Nearest Shipyard", p.x, y, FS_HEADING as f32, dim_ink()));
+    crate::font::heading(|| draw_text("Nearest Shipyard", p.x, y, fs_heading() as f32, dim_ink()));
     y += lh * 0.9;
     let nearest = world
         .islands
@@ -500,7 +501,7 @@ fn page_bearings(p: &Page, world: &World, kin: &Kinematics, gs: &GameState) {
 fn page_performance(p: &Page, frame_dt: f32) {
     heading(p, "Performance");
 
-    let fs = FS_BODY;
+    let fs = fs_body();
     let lh = line_h(fs);
     let mut y = p.body_y;
     row("FPS", &format!("{}", get_fps()), p.x, y, p.col_w, fs);

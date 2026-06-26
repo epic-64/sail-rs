@@ -22,6 +22,9 @@ use macroquad::prelude::*;
 
 use crate::sound::SoundBank;
 use crate::touch::TouchState;
+// The parchment palette and the UI scale are shared design tokens; see `crate::ui`.
+// Only the menu's own row highlight / alarm inks live at the foot of this file.
+use crate::ui::{dim_ink, ink, parchment, parchment_edge, px};
 
 /// The menu's directional verbs for this frame, OR-ing the keyboard with taps on
 /// the on-screen nav cluster (see `touch_ui`). The seed field still needs the
@@ -310,16 +313,16 @@ impl PauseMenu {
         // Dim the world behind the board so the parchment reads clearly.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
 
-        let pw = 420.0_f32.min(w * 0.82);
+        let pw = px(420.0).min(w * 0.82);
         // Tall enough for the Options view's six rows (the seed field's hint adds a
         // line); the Main view just has more breathing room.
-        let ph = 488.0_f32.min(h * 0.9);
+        let ph = px(488.0).min(h * 0.9);
         let x0 = (w - pw) * 0.5;
         let y0 = (h - ph) * 0.5;
         draw_rectangle(x0, y0, pw, ph, parchment());
-        draw_rectangle_lines(x0, y0, pw, ph, 3.0, parchment_edge());
+        draw_rectangle_lines(x0, y0, pw, ph, px(3.0), parchment_edge());
 
-        let pad = 28.0;
+        let pad = px(28.0);
         let cx = x0 + pad;
         match self.view {
             View::Main => self.render_main(cx, x0, y0, pw),
@@ -328,30 +331,30 @@ impl PauseMenu {
     }
 
     fn render_main(&self, cx: f32, x0: f32, y0: f32, pw: f32) {
-        crate::font::heading(|| draw_text("Paused", cx, y0 + 50.0, 36.0, ink()));
+        crate::font::heading(|| draw_text("Paused", cx, y0 + px(50.0), px(36.0), ink()));
         draw_text(
             "The voyage lies hove to.",
             cx,
-            y0 + 78.0,
-            15.0,
+            y0 + px(78.0),
+            px(15.0),
             dim_ink(),
         );
 
-        let mut ry = y0 + 132.0;
-        let row_h = 44.0;
+        let mut ry = y0 + px(132.0);
+        let row_h = px(44.0);
         for (i, label) in MAIN_ITEMS.iter().enumerate() {
             if i == self.cursor {
-                draw_rectangle(x0 + 12.0, ry - 26.0, pw - 24.0, row_h - 6.0, row_highlight());
+                draw_rectangle(x0 + px(12.0), ry - px(26.0), pw - px(24.0), row_h - px(6.0), row_highlight());
             }
-            draw_text(label, cx, ry, 22.0, ink());
+            draw_text(label, cx, ry, px(22.0), ink());
             ry += row_h;
         }
 
         draw_text(
             "↑/↓ move · Enter select · Esc resume",
             cx,
-            y0 + 132.0 + row_h * MAIN_ITEMS.len() as f32 + 8.0,
-            14.0,
+            y0 + px(132.0) + row_h * MAIN_ITEMS.len() as f32 + px(8.0),
+            px(14.0),
             dim_ink(),
         );
     }
@@ -363,9 +366,9 @@ impl PauseMenu {
         let focused = self.cursor == ROW_SEED;
         if focused {
             // A taller highlight than the other rows to take in the edit hint below.
-            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 58.0, row_highlight());
+            draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(58.0), row_highlight());
         }
-        draw_text("World Seed", cx, y, 19.0, ink());
+        draw_text("World Seed", cx, y, px(19.0), ink());
 
         // The value, with a blinking-free caret while focused so the field reads as
         // editable; jiggles red on a rejected entry.
@@ -375,11 +378,11 @@ impl PauseMenu {
             self.seed_text.clone()
         };
         let (dx, red) = self.seed_flash_state();
-        let vw = measure_text(&value, None, 19, 1.0).width;
-        draw_text(&value, x0 + pw - pad - vw + dx, y, 19.0, flash_ink(red));
+        let vw = measure_text(&value, None, px(19.0) as u16, 1.0).width;
+        draw_text(&value, x0 + pw - pad - vw + dx, y, px(19.0), flash_ink(red));
 
         if focused {
-            draw_text("type digits · Enter sail a new chart", cx, y + 22.0, 13.0, dim_ink());
+            draw_text("type digits · Enter sail a new chart", cx, y + px(22.0), px(13.0), dim_ink());
         }
     }
 
@@ -394,39 +397,39 @@ impl PauseMenu {
         ph: f32,
         pad: f32,
     ) {
-        crate::font::heading(|| draw_text("Options", cx, y0 + 50.0, 36.0, ink()));
+        crate::font::heading(|| draw_text("Options", cx, y0 + px(50.0), px(36.0), ink()));
 
         // --- Master volume slider (row 0) ---
-        let row_y = y0 + 110.0;
+        let row_y = y0 + px(110.0);
         if self.cursor == ROW_MASTER {
-            draw_rectangle(x0 + 12.0, row_y - 26.0, pw - 24.0, 70.0, row_highlight());
+            draw_rectangle(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0), row_highlight());
         }
         let master = sounds.master();
-        draw_text("Master Volume", cx, row_y, 19.0, ink());
+        draw_text("Master Volume", cx, row_y, px(19.0), ink());
         draw_text(
             format!("{}%", (master * 100.0).round() as i32),
-            x0 + pw - pad - 56.0,
+            x0 + pw - pad - px(56.0),
             row_y,
-            19.0,
+            px(19.0),
             ink(),
         );
 
         // The track and its filled portion, with a knob at the current level.
         let track_x = cx;
-        let track_y = row_y + 22.0;
+        let track_y = row_y + px(22.0);
         let track_w = pw - 2.0 * pad;
-        let track_h = 8.0;
+        let track_h = px(8.0);
         draw_rectangle(track_x, track_y, track_w, track_h, parchment_edge());
         draw_rectangle(track_x, track_y, track_w * master, track_h, ink());
         let knob_x = track_x + track_w * master;
-        draw_circle(knob_x, track_y + track_h * 0.5, 8.0, ink());
+        draw_circle(knob_x, track_y + track_h * 0.5, px(8.0), ink());
         if self.cursor == ROW_MASTER {
-            draw_text("◄ / ►", track_x, track_y + 34.0, 14.0, dim_ink());
+            draw_text("◄ / ►", track_x, track_y + px(34.0), px(14.0), dim_ink());
         }
 
         // --- Bloom toggle (row 1) ---
         // On the web these graphics rows are inert: show why instead of On/Off.
-        let bloom_y = row_y + 80.0;
+        let bloom_y = row_y + px(80.0);
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_BLOOM, "Bloom", on_off(self.bloom), cx, x0, bloom_y, pw, pad);
         } else {
@@ -434,7 +437,7 @@ impl PauseMenu {
         }
 
         // --- MSAA 4× toggle (row 2) ---
-        let msaa_y = bloom_y + 40.0;
+        let msaa_y = bloom_y + px(40.0);
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_MSAA, "MSAA 4×", on_off(self.msaa), cx, x0, msaa_y, pw, pad);
         } else {
@@ -442,26 +445,26 @@ impl PauseMenu {
         }
 
         // --- Fullscreen toggle (row 3) ---
-        let fs_y = msaa_y + 40.0;
+        let fs_y = msaa_y + px(40.0);
         self.toggle_row(ROW_FULLSCREEN, "Fullscreen", on_off(self.fullscreen), cx, x0, fs_y, pw, pad);
 
         // --- World seed field (row 4) ---
         // Sits just above Back; its edit hint needs the extra room below.
-        let seed_y = fs_y + 56.0;
+        let seed_y = fs_y + px(56.0);
         self.render_seed_row(cx, x0, seed_y, pw, pad);
 
         // --- Back (row 5) ---
-        let back_y = y0 + ph - 56.0;
+        let back_y = y0 + ph - px(56.0);
         if self.cursor == ROW_BACK {
-            draw_rectangle(x0 + 12.0, back_y - 26.0, pw - 24.0, 38.0, row_highlight());
+            draw_rectangle(x0 + px(12.0), back_y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
-        draw_text("Back", cx, back_y, 22.0, ink());
+        draw_text("Back", cx, back_y, px(22.0), ink());
 
         draw_text(
             "↑/↓ move · ◄/► or Enter adjust · Esc back",
             cx,
-            y0 + ph - 20.0,
-            14.0,
+            y0 + ph - px(20.0),
+            px(14.0),
             dim_ink(),
         );
     }
@@ -471,11 +474,11 @@ impl PauseMenu {
     #[allow(clippy::too_many_arguments)]
     fn toggle_row(&self, row: usize, label: &str, value: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
         if self.cursor == row {
-            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
+            draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
-        draw_text(label, cx, y, 19.0, ink());
-        let vw = measure_text(value, None, 19, 1.0).width;
-        draw_text(value, x0 + pw - pad - vw, y, 19.0, ink());
+        draw_text(label, cx, y, px(19.0), ink());
+        let vw = measure_text(value, None, px(19.0) as u16, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, px(19.0), ink());
     }
 
     /// Like `toggle_row`, but for a row that can't be changed in this build (web): the
@@ -483,12 +486,12 @@ impl PauseMenu {
     #[allow(clippy::too_many_arguments)] // row layout geometry is inherent
     fn disabled_row(&self, row: usize, label: &str, cx: f32, x0: f32, y: f32, pw: f32, pad: f32) {
         if self.cursor == row {
-            draw_rectangle(x0 + 12.0, y - 26.0, pw - 24.0, 38.0, row_highlight());
+            draw_rectangle(x0 + px(12.0), y - px(26.0), pw - px(24.0), px(38.0), row_highlight());
         }
-        draw_text(label, cx, y, 19.0, dim_ink());
+        draw_text(label, cx, y, px(19.0), dim_ink());
         let value = "Not supported";
-        let vw = measure_text(value, None, 15, 1.0).width;
-        draw_text(value, x0 + pw - pad - vw, y, 15.0, dim_ink());
+        let vw = measure_text(value, None, px(15.0) as u16, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, y, px(15.0), dim_ink());
     }
 }
 
@@ -507,19 +510,7 @@ fn snap(v: f32) -> f32 {
     ((v / MASTER_STEP).round() * MASTER_STEP).clamp(0.0, 1.0)
 }
 
-// Parchment palette, matching the port board and captain's log.
-fn ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 1.0)
-}
-fn dim_ink() -> Color {
-    Color::new(79.0 / 255.0, 47.0 / 255.0, 23.0 / 255.0, 0.62)
-}
-fn parchment() -> Color {
-    Color::new(230.0 / 255.0, 216.0 / 255.0, 176.0 / 255.0, 1.0)
-}
-fn parchment_edge() -> Color {
-    Color::new(120.0 / 255.0, 90.0 / 255.0, 55.0 / 255.0, 0.9)
-}
+// The menu's own inks atop the shared parchment palette (imported from `ui`).
 fn row_highlight() -> Color {
     Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28)
 }

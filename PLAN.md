@@ -15,13 +15,21 @@
 > The board shows only a ✕ cast-off button; the pause menu and captain's log keep
 > the d-pad nav cluster.
 >
-> **Still deferred:**
-> 1. **The `ui_scale` readability pass** (~100 tokenised call sites). On a
->    high-DPI phone the parchment text will be small until this lands. *Follow-up:*
->    route the `ui.rs` / `port_view::style` tokens through a screen-derived scale.
->    (Independent of tap-to-activate: hit-rects are recorded from the same layout
->    the board draws, so scaling moves both together.)
-> 2. **Seed entry on mobile** still needs a soft keyboard (noted in §9).
+> **UI scale pass: DONE.** `ui::scale()` derives a factor from the screen's short
+> edge (720 px baseline, clamped 0.85–3.0), with `ui::px(v)` and `ui::fs_*()` the
+> shared design tokens. Every parchment UI now scales through them — so the board,
+> captain's log, pause menu and the sailing HUD read properly from a phone up to a
+> 4K display (`high_dpi` reports physical pixels, so an unscaled 4K board was a tiny
+> island of 15 px text). Specifically:
+>   - `port_view::style` tokens became scaled fns (`pad()`, `chip_h()`, `panel_max_w()`…);
+>   - the captain's log & pause menu (which predated the no-bare-literals rule) had
+>     every size/offset routed through `px()`/`fs_*()`, and the pause menu now pulls
+>     the shared palette from `ui` instead of its own copies;
+>   - the HUD (purse line, debuff badges, salvage/race toasts, minimap cap) scales too;
+>   - panel size caps (`panel_max_w/h`, the log/menu caps, the minimap) scale, so big
+>     screens get a big board rather than a small one marooned in the middle.
+>
+> **Still deferred:** seed entry on mobile needs a soft keyboard (noted in §9).
 
 
 **Target:** the existing WASM / itch.io build, played in a mobile browser
