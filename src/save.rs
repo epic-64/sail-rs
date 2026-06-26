@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use crate::game_state::{GameState, Good, Location};
+use crate::game_state::{GameState, Good, Location, Stats};
 use crate::geometry::Vec2;
 use crate::mission::Mission;
 use crate::race::Race;
@@ -86,6 +86,17 @@ impl Save {
         kv(&mut o, "sail_mode", &self.sail_mode.to_string());
         kv(&mut o, "wind", &self.wind_toward.to_string());
         kv(&mut o, "kin", &fmt_kin(k));
+        // The lifetime tally (see `Stats`). A single comma-joined line; absent from
+        // pre-stats saves, which load with a zeroed ledger (see `deserialize`).
+        let s = &gs.stats;
+        kv(
+            &mut o,
+            "stats",
+            &format!(
+                "{},{},{},{}",
+                s.contracts_fulfilled, s.races_won, s.races_lost, s.meters_traveled
+            ),
+        );
         // A rival on the water: its position and the race phase, so a running race
         // resumes exactly rather than restarting the approach.
         if let Some(rk) = self.rival {
@@ -172,6 +183,9 @@ impl Save {
             hull_wear: map.get("hull_wear")?.parse().ok()?,
             active_missions: missions,
             race,
+            // The tally is optional: a save written before stats existed (or any
+            // malformed line) loads a fresh, zeroed ledger rather than failing.
+            stats: map.get("stats").and_then(|v| parse_stats(v)).unwrap_or_default(),
         };
 
         let kin = parse_kin(map.get("kin")?)?;
@@ -293,6 +307,20 @@ fn parse_mission(v: &str) -> Option<Mission> {
         target_id: p[4].parse().ok()?,
         reward: p[5].parse().ok()?,
         deposit: p[6].parse().ok()?,
+    })
+}
+
+/// Parse a `stats=` line's four comma-separated fields (the lifetime tally).
+fn parse_stats(v: &str) -> Option<Stats> {
+    let p: Vec<&str> = v.split(',').collect();
+    if p.len() != 4 {
+        return None;
+    }
+    Some(Stats {
+        contracts_fulfilled: p[0].parse().ok()?,
+        races_won: p[1].parse().ok()?,
+        races_lost: p[2].parse().ok()?,
+        meters_traveled: p[3].parse().ok()?,
     })
 }
 
@@ -420,6 +448,12 @@ mod tests {
             stake: 450,
             required_level: 1,
         });
+        gs.stats = Stats {
+            contracts_fulfilled: 17,
+            races_won: 4,
+            races_lost: 2,
+            meters_traveled: 123_456.5,
+        };
         Save {
             seed: 42,
             gs,
@@ -458,6 +492,10 @@ mod tests {
         assert_eq!(back.gs.location, s.gs.location);
         assert_eq!(back.gs.active_missions, s.gs.active_missions);
         assert_eq!(back.gs.race, s.gs.race);
+        assert_eq!(back.gs.stats.contracts_fulfilled, s.gs.stats.contracts_fulfilled);
+        assert_eq!(back.gs.stats.races_won, s.gs.stats.races_won);
+        assert_eq!(back.gs.stats.races_lost, s.gs.stats.races_lost);
+        assert!((back.gs.stats.meters_traveled - s.gs.stats.meters_traveled).abs() < 1e-6);
         assert_eq!(back.sail_mode, s.sail_mode);
         assert_eq!(back.kin.pos, s.kin.pos);
         assert!((back.kin.heading_rad - s.kin.heading_rad).abs() < 1e-6);
