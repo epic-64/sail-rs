@@ -27,6 +27,7 @@ use crate::mission;
 use crate::race;
 use crate::sailing::{Kinematics, Wind};
 use crate::sound::SoundBank;
+use crate::touch::TouchState;
 use crate::world::{Island, World};
 
 // How far off the bow a port may sit and still raise the docking prompt: a
@@ -512,35 +513,47 @@ impl PortScreen {
         world: &World,
         market: &Market,
         sounds: &SoundBank,
+        touch: &TouchState,
     ) -> bool {
-        if is_key_pressed(KeyCode::Escape) {
+        // Fold taps on the on-screen nav cluster (see `touch_ui`) into the same
+        // verbs the keyboard drives — every board action stays in `activate` etc.
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
+        let tab_tapped = n.tab.is_some_and(|r| touch.tapped_in(r));
+        let up = is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up);
+        let down = is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down);
+        let left = is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left);
+        let right = is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right);
+        let confirm =
+            is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || touch.tapped_in(n.confirm);
+
+        if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
             return true;
         }
-        if is_key_pressed(KeyCode::Tab) {
+        if is_key_pressed(KeyCode::Tab) || tab_tapped {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             self.cycle_tab(if back { -1 } else { 1 });
         }
-        if is_key_pressed(KeyCode::Up) {
+        if up {
             self.move_cursor(gs, world, -1);
         }
-        if is_key_pressed(KeyCode::Down) {
+        if down {
             self.move_cursor(gs, world, 1);
         }
-        if is_key_pressed(KeyCode::Left) {
+        if left {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(-1),
                 Focus::Good(_) if self.column > 0 => self.column -= 1,
                 _ => self.slide_tab(gs, world, -1),
             }
         }
-        if is_key_pressed(KeyCode::Right) {
+        if right {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(1),
                 Focus::Good(_) if self.column < LAST_COLUMN => self.column += 1,
                 _ => self.slide_tab(gs, world, 1),
             }
         }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
+        if confirm {
             self.activate(gs, world, market, sounds);
         }
         false
