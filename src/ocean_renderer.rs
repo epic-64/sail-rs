@@ -257,6 +257,13 @@ impl OceanRenderer {
         // depth march and nearer crests/islands occlude it. Drawn like the rival but
         // flying a green pennant.
         traders: &[Kinematics],
+        // How brightly the harbour lights burn (the dusk ramp): fed to the island
+        // view so a port's houses light their windows after dark.
+        lamp: f32,
+        // The harbour-light reflection glints, sorted *descending* by distance
+        // (farthest first) like the salvage, so each sparkle slots into the depth
+        // march and nearer crests occlude it instead of shining through the swell.
+        glints: &[crate::port_lights::Glint],
     ) {
         // Ease the live palette toward the clock's target with a slow cross-fade,
         // then blend toward the cold storm palette by the gale's fury.
@@ -358,6 +365,8 @@ impl OceanRenderer {
             // Darken the whole isle into the night, never to full black — a moonlit
             // silhouette keeps a fifth of its daylight so its shape still reads.
             light: 0.22 + 0.78 * light_strength,
+            lamp,
+            t,
         };
         // Near-shore distance key per island (aligned with `islands`), used to slot
         // each island into the band march. Farthest-first to match the band order.
@@ -371,6 +380,10 @@ impl OceanRenderer {
         // the band march descends past its distance (farthest first), so nearer bands
         // then paint over it just as they do the islands' bases.
         let mut flot_idx = 0;
+        // Harbour-light glints march in alongside the salvage, each drawn once the
+        // band march descends past its distance (farthest first) so nearer crests
+        // then paint over it.
+        let mut glint_idx = 0;
         let mut draw_rival = |f: f32| {
             if rival_done {
                 return;
@@ -456,6 +469,10 @@ impl OceanRenderer {
                 crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
                 flot_idx += 1;
             }
+            while glint_idx < glints.len() && kin.pos.distance_to(glints[glint_idx].pos) >= f {
+                crate::port_lights::draw(&glints[glint_idx], &scene);
+                glint_idx += 1;
+            }
 
             if j > 0 {
                 self.paint_band(f, prev_f - f, sea, lx, ly, lz);
@@ -499,6 +516,11 @@ impl OceanRenderer {
         while flot_idx < flotsam.len() {
             crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
             flot_idx += 1;
+        }
+        // Any glints nearer than the closest band sparkle in front of all the water.
+        while glint_idx < glints.len() {
+            crate::port_lights::draw(&glints[glint_idx], &scene);
+            glint_idx += 1;
         }
 
         // Streak the surface flecks on top of the finished wave mesh.

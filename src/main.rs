@@ -20,6 +20,7 @@ mod ocean;
 mod ocean_renderer;
 mod palette;
 mod pause_menu;
+mod port_lights;
 mod port_view;
 mod projection;
 mod race;
@@ -1126,6 +1127,15 @@ async fn run_game(
             lerp3(sky_grad[2], night_sky[2], base_night),
         ];
 
+        // --- Harbour lights ----------------------------------------------------
+        // After dusk a port island's houses light their windows (drawn on the isle
+        // in `islands_render`, gated by `lamp`), and the lit town casts one shimmering
+        // reflection road on the water. The road's glints are world-anchored and
+        // handed to the wave renderer so they slot into the depth march: nearer crests
+        // occlude them instead of the road shining through the swell.
+        let lamp = port_lights::dusk_glow(sky.sun_alt);
+        let glints = port_lights::build(&world.islands, &view_kin, &sky, t, half_fov_h_view);
+
         // --- Waves -------------------------------------------------------------
         renderer.render(
             &view_kin,
@@ -1147,6 +1157,8 @@ async fn run_game(
             day_lit,
             &flot_vis,
             &trader_kins,
+            lamp,
+            &glints,
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
