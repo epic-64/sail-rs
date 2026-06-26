@@ -31,19 +31,19 @@ fn fs(base: f32) -> u16 {
 // --- Type scale — one tight ladder, used across the parchment UIs --------------
 // Design sizes (px at scale 1.0); the live size is `fs(base)` for the screen.
 pub fn fs_title() -> u16 {
-    fs(26.0) // titles: the port name, a log spread's heading
+    fs(24.0) // titles: the port name, a log spread's heading
 }
 pub fn fs_heading() -> u16 {
-    fs(16.0) // section / board headers (display face) + the purse
+    fs(15.0) // section / board headers (display face) + the purse
 }
 pub fn fs_body() -> u16 {
-    fs(15.0) // data lines, list rows, tab labels
+    fs(14.0) // data lines, list rows, tab labels
 }
 pub fn fs_small() -> u16 {
-    fs(13.0) // eyebrows, column labels, captions, hints
+    fs(12.0) // eyebrows, column labels, captions, hints
 }
 pub fn fs_chip() -> u16 {
-    fs(14.0) // button / chip labels
+    fs(13.0) // button / chip labels
 }
 
 /// A text line's height is its font size times this — the list/row step.
