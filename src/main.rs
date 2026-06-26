@@ -1130,11 +1130,11 @@ async fn run_game(
         // --- Harbour lights ----------------------------------------------------
         // After dusk a port island's houses light their windows (drawn on the isle
         // in `islands_render`, gated by `lamp`), and the lit town casts one shimmering
-        // reflection road on the water. The road's glints are world-anchored and
-        // handed to the wave renderer so they slot into the depth march: nearer crests
-        // occlude them instead of the road shining through the swell.
+        // reflection road on the water. The town is handed to the wave renderer as a
+        // low, warm local light and baked into the per-facet shading, so the road is
+        // occluded by nearer crests for free instead of shining through the swell.
         let lamp = port_lights::dusk_glow(sky.sun_alt);
-        let glints = port_lights::build(&world.islands, &view_kin, &sky, t, half_fov_h_view);
+        let harbour_lights = port_lights::build(&world.islands, &view_kin, &sky, t, half_fov_h_view);
 
         // --- Waves -------------------------------------------------------------
         renderer.render(
@@ -1158,7 +1158,7 @@ async fn run_game(
             &flot_vis,
             &trader_kins,
             lamp,
-            &glints,
+            &harbour_lights,
         );
 
         // Back to screen space for the foreground + HUD, which stay bolted to the
