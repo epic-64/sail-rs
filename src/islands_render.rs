@@ -437,12 +437,26 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
     }
 
+    // Sand-vs-foliage is decided per concentric ring, not per triangle. Picking
+    // the colour from each triangle's own centroid makes the boundary zig-zag
+    // along facet edges (the hard-edged green/beige sawtooth), because the height
+    // field wiggles above and below `beach` within a single ring of triangles.
+    // Averaging each ring's elevation around the whole island instead puts the
+    // boundary on a clean ring loop (which still follows the lumpy coast), so a
+    // whole strip is one colour and no facets straddle the shoreline.
+    let mut ring_z = vec![0.0f32; levels];
+    for lvl in 0..levels {
+        let mut s = 0.0;
+        for i in 0..MOUND_SEG {
+            s += wpz[lvl][i].2;
+        }
+        ring_z[lvl] = s / MOUND_SEG as f32;
+    }
+
     let mut tris: Vec<Tri> = Vec::with_capacity(terrain.rings * MOUND_SEG * 2);
-    let mut push = |a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32),
+    let mut push = |base: [f32; 3],
+                    a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32),
                     pa: (f32, f32), pb: (f32, f32), pc: (f32, f32)| {
-        // Degenerate triangles (e.g. the collapsed centre) carry no area — skip.
-        let avg_z = (a.2 + b.2 + c.2) / 3.0;
-        let base = if avg_z < terrain.beach { sand } else { foliage };
         let sh = shade(a, b, c, v);
         let cx = (a.0 + b.0 + c.0) / 3.0;
         let cy = (a.1 + b.1 + c.1) / 3.0;
@@ -453,6 +467,9 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         });
     };
     for lvl in 0..levels - 1 {
+        // One colour for the whole strip, from the mean height across its two rings.
+        let mid_z = (ring_z[lvl] + ring_z[lvl + 1]) * 0.5;
+        let base = if mid_z < terrain.beach { sand } else { foliage };
         for i in 0..MOUND_SEG {
             let j = (i + 1) % MOUND_SEG;
             let a0 = wpz[lvl][i];
@@ -461,10 +478,10 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             let b1 = wpz[lvl + 1][j];
             // Drop any facet with a corner behind the camera — see `front` above.
             if front[lvl][i] && front[lvl][j] && front[lvl + 1][j] {
-                push(a0, b0, b1, scr[lvl][i], scr[lvl][j], scr[lvl + 1][j]);
+                push(base, a0, b0, b1, scr[lvl][i], scr[lvl][j], scr[lvl + 1][j]);
             }
             if front[lvl][i] && front[lvl + 1][j] && front[lvl + 1][i] {
-                push(a0, b1, a1, scr[lvl][i], scr[lvl + 1][j], scr[lvl + 1][i]);
+                push(base, a0, b1, a1, scr[lvl][i], scr[lvl + 1][j], scr[lvl + 1][i]);
             }
         }
     }
