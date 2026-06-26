@@ -65,6 +65,11 @@ pub fn parchment() -> Color {
 pub fn parchment_edge() -> Color {
     Color::new(120.0 / 255.0, 90.0 / 255.0, 55.0 / 255.0, 0.9)
 }
+/// Alarm ink — a full hold / battered hull (the laden-fill bar when it tops out).
+/// Shared so the captain's log and the port header read the same red.
+pub fn alarm_ink() -> Color {
+    Color::new(150.0 / 255.0, 38.0 / 255.0, 24.0 / 255.0, 1.0)
+}
 
 /// A short distance readout: kilometres past 1 km, metres below it.
 /// (`SailingView.formatDist` in the original.)
