@@ -912,7 +912,7 @@ impl PortScreen {
         // ===== Drydock — hull repair: one line ==============================
         // Pull the first row up snug under the heading rule (the section advance
         // plus the row's own top pad otherwise stack ~two blank lines).
-        let mut ry = section("DRYDOCK · HULL REPAIR", x, y, w) - gap();
+        let mut ry = section("Drydock · Hull Repair", x, y, w) - gap();
         {
             let active = self.focus == Focus::Repair;
             let bh = step + gap();
@@ -940,7 +940,7 @@ impl PortScreen {
         }
 
         // ===== Shipyard — hull / sails / hold fittings ======================
-        ry = section("SHIPYARD · OUTFITTING", x, ry, w) - gap();
+        ry = section("Shipyard · Outfitting", x, ry, w) - gap();
         if self.is_shipyard(world) {
             for kind in [UpgradeKind::Hull, UpgradeKind::Sail, UpgradeKind::Cargo] {
                 let active = self.focus == Focus::Upgrade(kind);
@@ -1185,6 +1185,18 @@ impl PortScreen {
         // --- Cargo Contracts (jobs offered here) -----------------------------
         crate::font::heading(|| draw_text("Cargo Contracts", x, ry, fs_heading() as f32, ink()));
         ry += line_h(fs_heading());
+        // The deposit is a refundable surety, not a fee: the shipper posts it as a
+        // pledge, then on delivery gets it back *and* the reward on top. Spell it out
+        // — test players read the payout as reward-minus-deposit.
+        for flavor in [
+            "The shipper posts a deposit as surety that the cargo reaches port.",
+            "On delivery your deposit is returned in full, plus the reward on top.",
+        ] {
+            draw_text(flavor, x, ry, fs_small() as f32, dim_ink());
+            ry += line_h(fs_small());
+        }
+        // Breathing room before the column labels / contract rows.
+        ry += gap();
         draw_text("Cargo", x, ry, fs_small() as f32, dim_ink());
         draw_text("To", x + w * CON_TO_X, ry, fs_small() as f32, dim_ink());
         right_text("Deposit", x + w * CON_DEP_R, ry, fs_small());
