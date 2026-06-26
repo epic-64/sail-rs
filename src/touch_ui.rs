@@ -6,9 +6,9 @@
 //!   pause / log / look-astern on the right;
 //! - the **menu nav cluster** ([`nav_cluster`] / [`draw_nav_cluster`]): a d-pad
 //!   plus confirm / back, which emit the same arrow / Enter / Esc verbs the
-//!   keyboard-driven pause menu and captain's log already consume. (The port
-//!   board is tapped directly — see [`crate::port_view`] — and shows only the
-//!   cast-off [`back_button`].)
+//!   keyboard-driven pause menu, captain's log and port board already consume.
+//!   (The board can *also* be tapped directly — see [`crate::port_view`] — but it
+//!   shows the cluster too, for captains who'd rather step the cursor.)
 //!
 //! Each rect is derived from the screen size so the controls track rotation, and
 //! the hit-test (in `touch.rs`) and the draw here read the *same* layout fns —
@@ -252,14 +252,3 @@ pub fn draw_nav_cluster(n: &NavRects) {
     cross(n.back);
 }
 
-/// The lone "cast off" (✕) button the port board shows — its rows and chips are
-/// tapped directly, so it needs no d-pad. Shares the nav cluster's back corner.
-pub fn back_button(w: f32, h: f32) -> Rect {
-    nav_cluster(w, h).back
-}
-
-/// Draw the board's cast-off button.
-pub fn draw_back_button(r: Rect) {
-    panel(r, false);
-    cross(r);
-}
