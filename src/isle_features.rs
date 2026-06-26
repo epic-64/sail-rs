@@ -17,6 +17,35 @@ use std::f64::consts::TAU;
 
 const GOLDEN: i64 = 0x9e3779b97f4a7c15u64 as i64;
 
+/// Scenery-density levels offered by the performance setting (pause menu Options),
+/// and the multiplier each applies to every scatter count. The scatters are tuned
+/// at index 2 (`Medium` = ×1.0); lower levels thin the foliage to claw back frame
+/// time on weak hardware, higher levels pack it in. `Very Low` lands near the
+/// game's original sparse scatter (≈1/5 of Medium).
+pub const DENSITY_LEVELS: usize = 5;
+
+/// The on-screen name of a density level (`0..DENSITY_LEVELS`).
+pub fn density_label(level: usize) -> &'static str {
+    match level {
+        0 => "Very Low",
+        1 => "Low",
+        2 => "Medium",
+        3 => "High",
+        _ => "Very High",
+    }
+}
+
+/// The scatter-count multiplier for a density level (`0..DENSITY_LEVELS`).
+pub fn density_mul(level: usize) -> f32 {
+    match level {
+        0 => 0.2,
+        1 => 0.5,
+        2 => 1.0,
+        3 => 1.6,
+        _ => 2.4,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureKind {
     Tree,
@@ -46,80 +75,82 @@ pub struct IsleFeature {
 }
 
 /// All features for one island, deterministic from the world seed + island id.
-pub fn generate(seed: i64, isle: &Island) -> Vec<IsleFeature> {
+/// `density` is the scenery multiplier from the performance setting (see
+/// [`density_mul`]); 1.0 is the tuned baseline.
+pub fn generate(seed: i64, isle: &Island, density: f32) -> Vec<IsleFeature> {
     let mut rng = Rng::from_seed(seed ^ (isle.id as i64 + 1).wrapping_mul(GOLDEN));
     let mut feats = match isle.terrain {
-        IsleKind::Green => green(&mut rng, isle),
-        IsleKind::Jungle => jungle(&mut rng, isle),
-        IsleKind::Rocky => rocky(&mut rng, isle),
-        IsleKind::Volcanic => volcanic(&mut rng, isle),
+        IsleKind::Green => green(&mut rng, isle, density),
+        IsleKind::Jungle => jungle(&mut rng, isle, density),
+        IsleKind::Rocky => rocky(&mut rng, isle, density),
+        IsleKind::Volcanic => volcanic(&mut rng, isle, density),
     };
     if isle.is_port {
         let mut prng = Rng::from_seed(
             (seed.wrapping_mul(0x100000001b3) ^ (isle.id as i64 + 1)) ^ 0x504f5254,
         );
-        feats.extend(port_structures(&mut prng, isle));
+        feats.extend(port_structures(&mut prng, isle, density));
     }
     feats
 }
 
 // --- per-terrain scatters ----------------------------------------------------
 
-fn green(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
+fn green(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(12, 20);
+    let n = scaled(rng, 60, 100, d);
     let mut v = scatter(rng, n, r * 0.82, &[Tree, Palm, Tree, Pine], 6.0, 11.0, 0.8, 1.3);
-    let n = rng.int_between(8, 14);
+    let n = scaled(rng, 40, 70, d);
     v.extend(scatter(rng, n, r * 0.86, &[Bush, Fern, Bush], 2.0, 3.5, 0.8, 1.4));
-    let n = rng.int_between(0, 4);
+    let n = scaled(rng, 0, 20, d);
     v.extend(scatter(rng, n, r * 0.78, &[Rock], 3.0, 6.0, 0.7, 1.1));
-    let n = rng.int_between(0, 2);
+    let n = scaled(rng, 0, 10, d);
     v.extend(scatter(rng, n, r * 0.6, &[Ruin], 4.0, 7.0, 0.8, 1.2));
     maybe_shore(rng, isle, Shipwreck, 0.25, 3.0, 5.0, &mut v);
     v
 }
 
-fn jungle(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
+fn jungle(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(18, 28);
+    let n = scaled(rng, 90, 140, d);
     let mut v = scatter(rng, n, r * 0.86, &[Tree, Palm, Tree, Bush, Pine], 7.0, 12.0, 0.8, 1.3);
-    let n = rng.int_between(12, 18);
+    let n = scaled(rng, 60, 90, d);
     v.extend(scatter(rng, n, r * 0.88, &[Bush, Fern, Fern], 2.0, 4.0, 0.9, 1.4));
-    let n = rng.int_between(1, 4);
+    let n = scaled(rng, 5, 20, d);
     v.extend(scatter(rng, n, r * 0.6, &[Ruin], 4.0, 7.0, 0.9, 1.3));
     maybe_shore(rng, isle, Shipwreck, 0.35, 3.0, 5.0, &mut v);
     v
 }
 
-fn rocky(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
+fn rocky(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(8, 14);
+    let n = scaled(rng, 40, 70, d);
     let mut v = scatter(rng, n, r * 0.78, &[Rock, Rock, Pine], 4.0, 9.0, 0.7, 1.3);
-    let n = rng.int_between(2, 6);
+    let n = scaled(rng, 10, 30, d);
     v.extend(scatter(rng, n, r * 0.74, &[Pine, Tree, Bush], 5.0, 8.0, 0.6, 0.9));
     maybe_shore(rng, isle, Shipwreck, 0.3, 3.0, 5.0, &mut v);
     v
 }
 
-fn volcanic(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
+fn volcanic(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(6, 12);
+    let n = scaled(rng, 30, 60, d);
     let mut v = scatter(rng, n, r * 0.74, &[Rock, Rock, Pine], 4.0, 9.0, 0.7, 1.3);
-    let n = rng.int_between(1, 4);
+    let n = scaled(rng, 5, 20, d);
     v.extend(scatter(rng, n, r * 0.74, &[Pine, Bush], 4.0, 7.0, 0.5, 0.8));
     v
 }
 
 // --- port settlement ---------------------------------------------------------
 
-fn port_structures(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
+fn port_structures(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     use FeatureKind::*;
     let r = isle.radius;
-    let n = rng.int_between(5, 9);
+    let n = scaled(rng, 25, 45, d);
     let mut v = scatter(rng, n, r * 0.55, &[Hut, Hut, Cottage], 4.0, 6.0, 0.9, 1.2);
     // A watchtower set back from the water.
     let ang = rng.between(0.0, TAU);
@@ -130,7 +161,7 @@ fn port_structures(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
         height: rng.between(9.0, 14.0) as f32,
         size: rng.between(0.8, 1.1) as f32,
     });
-    let n = rng.int_between(1, 3);
+    let n = scaled(rng, 5, 15, d);
     v.extend(scatter(rng, n, r * 0.5, &[Flag], 4.0, 6.0, 0.8, 1.1));
     // A shoreline dock.
     let ang = rng.between(0.0, TAU);
@@ -145,6 +176,13 @@ fn port_structures(rng: &mut Rng, isle: &Island) -> Vec<IsleFeature> {
 }
 
 // --- placement helpers -------------------------------------------------------
+
+/// Draw a scatter count in `[lo, hi]`, then scale it by the scenery-density setting
+/// (rounding, floored at 0). The base draw always happens, so the per-island RNG
+/// stream stays a function of seed + density alone (same inputs, same island).
+fn scaled(rng: &mut Rng, lo: i32, hi: i32, density: f32) -> i32 {
+    ((rng.int_between(lo, hi) as f32 * density).round() as i32).max(0)
+}
 
 #[allow(clippy::too_many_arguments)] // scatter parameters (bounds + density knobs)
 fn scatter(

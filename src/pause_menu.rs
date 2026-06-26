@@ -6,8 +6,10 @@
 //!
 //!   - **Main** — *Resume* (back to the helm), *Options*, *Quit*.
 //!   - **Options** — a master-volume slider (in steps of 10%) that scales the whole
-//!     mix, a bloom toggle, an MSAA 4× toggle, a fullscreen toggle, a **World Seed**
-//!     text field (type digits, Enter to sail a fresh chart on that seed), plus *Back*.
+//!     mix, a **Scenery** density slider (the performance setting: steps the island
+//!     foliage from Very Low to Very High), a bloom toggle, an MSAA 4× toggle, a
+//!     fullscreen toggle, a **World Seed** text field (type digits, Enter to sail a
+//!     fresh chart on that seed), plus *Back*.
 //!     The bloom and MSAA rows are graphics settings that take effect immediately;
 //!     both rely on render-to-texture / a WebGL2 resolve that the web build can't
 //!     grant, so on the web they show "Not supported" and can't be toggled.
@@ -70,21 +72,25 @@ enum Tap {
     /// toggle / Back acts in one go. A no-op "press" (the volume label, the seed row)
     /// simply leaves the cursor there.
     Select(usize),
-    /// The master-volume track: set the gain from where along it the click landed.
-    Slider(Rect),
+    /// A slider track (master volume or scenery density): the `usize` is the owning
+    /// row, the `Rect` the thin track; set that row's value from where the click
+    /// landed along it.
+    Slider(usize, Rect),
 }
 
 /// The main-menu rows, in cursor order.
 const MAIN_ITEMS: [&str; 3] = ["Resume", "Options", "Quit"];
 /// The options rows, in cursor order:
-/// 0 = master volume, 1 = bloom, 2 = MSAA 4×, 3 = fullscreen, 4 = world seed, 5 = back.
-const OPTIONS_ROWS: usize = 6;
+/// 0 = master volume, 1 = scenery density, 2 = bloom, 3 = MSAA 4×, 4 = fullscreen,
+/// 5 = world seed, 6 = back.
+const OPTIONS_ROWS: usize = 7;
 const ROW_MASTER: usize = 0;
-const ROW_BLOOM: usize = 1;
-const ROW_MSAA: usize = 2;
-const ROW_FULLSCREEN: usize = 3;
-const ROW_SEED: usize = 4;
-const ROW_BACK: usize = 5;
+const ROW_SCENERY: usize = 1;
+const ROW_BLOOM: usize = 2;
+const ROW_MSAA: usize = 3;
+const ROW_FULLSCREEN: usize = 4;
+const ROW_SEED: usize = 5;
+const ROW_BACK: usize = 6;
 const MASTER_STEP: f32 = 0.1; // the slider moves in 10% notches
 
 /// World-seed field rules: digits only, 1..=`SEED_MAX_LEN` of them. The cap keeps
@@ -130,6 +136,10 @@ pub struct PauseMenu {
     /// 4× MSAA on the offscreen scene. Read each frame by the render loop. Off on the
     /// web (the resolve needs WebGL2, which the build avoids).
     msaa: bool,
+    /// Scenery-density level (0..`isle_features::DENSITY_LEVELS`), the performance
+    /// slider. Read by `main`, which rebuilds the island features when it changes and
+    /// persists it as a global preference. Defaults to the tuned middle.
+    feat_density: usize,
     /// The world-seed field's edit buffer (digits only). Seeds the current chart;
     /// applied with Enter on the seed row to start a fresh voyage.
     seed_text: String,
@@ -151,6 +161,9 @@ impl PauseMenu {
             // bloom + 4× MSAA), and forced off on the web.
             bloom: GRAPHICS_SUPPORTED,
             msaa: GRAPHICS_SUPPORTED,
+            // The tuned middle (`Medium`); `main` overrides it from the saved
+            // preference at startup if one exists.
+            feat_density: crate::isle_features::DENSITY_LEVELS / 2,
             // Matches the world the loop boots on (`run_game(1, …)` in main).
             seed_text: String::from("1"),
             seed_flash: None,
@@ -173,6 +186,17 @@ impl PauseMenu {
         self.msaa
     }
 
+    /// The current scenery-density level (the performance slider).
+    pub fn feat_density(&self) -> usize {
+        self.feat_density
+    }
+
+    /// Set the scenery-density level (clamped to the valid range), e.g. to apply a
+    /// saved preference at startup.
+    pub fn set_feat_density(&mut self, level: usize) {
+        self.feat_density = level.min(crate::isle_features::DENSITY_LEVELS - 1);
+    }
+
     /// Raise the menu, always opening on the main view with the cursor at the top.
     pub fn open(&mut self) {
         self.open = true;
@@ -190,12 +214,15 @@ impl PauseMenu {
         let hits: Vec<(Rect, Tap)> = self.taps.borrow().clone();
         for (rect, t) in hits {
             match t {
-                Tap::Slider(track) => {
+                Tap::Slider(row, track) => {
                     // Hit on the wide band (`rect`), fraction from the thin track.
                     if let Some(p) = touch.tap_pos_in(rect) {
                         let f = ((p.x - track.x) / track.w).clamp(0.0, 1.0);
-                        sounds.set_master(snap(f));
-                        self.cursor = ROW_MASTER;
+                        match row {
+                            ROW_SCENERY => self.feat_density = density_from_frac(f),
+                            _ => sounds.set_master(snap(f)),
+                        }
+                        self.cursor = row;
                     }
                 }
                 Tap::Select(row) => {
@@ -259,6 +286,15 @@ impl PauseMenu {
             }
             if nav.left {
                 sounds.set_master(snap(sounds.master() - MASTER_STEP));
+            }
+        }
+        // The scenery-density slider: Left/Right step one level along the ladder.
+        if self.cursor == ROW_SCENERY {
+            if nav.right && self.feat_density + 1 < crate::isle_features::DENSITY_LEVELS {
+                self.feat_density += 1;
+            }
+            if nav.left && self.feat_density > 0 {
+                self.feat_density -= 1;
             }
         }
         // The bloom toggle — only togglable where graphics RTT is supported (not web).
@@ -363,9 +399,9 @@ impl PauseMenu {
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
 
         let pw = px(420.0).min(w * 0.82);
-        // Tall enough for the Options view's six rows (the seed field's hint adds a
-        // line); the Main view just has more breathing room.
-        let ph = px(488.0).min(h * 0.9);
+        // Tall enough for the Options view's seven rows (two of them sliders, plus the
+        // seed field's hint line); the Main view just has more breathing room.
+        let ph = px(568.0).min(h * 0.9);
         let x0 = (w - pw) * 0.5;
         let y0 = (h - ph) * 0.5;
         draw_rectangle(x0, y0, pw, ph, parchment());
@@ -453,52 +489,38 @@ impl PauseMenu {
 
         // --- Master volume slider (row 0) ---
         let row_y = y0 + px(110.0);
-        self.tap(
-            Rect::new(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0)),
-            Tap::Select(ROW_MASTER),
-        );
-        if self.cursor == ROW_MASTER {
-            draw_rectangle(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0), row_highlight());
-        }
         let master = sounds.master();
-        draw_text("Master Volume", cx, row_y, px(19.0), ink());
-        draw_text(
-            format!("{}%", (master * 100.0).round() as i32),
-            x0 + pw - pad - px(56.0),
-            row_y,
-            px(19.0),
-            ink(),
+        let master_pct = format!("{}%", (master * 100.0).round() as i32);
+        self.slider_row(ROW_MASTER, "Master Volume", &master_pct, master, cx, x0, row_y, pw, pad);
+
+        // --- Scenery density slider (row 1) ---
+        // The performance setting: steps the foliage from Very Low to Very High. The
+        // fraction places the knob on its notch along the five-level ladder.
+        let scenery_y = row_y + px(80.0);
+        let lvl = self.feat_density;
+        let frac = lvl as f32 / (crate::isle_features::DENSITY_LEVELS - 1).max(1) as f32;
+        self.slider_row(
+            ROW_SCENERY,
+            "Scenery",
+            crate::isle_features::density_label(lvl),
+            frac,
+            cx,
+            x0,
+            scenery_y,
+            pw,
+            pad,
         );
 
-        // The track and its filled portion, with a knob at the current level.
-        let track_x = cx;
-        let track_y = row_y + px(22.0);
-        let track_w = pw - 2.0 * pad;
-        let track_h = px(8.0);
-        // A click anywhere along a band around the thin track sets the gain; the
-        // fraction is read from the track's own x/width (carried in the rect).
-        self.tap(
-            Rect::new(track_x, track_y - px(14.0), track_w, track_h + px(28.0)),
-            Tap::Slider(Rect::new(track_x, track_y, track_w, track_h)),
-        );
-        draw_rectangle(track_x, track_y, track_w, track_h, parchment_edge());
-        draw_rectangle(track_x, track_y, track_w * master, track_h, ink());
-        let knob_x = track_x + track_w * master;
-        draw_circle(knob_x, track_y + track_h * 0.5, px(8.0), ink());
-        if self.cursor == ROW_MASTER {
-            draw_text("◄ / ►", track_x, track_y + px(34.0), px(14.0), dim_ink());
-        }
-
-        // --- Bloom toggle (row 1) ---
+        // --- Bloom toggle (row 2) ---
         // On the web these graphics rows are inert: show why instead of On/Off.
-        let bloom_y = row_y + px(80.0);
+        let bloom_y = scenery_y + px(80.0);
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_BLOOM, "Bloom", on_off(self.bloom), cx, x0, bloom_y, pw, pad);
         } else {
             self.disabled_row(ROW_BLOOM, "Bloom", cx, x0, bloom_y, pw, pad);
         }
 
-        // --- MSAA 4× toggle (row 2) ---
+        // --- MSAA 4× toggle (row 3) ---
         let msaa_y = bloom_y + px(40.0);
         if GRAPHICS_SUPPORTED {
             self.toggle_row(ROW_MSAA, "MSAA 4×", on_off(self.msaa), cx, x0, msaa_y, pw, pad);
@@ -506,16 +528,16 @@ impl PauseMenu {
             self.disabled_row(ROW_MSAA, "MSAA 4×", cx, x0, msaa_y, pw, pad);
         }
 
-        // --- Fullscreen toggle (row 3) ---
+        // --- Fullscreen toggle (row 4) ---
         let fs_y = msaa_y + px(40.0);
         self.toggle_row(ROW_FULLSCREEN, "Fullscreen", on_off(self.fullscreen), cx, x0, fs_y, pw, pad);
 
-        // --- World seed field (row 4) ---
+        // --- World seed field (row 5) ---
         // Sits just above Back; its edit hint needs the extra room below.
         let seed_y = fs_y + px(56.0);
         self.render_seed_row(cx, x0, seed_y, pw, pad);
 
-        // --- Back (row 5) ---
+        // --- Back (row 6) ---
         let back_y = y0 + ph - px(56.0);
         self.tap(Rect::new(x0 + px(12.0), back_y - px(26.0), pw - px(24.0), px(38.0)), Tap::Select(ROW_BACK));
         if self.cursor == ROW_BACK {
@@ -530,6 +552,53 @@ impl PauseMenu {
             px(14.0),
             dim_ink(),
         );
+    }
+
+    /// Draw a slider row (label + right-aligned value, then a track with a knob at
+    /// `frac` of the way along) at `row_y`, recording the row's focus hitbox and the
+    /// track's drag band. Shared by the master-volume and scenery-density sliders.
+    #[allow(clippy::too_many_arguments)]
+    fn slider_row(
+        &self,
+        row: usize,
+        label: &str,
+        value: &str,
+        frac: f32,
+        cx: f32,
+        x0: f32,
+        row_y: f32,
+        pw: f32,
+        pad: f32,
+    ) {
+        self.tap(
+            Rect::new(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0)),
+            Tap::Select(row),
+        );
+        if self.cursor == row {
+            draw_rectangle(x0 + px(12.0), row_y - px(26.0), pw - px(24.0), px(70.0), row_highlight());
+        }
+        draw_text(label, cx, row_y, px(19.0), ink());
+        let vw = measure_text(value, None, px(19.0) as u16, 1.0).width;
+        draw_text(value, x0 + pw - pad - vw, row_y, px(19.0), ink());
+
+        // The track and its filled portion, with a knob at the current level. A click
+        // anywhere along a band around the thin track sets the value; the fraction is
+        // read from the track's own x/width (carried in the rect).
+        let track_x = cx;
+        let track_y = row_y + px(22.0);
+        let track_w = pw - 2.0 * pad;
+        let track_h = px(8.0);
+        let frac = frac.clamp(0.0, 1.0);
+        self.tap(
+            Rect::new(track_x, track_y - px(14.0), track_w, track_h + px(28.0)),
+            Tap::Slider(row, Rect::new(track_x, track_y, track_w, track_h)),
+        );
+        draw_rectangle(track_x, track_y, track_w, track_h, parchment_edge());
+        draw_rectangle(track_x, track_y, track_w * frac, track_h, ink());
+        draw_circle(track_x + track_w * frac, track_y + track_h * 0.5, px(8.0), ink());
+        if self.cursor == row {
+            draw_text("◄ / ►", track_x, track_y + px(34.0), px(14.0), dim_ink());
+        }
     }
 
     /// Draw a label/value toggle row at `y`, highlighting it if the cursor is on it
@@ -573,6 +642,13 @@ fn on_off(v: bool) -> &'static str {
 /// slider lands cleanly on 0/10/…/100% rather than drifting off float error.
 fn snap(v: f32) -> f32 {
     ((v / MASTER_STEP).round() * MASTER_STEP).clamp(0.0, 1.0)
+}
+
+/// Map a slider fraction [0, 1] to the nearest scenery-density level, so a click or
+/// drag lands cleanly on one of the five notches.
+fn density_from_frac(f: f32) -> usize {
+    let last = crate::isle_features::DENSITY_LEVELS - 1;
+    (f.clamp(0.0, 1.0) * last as f32).round() as usize
 }
 
 // The menu's own inks atop the shared parchment palette (imported from `ui`).

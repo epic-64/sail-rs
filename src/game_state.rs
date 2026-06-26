@@ -439,6 +439,14 @@ pub struct Stats {
     /// Whole metres sailed over the voyage, banked from [`GameState::wear_distance`]
     /// and shown as kilometres. Held as a float so short hops accumulate exactly.
     pub meters_traveled: f64,
+    /// Pieces of flotsam scooped from the swell over the voyage (see the salvage
+    /// pickup in `main`).
+    pub flotsam_collected: u32,
+    /// Gold recovered from that salvage (the summed value of every piece picked up).
+    pub flotsam_gold: i64,
+    /// Whole days elapsed, ticked over at each sunrise (the day/night clock crossing
+    /// ¼). Starts at 0 and counts up for the life of the voyage.
+    pub days_passed: u32,
 }
 
 impl GameState {

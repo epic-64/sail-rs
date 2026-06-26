@@ -532,6 +532,16 @@ fn page_ledger(p: &Page, gs: &GameState) {
 
     // Distance logged, shown in the same km/m form as the rest of the UI.
     row("Distance sailed", &format_dist(st.meters_traveled as f32), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Days at sea", &format!("{}", st.days_passed), p.x, y, p.col_w, fs);
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+
+    // Salvage recovered from the swell (count and the gold it fetched).
+    row("Flotsam recovered", &format!("{}", st.flotsam_collected), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Salvage gold", &format!("{} g", st.flotsam_gold), p.x, y, p.col_w, fs);
 }
 
 /// **The Wager Book** — the captain's racing record: wagers won, wagers lost, and

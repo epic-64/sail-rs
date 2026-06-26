@@ -38,6 +38,14 @@ const AMBIENT: f32 = 0.45; // floor of the directional shading
 const GOLDEN: i64 = 0x9e3779b97f4a7c15u64 as i64;
 const SHADOW: [f32; 3] = [8.0, 40.0, 30.0];
 
+// Per-island scenery is dense (scores of billboards each), and the costly part is
+// the per-feature occlusion raymarch. Distant isles are small on screen, so we fade
+// their features out and stop drawing them entirely past the end: between these two
+// ranges (m) feature alpha lerps 1 → 0, and beyond `FEATURE_FADE_END` the whole
+// feature pass is skipped. The island body itself keeps rendering to `MAX_VIEW`.
+const FEATURE_FADE_START: f32 = 2000.0;
+const FEATURE_FADE_END: f32 = 3500.0;
+
 /// Past ±90° off the heading a world point sits *behind* the camera, where the
 /// cylindrical [`project`] map folds across the ±π bearing seam: a triangle with
 /// one corner just left of dead-astern and another just right of it smears clear
@@ -497,7 +505,15 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
 
     // --- Features ------------------------------------------------------------
     // Stand each on the terrain surface and draw back-to-front so nearer scenery
-    // overlays farther; cull any hidden behind the island's own hills.
+    // overlays farther; cull any hidden behind the island's own hills. Past the
+    // fade range skip the whole pass (no sort, no per-feature raymarch) so distant
+    // isles cost only their body; within it dim the scenery toward transparent.
+    if dist >= FEATURE_FADE_END {
+        return;
+    }
+    let feat_fade =
+        clamp((FEATURE_FADE_END - dist) / (FEATURE_FADE_END - FEATURE_FADE_START), 0.0, 1.0);
+    let feat_alpha = alpha * feat_fade;
     let mut order: Vec<usize> = (0..features.len()).collect();
     order.sort_by(|&a, &b| {
         let da = kin.pos.distance_to(isle.pos + features[a].offset);
@@ -523,7 +539,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             continue;
         }
         let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
-        draw_feature(f.kind, fx, fy, w_px, h_px, alpha, v.light);
+        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v.light);
     }
 }
 

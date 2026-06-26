@@ -301,6 +301,11 @@ async fn main() {
     // so it persists too rather than reallocating them on every new world.
     let mut sounds = sound::SoundBank::load().await;
     let mut pause = pause_menu::PauseMenu::new();
+    // Apply the saved scenery-density preference (the performance slider), if any, so
+    // it persists across launches and worlds (see `save::store_feat_density`).
+    if let Some(level) = save::load_feat_density() {
+        pause.set_feat_density(level);
+    }
     let mut bloom = bloom::Bloom::new();
 
     // Replace macroquad's default ProggyClean (no symbols, blurry when scaled) with
@@ -356,13 +361,20 @@ async fn run_game(
     let world = world::generate(seed);
     // A fixed dome of stars, seeded off the world so it's the same each run.
     let stars = celestial::StarField::new(world.seed ^ 0x5741, 260);
-    // Each island's scenery is deterministic; generate it once. `islands` is in id
-    // order (index == id), so this Vec aligns by index.
-    let features: Vec<Vec<isle_features::IsleFeature>> = world
-        .islands
-        .iter()
-        .map(|i| isle_features::generate(world.seed, i))
-        .collect();
+    // Each island's scenery is deterministic; generate it once at the current
+    // scenery-density setting (the pause-menu performance slider). `islands` is in id
+    // order (index == id), so this Vec aligns by index. Rebuilt in the loop whenever
+    // the captain changes the density level.
+    let mut feat_density_level = pause.feat_density();
+    let regen_features = |level: usize| -> Vec<Vec<isle_features::IsleFeature>> {
+        let d = isle_features::density_mul(level);
+        world
+            .islands
+            .iter()
+            .map(|i| isle_features::generate(world.seed, i, d))
+            .collect()
+    };
+    let mut features = regen_features(feat_density_level);
     let home = world.cluster_at(Vec2::ZERO);
     let start_isle = home
         .island_ids
@@ -501,6 +513,11 @@ async fn run_game(
     let mut autosave_timer: f32 = 0.0;
     const AUTOSAVE_PERIOD: f32 = 15.0;
 
+    // The day/night clock at the end of the previous frame, watched for the forward
+    // crossing of sunrise (¼) that ticks the "days passed" tally over. Seeded from the
+    // restored/initial clock so the first comparison can't misfire.
+    let mut prev_tod = tod;
+
     // The local cluster's wandering traders: a small fleet of merchant craft that
     // ply fixed circuits of nearby ports, tacking up to those that lie upwind and
     // lying to for a minute or so on arrival before the next leg. Only the fleet of
@@ -581,6 +598,14 @@ async fn run_game(
                 pause_menu::PauseAction::NewWorld(s) => return GameExit::NewWorld(s),
                 pause_menu::PauseAction::None => {}
             }
+        }
+
+        // The captain may have moved the scenery-density slider in the pause menu:
+        // rebuild every island's features at the new level and persist the preference.
+        if pause.feat_density() != feat_density_level {
+            feat_density_level = pause.feat_density();
+            features = regen_features(feat_density_level);
+            save::store_feat_density(feat_density_level);
         }
 
         // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds
@@ -726,6 +751,9 @@ async fn run_game(
             let haul = flotsam.collect_near(kin.pos, flotsam::REACH);
             if haul.gold > 0 {
                 gs.gold += haul.gold;
+                // Bank the salvage in the lifetime ledger (pieces + gold).
+                gs.stats.flotsam_collected += haul.picked.len() as u32;
+                gs.stats.flotsam_gold += haul.gold as i64;
                 sounds.salvage();
                 salvage_flash = SALVAGE_FLASH_TIME;
                 // Name the best find so a rare strongbox feels like an event.
@@ -1399,6 +1427,15 @@ async fn run_game(
                 );
             }
         }
+
+        // A new day breaks at sunrise (the clock crossing ¼ going forward). The clock
+        // only advances while live and moves a sliver per frame, so a plain threshold
+        // crossing catches it without tripping on the midnight wrap. Banked into the
+        // lifetime tally; `prev_tod` trails the clock for the next frame's test.
+        if !paused && prev_tod < 0.25 && tod >= 0.25 {
+            gs.stats.days_passed += 1;
+        }
+        prev_tod = tod;
 
         // Periodic autosave: while the world is live (not frozen by the pause menu),
         // persist the now-updated voyage every few seconds so an unexpected exit —
