@@ -37,7 +37,7 @@ struct Nav {
 
 impl Nav {
     fn read(touch: &TouchState) -> Nav {
-        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), false);
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height());
         Nav {
             up: is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up),
             down: is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down),
