@@ -1,1 +1,0 @@
-- when sailing away from an island, there are sometimes visual artifacts that look like slices of land appearing in the middle of the ocean. This is likely a rendering bug.
