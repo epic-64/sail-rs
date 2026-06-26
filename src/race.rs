@@ -60,7 +60,7 @@ pub fn offer_terms(origin: &Island, target: &Island) -> (i32, i32) {
 }
 
 /// How many rival ports a harbour puts on offer at once (`Race.offerCount`).
-pub const OFFER_COUNT: usize = 4;
+pub const OFFER_COUNT: usize = 6;
 
 /// How close to an island's shore a hull must come to take the race finish —
 /// tighter than the (generous) docking range, but with room for a fast approach
@@ -111,9 +111,9 @@ pub fn targets_at<'w>(state: &GameState, world: &'w World) -> Vec<&'w Island> {
     others
 }
 
-/// The harbour's card of [`OFFER_COUNT`] races: always the nearest and the
-/// furthest reachable port — a short dash and a long haul — plus the rest filled
-/// from those in between, then sorted nearest-first for a tidy board. Returns
+/// The harbour's card of [`OFFER_COUNT`] races: always the two nearest ports (an
+/// easy first dash and its step-up) and the furthest (the long haul), plus the rest
+/// filled from those in between, then sorted nearest-first for a tidy board. Returns
 /// every port when there are too few to choose from. Empty while at sea.
 ///
 /// The original shuffles with a throwaway `Random`; we seed deterministically off
@@ -128,9 +128,9 @@ pub fn offers<'w>(state: &GameState, world: &'w World) -> Vec<&'w Island> {
         return Vec::new();
     };
 
-    // Shuffle the middle (everything but the nearest & furthest) deterministically,
-    // then take enough to fill the card alongside the head and tail.
-    let mut middle: Vec<&Island> = all[1..all.len() - 1].to_vec();
+    // Shuffle the middle (everything but the two nearest & the furthest)
+    // deterministically, then take enough to fill the card alongside head and tail.
+    let mut middle: Vec<&Island> = all[2..all.len() - 1].to_vec();
     let mut rng = Rng::from_seed(
         world.seed
             ^ (origin.id as i64).wrapping_mul(0x9e3779b97f4a7c15u64 as i64)
@@ -143,8 +143,9 @@ pub fn offers<'w>(state: &GameState, world: &'w World) -> Vec<&'w Island> {
 
     let mut chosen: Vec<&Island> = Vec::with_capacity(OFFER_COUNT);
     chosen.push(all[0]);
+    chosen.push(all[1]);
     chosen.push(all[all.len() - 1]);
-    chosen.extend(middle.into_iter().take(OFFER_COUNT - 2));
+    chosen.extend(middle.into_iter().take(OFFER_COUNT - 3));
     chosen.sort_by(|a, b| {
         origin
             .pos
@@ -266,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn offers_put_at_most_four_ports_on_the_card() {
+    fn offers_put_at_most_offer_count_ports_on_the_card() {
         let world = race_world();
         let gs = flush_docked();
         assert!(offers(&gs, &world).len() <= OFFER_COUNT);
@@ -280,6 +281,48 @@ mod tests {
         let offered: Vec<i32> = offers(&gs, &world).iter().map(|p| p.id).collect();
         assert!(offered.contains(&reachable.first().unwrap().id));
         assert!(offered.contains(&reachable.last().unwrap().id));
+    }
+
+    // A cluster with more ports than fit the card, so `offers` must choose and the
+    // anchors (two nearest + furthest) are actually exercised.
+    fn crowded_world() -> World {
+        let mk = |id: i32, x: f32| Island {
+            id,
+            name: format!("Isle {id}"),
+            pos: Vec2::new(x, 0.0),
+            radius: 100.0,
+            height: 20.0,
+            terrain: IsleKind::Green,
+            is_port: true,
+            is_shipyard: id == 0,
+        };
+        // Origin at 0 plus nine other ports marching east: 10 islands, well over the
+        // six-slot card.
+        let islands: Vec<Island> = (0..10).map(|id| mk(id, id as f32 * 1000.0)).collect();
+        World {
+            seed: 7,
+            islands,
+            clusters: vec![Cluster {
+                id: 0,
+                name: "Waters".into(),
+                center: Vec2::ZERO,
+                island_ids: (0..10).collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn offers_anchor_the_two_nearest_and_the_furthest_when_choosing() {
+        let world = crowded_world();
+        let gs = flush_docked();
+        let reachable = targets_at(&gs, &world); // nearest-first
+        let offered = offers(&gs, &world);
+        assert_eq!(offered.len(), OFFER_COUNT, "a crowded cluster fills the whole card");
+        let ids: Vec<i32> = offered.iter().map(|p| p.id).collect();
+        // Closest, second-closest and furthest are all guaranteed a slot.
+        assert!(ids.contains(&reachable[0].id));
+        assert!(ids.contains(&reachable[1].id));
+        assert!(ids.contains(&reachable.last().unwrap().id));
     }
 
     #[test]
