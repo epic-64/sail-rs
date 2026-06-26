@@ -425,10 +425,17 @@ pub struct GameState {
 pub struct Stats {
     /// Haulage contracts delivered to their destination (see [`GameState::deliver`]).
     pub contracts_fulfilled: u32,
+    /// Gold earned from contract *rewards* over the voyage (the returned deposit is
+    /// not a gain, so it isn't counted) (see [`GameState::deliver`]).
+    pub contract_earnings: i64,
     /// Wager races reached first (see [`GameState::win_race`]).
     pub races_won: u32,
     /// Wager races the rival reached first (see [`GameState::lose_race`]).
     pub races_lost: u32,
+    /// Net gold from racing: the stake won on each victory, less the stake forfeit
+    /// on each defeat. Signed, so a losing record shows red (see [`GameState::win_race`]
+    /// / [`GameState::lose_race`]).
+    pub race_winnings: i64,
     /// Whole metres sailed over the voyage, banked from [`GameState::wear_distance`]
     /// and shown as kilometres. Held as a float so short hops accumulate exactly.
     pub meters_traveled: f64,
@@ -669,6 +676,7 @@ impl GameState {
         self.gold += mission.deposit + mission.reward;
         self.active_missions.retain(|m| m.id != mission.id);
         self.stats.contracts_fulfilled += 1;
+        self.stats.contract_earnings += mission.reward as i64;
         Ok(())
     }
 
@@ -738,14 +746,19 @@ impl GameState {
             self.gold += r.stake * 2;
             self.race = None;
             self.stats.races_won += 1;
+            // The stake was forfeit on booking; winning hands back double, so the
+            // net gain is the stake itself.
+            self.stats.race_winnings += r.stake as i64;
         }
     }
 
     /// Settle a race the player has lost — the stake was already forfeited when the
     /// race was booked, so this only clears it. (`Race.lose`.)
     pub fn lose_race(&mut self) {
-        if self.race.take().is_some() {
+        if let Some(r) = self.race.take() {
             self.stats.races_lost += 1;
+            // The stake was already forfeit when the race was booked: a clear loss.
+            self.stats.race_winnings -= r.stake as i64;
         }
     }
 
@@ -876,18 +889,22 @@ mod tests {
         gs.wear_distance(500.0);
         assert!((gs.stats.meters_traveled - 3_000.0).abs() < 1e-9);
 
-        // A won race counts once and clears the wager; a lost one likewise.
+        // A won race counts once, banks the stake as winnings, and clears the wager.
         gs.race = Some(Race { origin_id: 0, target_id: 1, stake: 100, required_level: 0 });
         gs.win_race();
         assert_eq!(gs.stats.races_won, 1);
+        assert_eq!(gs.stats.race_winnings, 100);
         assert!(gs.race.is_none());
+        // A loss forfeits the stake: net winnings fall back to zero.
         gs.race = Some(Race { origin_id: 0, target_id: 1, stake: 100, required_level: 0 });
         gs.lose_race();
         assert_eq!(gs.stats.races_lost, 1);
+        assert_eq!(gs.stats.race_winnings, 0);
         // With no race afoot, settling again is a no-op and doesn't pad the tally.
         gs.win_race();
         gs.lose_race();
         assert_eq!((gs.stats.races_won, gs.stats.races_lost), (1, 1));
+        assert_eq!(gs.stats.race_winnings, 0);
     }
 
     #[test]
