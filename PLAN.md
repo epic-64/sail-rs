@@ -7,18 +7,21 @@
 > `port_view.rs`, `pause_menu.rs`, and the log paging. Web shell gets
 > `touch-action: none`.
 >
-> **Two deliberate scope calls vs. the design below:**
-> 1. **Menus use an on-screen nav cluster** (d-pad + ✓/✕ + Tab) that emits the
->    existing arrow/Enter/Esc verbs, rather than per-button tap rects. The board's
->    type/spacing is ~100 tokenised call sites with no bare literals; registering
->    hit-rects from `render` is a bigger, riskier refactor that deserves its own
->    pass. The cluster reuses 100% of the board/menu logic and is robust now.
->    *Follow-up:* direct tap-to-activate on board rows/cells.
-> 2. **The `ui_scale` readability pass is deferred** (same ~100 call sites). On a
+> **Tap-to-activate on the port board: DONE.** `render` now records each
+> tappable region (tab / row / market chip) into a `RefCell<Vec<HitRect>>` as it
+> draws — geometry stays where it's drawn, no duplicated layout — and
+> `handle_input` hit-tests them next frame, setting focus (+column) and calling
+> the same `activate()` the keyboard uses. One tap on a chip or job row commits.
+> The board shows only a ✕ cast-off button; the pause menu and captain's log keep
+> the d-pad nav cluster.
+>
+> **Still deferred:**
+> 1. **The `ui_scale` readability pass** (~100 tokenised call sites). On a
 >    high-DPI phone the parchment text will be small until this lands. *Follow-up:*
 >    route the `ui.rs` / `port_view::style` tokens through a screen-derived scale.
->
-> Seed entry on mobile still needs a soft keyboard (noted in §9).
+>    (Independent of tap-to-activate: hit-rects are recorded from the same layout
+>    the board draws, so scaling moves both together.)
+> 2. **Seed entry on mobile** still needs a soft keyboard (noted in §9).
 
 
 **Target:** the existing WASM / itch.io build, played in a mobile browser

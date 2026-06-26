@@ -18,6 +18,8 @@
 //! switch tabs (or, on a commodity row, choose Buy/Fill/Dump/Sell); Up/Down move
 //! through rows; Enter/Space commits; Esc (or "Set Sail") hands the helm back.
 
+use std::cell::RefCell;
+
 use macroquad::prelude::*;
 
 use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, TradeError, UpgradeKind};
@@ -150,6 +152,28 @@ struct Flash {
     start: f64,
 }
 
+/// A tappable region recorded by `render` as it draws, hit-tested on the next
+/// frame's `handle_input` (immediate-mode retained hitboxes). Geometry lives where
+/// it's drawn — there is no second copy of the layout to keep in sync.
+#[derive(Clone, Copy)]
+struct HitRect {
+    rect: Rect,
+    effect: HitEffect,
+}
+
+#[derive(Clone, Copy)]
+enum HitEffect {
+    /// Switch to this tab (cursor to the bar), like tapping a tab label.
+    Tab(Tab),
+    /// Focus this row — setting the action column too, for a market chip — and,
+    /// when `activate`, run it, so one tap on a chip / job row commits.
+    Select {
+        focus: Focus,
+        column: Option<usize>,
+        activate: bool,
+    },
+}
+
 pub struct PortScreen {
     island_id: i32,
     tab: Tab,
@@ -157,6 +181,8 @@ pub struct PortScreen {
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
     /// Constraints currently flashing from a rejected action (see [`FlashTarget`]).
     flashes: Vec<Flash>,
+    /// Tappable regions from the last `render`, consumed by touch in `handle_input`.
+    hits: RefCell<Vec<HitRect>>,
 }
 
 // Flash timing: a brief red jiggle that decays to nothing.
@@ -246,7 +272,13 @@ impl PortScreen {
             focus: Focus::TabBar,
             column: 0,
             flashes: Vec::new(),
+            hits: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Record a tappable region for this frame (see [`HitRect`]).
+    fn record_hit(&self, rect: Rect, effect: HitEffect) {
+        self.hits.borrow_mut().push(HitRect { rect, effect });
     }
 
     /// Start (or restart) a red jiggle on `target`. Drops any expired flashes and
@@ -515,46 +547,66 @@ impl PortScreen {
         sounds: &SoundBank,
         touch: &TouchState,
     ) -> bool {
-        // Fold taps on the on-screen nav cluster (see `touch_ui`) into the same
-        // verbs the keyboard drives — every board action stays in `activate` etc.
-        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
-        let tab_tapped = n.tab.is_some_and(|r| touch.tapped_in(r));
-        let up = is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up);
-        let down = is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down);
-        let left = is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left);
-        let right = is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right);
-        let confirm =
-            is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || touch.tapped_in(n.confirm);
-
-        if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
+        // --- Keyboard (unchanged) ------------------------------------------
+        if is_key_pressed(KeyCode::Escape) {
             return true;
         }
-        if is_key_pressed(KeyCode::Tab) || tab_tapped {
+        if is_key_pressed(KeyCode::Tab) {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             self.cycle_tab(if back { -1 } else { 1 });
         }
-        if up {
+        if is_key_pressed(KeyCode::Up) {
             self.move_cursor(gs, world, -1);
         }
-        if down {
+        if is_key_pressed(KeyCode::Down) {
             self.move_cursor(gs, world, 1);
         }
-        if left {
+        if is_key_pressed(KeyCode::Left) {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(-1),
                 Focus::Good(_) if self.column > 0 => self.column -= 1,
                 _ => self.slide_tab(gs, world, -1),
             }
         }
-        if right {
+        if is_key_pressed(KeyCode::Right) {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(1),
                 Focus::Good(_) if self.column < LAST_COLUMN => self.column += 1,
                 _ => self.slide_tab(gs, world, 1),
             }
         }
-        if confirm {
+        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
             self.activate(gs, world, market, sounds);
+        }
+
+        // --- Touch: tap a tab / row / chip directly ------------------------
+        // The ✕ button casts off; otherwise resolve the tap against the regions
+        // `render` recorded last frame and drive the same `cycle_tab`/`activate`.
+        if touch.tapped_in(crate::touch_ui::back_button(screen_width(), screen_height())) {
+            return true;
+        }
+        let hit = self
+            .hits
+            .borrow()
+            .iter()
+            .find(|hr| touch.tapped_in(hr.rect))
+            .map(|hr| hr.effect);
+        if let Some(effect) = hit {
+            match effect {
+                HitEffect::Tab(tab) => {
+                    self.tab = tab;
+                    self.focus = Focus::TabBar;
+                }
+                HitEffect::Select { focus, column, activate } => {
+                    self.focus = focus;
+                    if let Some(c) = column {
+                        self.column = c;
+                    }
+                    if activate {
+                        self.activate(gs, world, market, sounds);
+                    }
+                }
+            }
         }
         false
     }
@@ -572,6 +624,10 @@ impl PortScreen {
     ) {
         use style::*;
         let port = &world.islands[self.island_id as usize];
+
+        // Fresh hit regions for this layout; the render below repopulates them as it
+        // draws, and `handle_input` taps them next frame.
+        self.hits.borrow_mut().clear();
 
         // Dim the world so the board reads as the captain's focus.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, SCRIM));
@@ -677,6 +733,7 @@ impl PortScreen {
         let dims = measure_text(label, None, FS_BODY, 1.0);
         let bw = dims.width + 2.0 * TAB_PAD_X;
         let bh = tab_h();
+        self.record_hit(Rect::new(x, y, bw, bh), HitEffect::Tab(tab));
         let active = self.tab == tab;
         if active {
             draw_rectangle(x, y, bw, bh, chip_fill());
@@ -713,6 +770,11 @@ impl PortScreen {
             if active_row {
                 highlight_row(x, ry, w);
             }
+            // Tapping the commodity (left of the chips) just highlights its row.
+            self.record_hit(
+                Rect::new(x - ROW_PAD_X, row_center(ry) - row_h() / 2.0, actions_x - x, row_h()),
+                HitEffect::Select { focus: Focus::Good(i), column: None, activate: false },
+            );
             draw_text(good.label(), x, ry, FS_BODY as f32, ink());
             right_text(&market.price(*good).to_string(), price_r, ry, FS_BODY);
             // The held tally jiggles red on a Sell/Dump with nothing to sell.
@@ -729,7 +791,13 @@ impl PortScreen {
             for (c, label) in ACTIONS.iter().enumerate() {
                 let cx = actions_x + c as f32 * chip_w;
                 let focused = active_row && self.column == c;
-                button(cx + CHIP_INNER, chip_y(ry), chip_w - 2.0 * CHIP_INNER, CHIP_H, label, focused);
+                let chip = Rect::new(cx + CHIP_INNER, chip_y(ry), chip_w - 2.0 * CHIP_INNER, CHIP_H);
+                button(chip.x, chip.y, chip.w, chip.h, label, focused);
+                // Tapping a chip selects this good + column and commits the trade.
+                self.record_hit(
+                    chip,
+                    HitEffect::Select { focus: Focus::Good(i), column: Some(c), activate: true },
+                );
             }
             ry += step;
         }
@@ -764,6 +832,10 @@ impl PortScreen {
             if active {
                 highlight(ry, bh);
             }
+            self.record_hit(
+                Rect::new(x - ROW_PAD_X, ry, w + 2.0 * ROW_PAD_X, bh),
+                HitEffect::Select { focus: Focus::Repair, column: None, activate: true },
+            );
             let base = ry + step;
             let cond = format!(
                 "{} / {} ({}%)",
@@ -838,6 +910,10 @@ impl PortScreen {
                 if active {
                     highlight(ry, bh);
                 }
+                self.record_hit(
+                    Rect::new(x - ROW_PAD_X, ry, w + 2.0 * ROW_PAD_X, bh),
+                    HitEffect::Select { focus: Focus::Upgrade(kind), column: None, activate: true },
+                );
                 draw_text(&title, x, ry + step, FS_BODY as f32, ink());
                 for (i, (label, value)) in lines.iter().enumerate() {
                     stat(label, value, x, val_x, ry + step * (i as f32 + 2.0));
@@ -895,6 +971,10 @@ impl PortScreen {
             ry += line_h(FS_SMALL) + GAP;
             let focused = self.focus == Focus::RaceWithdraw;
             button(x, ry, w.min(BTN_WIDE), CHIP_H, "Abandon race (stake refunded)", focused);
+            self.record_hit(
+                Rect::new(x, ry, w.min(BTN_WIDE), CHIP_H),
+                HitEffect::Select { focus: Focus::RaceWithdraw, column: None, activate: true },
+            );
             return;
         }
 
@@ -939,6 +1019,10 @@ impl PortScreen {
             if active {
                 highlight_row(x, ry, w);
             }
+            self.record_hit(
+                row_rect(x, ry, w),
+                HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: true },
+            );
             draw_text(&p.name, x, ry, FS_BODY as f32, ink());
             let (stake, required) = race::offer_terms(origin, p);
             // The hull tier the leg demands, always shown (`Mk I` for an open race):
@@ -1032,6 +1116,10 @@ impl PortScreen {
                 let to = world.islands[m.target_id as usize].name.clone();
                 let active = self.focus == Focus::Contract(m.id);
                 self.contract_line(m, &to, true, "Accept", active, x, ry, w);
+                self.record_hit(
+                    row_rect(x, ry, w),
+                    HitEffect::Select { focus: Focus::Contract(m.id), column: None, activate: true },
+                );
                 ry += step;
             }
         }
@@ -1046,6 +1134,10 @@ impl PortScreen {
                 let from = format!("from {}", world.islands[m.origin_id as usize].name);
                 let active = self.focus == Focus::Delivery(m.id);
                 self.contract_line(m, &from, true, "Deliver", active, x, ry, w);
+                self.record_hit(
+                    row_rect(x, ry, w),
+                    HitEffect::Select { focus: Focus::Delivery(m.id), column: None, activate: true },
+                );
                 ry += step;
             }
         }
@@ -1060,6 +1152,10 @@ impl PortScreen {
                 let to = format!("→ {}", world.islands[m.target_id as usize].name);
                 let active = self.focus == Focus::Manifest(m.id);
                 self.contract_line(m, &to, false, "Abandon", active, x, ry, w);
+                self.record_hit(
+                    row_rect(x, ry, w),
+                    HitEffect::Select { focus: Focus::Manifest(m.id), column: None, activate: true },
+                );
                 ry += step;
             }
         }
@@ -1194,17 +1290,23 @@ fn row_center(ry: f32) -> f32 {
     ry - style::FS_BODY as f32 * style::CAP_RATIO
 }
 
-/// The focus highlight behind a list row (text baseline `ry`), spanning `w` plus a
-/// small overhang either side.
-fn highlight_row(x: f32, ry: f32, w: f32) {
+/// The rect of a list row whose text baseline is `ry`: `w` plus a small overhang
+/// either side. The focus highlight and the touch hit-region share it, so they
+/// can't drift apart.
+fn row_rect(x: f32, ry: f32, w: f32) -> Rect {
     let h = style::row_h();
-    draw_rectangle(
+    Rect::new(
         x - style::ROW_PAD_X,
         row_center(ry) - h / 2.0,
         w + 2.0 * style::ROW_PAD_X,
         h,
-        row_highlight(),
-    );
+    )
+}
+
+/// The focus highlight behind a list row (text baseline `ry`).
+fn highlight_row(x: f32, ry: f32, w: f32) {
+    let r = row_rect(x, ry, w);
+    draw_rectangle(r.x, r.y, r.w, r.h, row_highlight());
 }
 
 /// The top-left `y` for a `CHIP_H`-tall chip centred on a row whose baseline is `ry`.

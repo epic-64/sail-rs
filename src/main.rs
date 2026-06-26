@@ -858,7 +858,7 @@ async fn run_game(
             // original's nav arrows), or the on-screen nav cluster on touch. Clamped
             // at the covers — no wrap-around.
             if log_open {
-                let n = touch_ui::nav_cluster(w, h, false);
+                let n = touch_ui::nav_cluster(w, h);
                 // The nav cluster's back button closes the book on touch.
                 if touch.tapped_in(n.back) {
                     log_open = false;
@@ -1391,9 +1391,11 @@ async fn run_game(
         // open water shows the sailing helm.
         if touch.active() {
             if pause.open || log_open {
-                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, false));
+                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h));
             } else if harbor.is_open() {
-                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, true));
+                // The board is tapped directly (tabs / rows / chips); it needs only
+                // a cast-off button.
+                touch_ui::draw_back_button(touch_ui::back_button(w, h));
             } else {
                 touch_ui::draw_sail_hud(
                     &hud,
