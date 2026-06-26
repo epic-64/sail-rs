@@ -8,12 +8,43 @@
 
 use macroquad::prelude::*;
 
-// --- Type scale (px) — one tight ladder, used across the parchment UIs ---------
-pub const FS_TITLE: u16 = 26; // titles: the port name, a log spread's heading
-pub const FS_HEADING: u16 = 16; // section / board headers (display face) + the purse
-pub const FS_BODY: u16 = 15; // data lines, list rows, tab labels
-pub const FS_SMALL: u16 = 13; // eyebrows, column labels, captions, hints
-pub const FS_CHIP: u16 = 14; // button / chip labels
+// --- UI scale -----------------------------------------------------------------
+/// The parchment UIs' scale factor for the current screen, so they stay legible
+/// from a phone up to a 4K display. Driven by the screen's short edge against a
+/// 720 px design baseline: `high_dpi` reports *physical* pixels, so on a 4K screen
+/// an unscaled board would be a tiny island of 15 px text. Clamped to a sane band.
+/// Every type size and pixel step across the parchment UIs is multiplied by this.
+pub fn scale() -> f32 {
+    (screen_width().min(screen_height()) / 720.0).clamp(0.85, 3.0)
+}
+
+/// Scale a design-space pixel length (authored at scale 1.0) to the screen.
+pub fn px(v: f32) -> f32 {
+    v * scale()
+}
+
+/// Scale a design-space type size to the screen (never below 1 px).
+fn fs(base: f32) -> u16 {
+    (base * scale()).round().max(1.0) as u16
+}
+
+// --- Type scale — one tight ladder, used across the parchment UIs --------------
+// Design sizes (px at scale 1.0); the live size is `fs(base)` for the screen.
+pub fn fs_title() -> u16 {
+    fs(26.0) // titles: the port name, a log spread's heading
+}
+pub fn fs_heading() -> u16 {
+    fs(16.0) // section / board headers (display face) + the purse
+}
+pub fn fs_body() -> u16 {
+    fs(15.0) // data lines, list rows, tab labels
+}
+pub fn fs_small() -> u16 {
+    fs(13.0) // eyebrows, column labels, captions, hints
+}
+pub fn fs_chip() -> u16 {
+    fs(14.0) // button / chip labels
+}
 
 /// A text line's height is its font size times this — the list/row step.
 pub const LINE_RATIO: f32 = 1.55;

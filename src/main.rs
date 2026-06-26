@@ -49,7 +49,7 @@ use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
 use spray::{Spray, SprayInput};
-use ui::format_dist;
+use ui::{format_dist, px};
 use weather::{Weather, WeatherState};
 use world::Island;
 
@@ -1191,25 +1191,25 @@ async fn run_game(
         let point = wind.point_of_sail(kin.heading_rad).label();
         // Everything in one row, at one font size, dot-separated: a coin icon and
         // the purse, then speed · wind quarter · point of sail.
-        let fs = 18.0;
-        let baseline = 26.0;
+        let fs = px(18.0);
+        let baseline = px(26.0);
         // Coin icon, vertically centred on the text's cap height.
-        let r = 7.0;
-        let cx = 16.0 + r;
+        let r = px(7.0);
+        let cx = px(16.0) + r;
         let cy = baseline - fs * 0.34;
         let rim = Color::new(0.78, 0.58, 0.12, 1.0); // darker milled edge
         let face = Color::new(1.0, 0.84, 0.32, 1.0); // bright gold face
         let shine = Color::new(1.0, 0.97, 0.78, 1.0); // glint
         draw_circle(cx, cy, r, rim);
         draw_circle(cx, cy, r * 0.82, face);
-        draw_circle_lines(cx, cy, r * 0.82, 1.0, rim);
+        draw_circle_lines(cx, cy, r * 0.82, px(1.0), rim);
         draw_circle(cx - r * 0.3, cy - r * 0.3, r * 0.2, shine);
         // The rest of the row, starting just right of the coin.
         let line = format!(
             "{}  ·  {:.1} kn  ·  Wind {}  ({})",
             gs.gold, knots, wind_from, point
         );
-        draw_text(&line, 16.0 + 2.0 * r + 8.0, baseline, fs, WHITE);
+        draw_text(&line, px(16.0) + 2.0 * r + px(8.0), baseline, fs, WHITE);
 
         // Active-debuff badges: a warning triangle (and a word) for a battered
         // hull and/or an overladen hold — the handling penalties in force.
@@ -1222,9 +1222,9 @@ async fn run_game(
                 badges.push("Overladen");
             }
             let warn = Color::new(1.0, 0.78, 0.2, 1.0);
-            let mut x = 16.0;
-            let y = 56.0;
-            let s = 13.0; // triangle size
+            let mut x = px(16.0);
+            let y = px(56.0);
+            let s = px(13.0); // triangle size
             for label in badges {
                 draw_triangle(
                     vec2(x + s * 0.5, y - s),
@@ -1232,10 +1232,10 @@ async fn run_game(
                     vec2(x + s, y),
                     warn,
                 );
-                draw_text("!", x + s * 0.5 - 2.0, y - 2.0, 14.0, Color::new(0.1, 0.05, 0.0, 1.0));
-                let lx = x + s + 6.0;
-                draw_text(label, lx, y, 15.0, warn);
-                x = lx + measure_text(label, None, 15, 1.0).width + 18.0;
+                draw_text("!", x + s * 0.5 - px(2.0), y - px(2.0), px(14.0), Color::new(0.1, 0.05, 0.0, 1.0));
+                let lx = x + s + px(6.0);
+                draw_text(label, lx, y, px(15.0), warn);
+                x = lx + measure_text(label, None, px(15.0) as u16, 1.0).width + px(18.0);
             }
         }
 
@@ -1244,14 +1244,14 @@ async fn run_game(
         salvage_flash = (salvage_flash - dt).max(0.0);
         if salvage_flash > 0.0 && !harbor.is_open() && !log_open {
             let p = salvage_flash / SALVAGE_FLASH_TIME; // 1 → 0 as it fades
-            let fs = 30;
+            let fs = px(30.0) as u16;
             let dims = measure_text(&salvage_msg, None, fs, 1.0);
             let tx = w * 0.5 - dims.width / 2.0;
-            let ty = h * 0.34 - (1.0 - p) * 36.0; // drifts upward as it fades
+            let ty = h * 0.34 - (1.0 - p) * px(36.0); // drifts upward as it fades
             draw_text(
                 &salvage_msg,
-                tx + 1.0,
-                ty + 1.0,
+                tx + px(1.0),
+                ty + px(1.0),
                 fs as f32,
                 Color::new(0.0, 0.0, 0.0, 0.5 * p),
             );
@@ -1264,8 +1264,8 @@ async fn run_game(
         let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
 
         // Always-on corner chart: the local cluster, top-right.
-        let map_size = (h * 0.24).clamp(140.0, 200.0);
-        let map_rect = Rect::new(w - map_size - 16.0, 16.0, map_size, map_size);
+        let map_size = (h * 0.24).clamp(px(140.0), px(200.0));
+        let map_rect = Rect::new(w - map_size - px(16.0), px(16.0), map_size, map_size);
         minimap::render(
             &world,
             &kin,
@@ -1304,15 +1304,15 @@ async fn run_game(
                         format_dist(kin.pos.distance_to(rk.pos)),
                     )
                 };
-                let fs = 24;
+                let fs = px(24.0) as u16;
                 let dims = measure_text(&text, None, fs, 1.0);
                 let bx = w * 0.5 - dims.width / 2.0;
                 let by = h * 0.14;
                 draw_rectangle(
-                    bx - 16.0,
-                    by - 26.0,
-                    dims.width + 32.0,
-                    38.0,
+                    bx - px(16.0),
+                    by - px(26.0),
+                    dims.width + px(32.0),
+                    px(38.0),
                     Color::new(0.10, 0.06, 0.02, 0.6),
                 );
                 draw_text(&text, bx, by, fs as f32, Color::new(1.0, 0.92, 0.6, 1.0));
@@ -1326,15 +1326,15 @@ async fn run_game(
         if race_result_flash > 0.0 && !harbor.is_open() && !log_open {
             // Hold full opacity for most of the window, fading over the last second.
             let a = (race_result_flash / 1.0).min(1.0);
-            let fs = 40;
+            let fs = px(40.0) as u16;
             let dims = measure_text(&race_result_msg, None, fs, 1.0);
             let bx = w * 0.5 - dims.width / 2.0;
             let by = h * 0.30;
             draw_rectangle(
-                bx - 22.0,
-                by - 38.0,
-                dims.width + 44.0,
-                56.0,
+                bx - px(22.0),
+                by - px(38.0),
+                dims.width + px(44.0),
+                px(56.0),
                 Color::new(0.08, 0.05, 0.02, 0.66 * a),
             );
             let accent = if race_result_won {
@@ -1342,7 +1342,7 @@ async fn run_game(
             } else {
                 Color::new(0.95, 0.45, 0.38, a) // dull red for a loss
             };
-            draw_text(&race_result_msg, bx + 2.0, by + 2.0, fs as f32, Color::new(0.0, 0.0, 0.0, 0.5 * a));
+            draw_text(&race_result_msg, bx + px(2.0), by + px(2.0), fs as f32, Color::new(0.0, 0.0, 0.0, 0.5 * a));
             draw_text(&race_result_msg, bx, by, fs as f32, accent);
         }
 
