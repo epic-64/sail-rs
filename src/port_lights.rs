@@ -16,6 +16,7 @@
 
 use crate::celestial::Sky;
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::isle_features::{FeatureKind, IsleFeature};
 use crate::projection::MAX_VIEW;
 use crate::sailing::Kinematics;
 use crate::world::Island;
@@ -73,6 +74,7 @@ pub struct CamLight {
 /// town-wide flicker.
 pub fn build(
     islands: &[Island],
+    features: &[Vec<IsleFeature>],
     kin: &Kinematics,
     sky: &Sky,
     t: f32,
@@ -104,10 +106,15 @@ pub fn build(
         if burn <= 0.01 {
             continue;
         }
-        out.push(PortLight {
-            pos: isle.pos,
-            burn,
-        });
+        // Anchor the road on the port's watchtower beacon (its lighthouse) rather than
+        // the island centre, so the glitter trails from the light itself. Falls back to
+        // the centre if a port somehow has no tower.
+        let src = features
+            .get(isle.id as usize)
+            .and_then(|fs| fs.iter().find(|f| f.kind == FeatureKind::Tower))
+            .map(|f| isle.pos + f.offset)
+            .unwrap_or(isle.pos);
+        out.push(PortLight { pos: src, burn });
     }
     out
 }
