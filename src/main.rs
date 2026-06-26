@@ -1390,12 +1390,11 @@ async fn run_game(
         // untouched. A menu shows the nav cluster (the board adds a Tab button);
         // open water shows the sailing helm.
         if touch.active() {
-            if pause.open || log_open {
+            if pause.open || log_open || harbor.is_open() {
+                // The board can be tapped directly (tabs / rows / chips), but it also
+                // gets the full d-pad + ✓/✕ cluster, like the pause menu and log, for
+                // captains who'd rather step the cursor than tap precisely.
                 touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h));
-            } else if harbor.is_open() {
-                // The board is tapped directly (tabs / rows / chips); it needs only
-                // a cast-off button.
-                touch_ui::draw_back_button(touch_ui::back_button(w, h));
             } else {
                 touch_ui::draw_sail_hud(
                     &hud,
