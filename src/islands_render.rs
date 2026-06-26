@@ -75,6 +75,12 @@ pub struct IslandView {
     /// night), multiplied into every facet so the isle darkens to a moonlit
     /// silhouette after dusk.
     pub light: f32,
+    /// How brightly the houses' windows burn (0 by day, 1 once the sun is well
+    /// down): the dusk ramp from [`crate::port_lights::dusk_glow`]. Lights only the
+    /// settlement on a port island.
+    pub lamp: f32,
+    /// Animation clock, for the gentle window-light twinkle.
+    pub t: f32,
 }
 
 // --- Terrain heightfield -----------------------------------------------------
@@ -540,7 +546,77 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
         let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
         draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v.light);
+        // After dusk the settlement's windows light up: a tiny warm or cold lamp in
+        // each house, the watchtower carrying a brighter beacon. Drawn over the
+        // building it belongs to, so it rides the island's depth slot and a nearer
+        // wave band paints over it like the rest of the isle.
+        if isle.is_port && v.lamp > 0.01 {
+            draw_window_light(f.kind, fi, fx, fy, h_px, feat_alpha, v.lamp, v.t);
+        }
     }
+}
+
+/// A stable hash of a feature index to [0, 1), so a house's window stays the same
+/// colour/brightness frame to frame without an RNG (the classic sin-fract trick).
+#[inline]
+fn lamp_hash(n: f32) -> f32 {
+    let s = (n * 12.9898).sin() * 43758.5453;
+    s - s.floor()
+}
+
+/// A single lit window on a house (or a beacon atop the watchtower): a small glowing
+/// dot with a soft halo, in a mostly-warm scatter of lamp colours with the odd cold
+/// one. Non-dwelling features get no light. `idx` keys the deterministic colour,
+/// whether it is lit at all, and its twinkle.
+fn draw_window_light(
+    kind: FeatureKind,
+    idx: usize,
+    fx: f32,
+    fy: f32,
+    h_px: f32,
+    alpha: f32,
+    lamp: f32,
+    t: f32,
+) {
+    // Where up the building the light sits, the share of houses that are lit, and a
+    // size multiplier. The watchtower is always lit and brighter (a harbour beacon).
+    let (frac_up, gate, big) = match kind {
+        FeatureKind::Hut => (0.42, 0.78, 1.0),
+        FeatureKind::Cottage => (0.40, 0.82, 1.05),
+        FeatureKind::Tower => (0.90, 1.0, 1.7),
+        _ => return,
+    };
+    if h_px < 3.0 {
+        return;
+    }
+    let n = idx as f32;
+    let h1 = lamp_hash(n + 0.5);
+    if h1 > gate {
+        return; // a darkened house
+    }
+    let h2 = lamp_hash(n * 2.7 + 1.3);
+    let h3 = lamp_hash(n * 5.1 + 2.9);
+    // Mostly warm lamplight, with a scatter of cool blue-white windows.
+    let col = if h2 < 0.55 {
+        [255.0, 168.0, 86.0] // warm lamp
+    } else if h2 < 0.80 {
+        [255.0, 206.0, 128.0] // amber
+    } else if h2 < 0.93 {
+        [188.0, 214.0, 255.0] // cool blue
+    } else {
+        [236.0, 242.0, 255.0] // pale white
+    };
+    let tw = 0.82 + 0.18 * (t * (1.5 + h3 * 2.0) + h1 * std::f32::consts::TAU).sin();
+    let a = clamp(lamp * alpha * tw, 0.0, 1.0);
+    if a <= 0.01 {
+        return;
+    }
+    let ly = fy - h_px * frac_up;
+    let sz = (h_px * 0.12 * big).clamp(0.8, h_px * 0.5);
+    let core = Color::new(col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a);
+    let halo = Color::new(col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a * 0.30);
+    draw_circle(fx, ly, sz * 2.2, halo);
+    draw_circle(fx, ly, sz, core);
 }
 
 /// Width-to-height ratio of each feature's billboard.
