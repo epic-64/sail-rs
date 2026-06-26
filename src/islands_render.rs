@@ -28,7 +28,7 @@ use crate::rng::Rng;
 use crate::sailing::Kinematics;
 use crate::world::{Island, IsleKind};
 
-use std::f32::consts::TAU;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 const FLOOR_SEG: usize = 48; // floor ellipse: smooth
 const MOUND_SEG: usize = 48; // landmass body: angular facets around the coast
@@ -37,6 +37,20 @@ const AMBIENT: f32 = 0.45; // floor of the directional shading
 
 const GOLDEN: i64 = 0x9e3779b97f4a7c15u64 as i64;
 const SHADOW: [f32; 3] = [8.0, 40.0, 30.0];
+
+/// Past ±90° off the heading a world point sits *behind* the camera, where the
+/// cylindrical [`project`] map folds across the ±π bearing seam: a triangle with
+/// one corner just left of dead-astern and another just right of it smears clear
+/// across the view as a stray "slice of land in the open sea". The live FOV is
+/// only ~±68°, so refusing to draw any triangle that touches a behind-camera
+/// vertex removes nothing on-screen — it just stops the off-screen rear of an
+/// isle you've sailed past (left abeam or astern) from wrapping into the middle
+/// of the ocean. Every surviving corner is within ±90°, so no two of them can
+/// straddle the ±π seam.
+#[inline]
+fn behind_camera(wp: Vec2, kin: &Kinematics) -> bool {
+    wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad).abs() > FRAC_PI_2
+}
 
 /// Camera/view parameters shared with the wave renderer for one frame.
 pub struct IslandView {
@@ -316,9 +330,14 @@ fn project(wp: Vec2, z: f32, waterline: bool, kin: &Kinematics, v: &IslandView) 
     (sx, sy)
 }
 
-/// Fill a closed screen polygon (triangle fan from vertex 0).
-fn fill_poly(xs: &[f32], ys: &[f32], color: Color) {
+/// Fill a closed screen polygon (triangle fan from vertex 0), skipping any fan
+/// triangle that touches a behind-camera vertex (`front[k] == false`) so the
+/// rear of the ring never wraps across the view (see [`behind_camera`]).
+fn fill_poly(xs: &[f32], ys: &[f32], front: &[bool], color: Color) {
     for i in 1..xs.len() - 1 {
+        if !(front[0] && front[i] && front[i + 1]) {
+            continue;
+        }
         draw_triangle(
             vec2(xs[0], ys[0]),
             vec2(xs[i], ys[i]),
@@ -373,6 +392,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     // --- Floor disc: shadow + sand rim, following the lumpy coast -------------
     let mut xs = [0.0f32; FLOOR_SEG];
     let mut ys = [0.0f32; FLOOR_SEG];
+    let mut front = [true; FLOOR_SEG];
     let mut floor_ring = |scale: f32, color: Color| {
         for i in 0..FLOOR_SEG {
             let a = i as f32 / FLOOR_SEG as f32 * TAU;
@@ -381,8 +401,9 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             let (sx, sy) = project(wp, 0.0, true, kin, v);
             xs[i] = sx;
             ys[i] = sy;
+            front[i] = !behind_camera(wp, kin);
         }
-        fill_poly(&xs, &ys, color);
+        fill_poly(&xs, &ys, &front, color);
     };
     floor_ring(1.10, col(SHADOW, v.light, alpha * 0.45));
     floor_ring(1.0, col(sand, v.light, alpha));
@@ -394,6 +415,10 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     let levels = terrain.rings + 1; // level 0 = centre, level `rings` = coast
     let mut wpz = vec![[(0.0f32, 0.0f32, 0.0f32); MOUND_SEG]; levels];
     let mut scr = vec![[(0.0f32, 0.0f32); MOUND_SEG]; levels];
+    // Which grid vertices sit in front of the camera: triangles touching a
+    // behind-camera corner are skipped below so the rear of a passed isle can't
+    // wrap across the view (see [`behind_camera`]).
+    let mut front = vec![[true; MOUND_SEG]; levels];
     for lvl in 0..levels {
         let t = lvl as f32 / terrain.rings as f32;
         for i in 0..MOUND_SEG {
@@ -408,6 +433,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             };
             wpz[lvl][i] = (wp.x, wp.y, z);
             scr[lvl][i] = project(wp, z, z < 0.5, kin, v);
+            front[lvl][i] = !behind_camera(wp, kin);
         }
     }
 
@@ -433,8 +459,13 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             let b0 = wpz[lvl][j];
             let a1 = wpz[lvl + 1][i];
             let b1 = wpz[lvl + 1][j];
-            push(a0, b0, b1, scr[lvl][i], scr[lvl][j], scr[lvl + 1][j]);
-            push(a0, b1, a1, scr[lvl][i], scr[lvl + 1][j], scr[lvl + 1][i]);
+            // Drop any facet with a corner behind the camera — see `front` above.
+            if front[lvl][i] && front[lvl][j] && front[lvl + 1][j] {
+                push(a0, b0, b1, scr[lvl][i], scr[lvl][j], scr[lvl + 1][j]);
+            }
+            if front[lvl][i] && front[lvl + 1][j] && front[lvl + 1][i] {
+                push(a0, b1, a1, scr[lvl][i], scr[lvl + 1][j], scr[lvl + 1][i]);
+            }
         }
     }
     tris.sort_by(|x, y| y.key.partial_cmp(&x.key).unwrap());
@@ -459,6 +490,11 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     for &fi in &order {
         let f = &features[fi];
         let wp = isle.pos + f.offset;
+        // Skip scenery behind the camera: its billboard would wrap across the seam
+        // (see [`behind_camera`]); it is out of the forward view in any case.
+        if behind_camera(wp, kin) {
+            continue;
+        }
         let base = terrain.elevation_at(wp);
         if terrain.occluded(wp, base, kin, v) {
             continue;
