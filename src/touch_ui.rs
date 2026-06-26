@@ -122,8 +122,8 @@ pub fn sail_hud(w: f32, h: f32) -> SailHud {
     let dock = Rect::new(w * 0.5 - b * 0.5, h - b - mg, b, b);
 
     // Right-edge stack below the corner minimap (which is `~(h*0.24)` tall at the
-    // top-right; keep clear of it).
-    let map_h = (h * 0.24).clamp(140.0, 200.0);
+    // top-right; keep clear of it). Mirrors the minimap's scaled cap in `main.rs`.
+    let map_h = (h * 0.24).clamp(crate::ui::px(140.0), crate::ui::px(200.0));
     let rx = w - b - mg;
     let y0 = mg + map_h + gap;
     let pause = Rect::new(rx, y0, b, b);

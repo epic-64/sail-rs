@@ -199,45 +199,83 @@ const LAST_COLUMN: usize = 3;
 mod style {
     // --- Type scale & line height — the one shared UI ladder ----------------
     // Lives in `crate::ui` so the captain's log draws on the very same scale.
-    pub use crate::ui::{line_h, FS_BODY, FS_CHIP, FS_HEADING, FS_SMALL, FS_TITLE};
+    // Every pixel token below is multiplied by `scale()` for the screen, so the
+    // board scales as one from a phone up to a 4K display (see `crate::ui::scale`).
+    pub use crate::ui::{fs_body, fs_chip, fs_heading, fs_small, fs_title, line_h, px};
 
-    // --- Spacing — every gap is a multiple of one base unit -----------------
-    pub const UNIT: f32 = 6.0;
-    pub const PAD: f32 = UNIT * 4.0; // panel inner margin (24)
-    pub const GAP: f32 = UNIT * 2.0; // gap between groups (12)
-    pub const RULE_GAP: f32 = UNIT; // heading baseline → its underline rule (6)
-    pub const COL_GAP: f32 = UNIT * 4.0; // chart column → board column (24)
+    // --- Spacing — every gap is a multiple of one base unit (design px) ------
+    pub fn unit() -> f32 {
+        px(6.0)
+    }
+    pub fn pad() -> f32 {
+        unit() * 4.0 // panel inner margin (24)
+    }
+    pub fn gap() -> f32 {
+        unit() * 2.0 // gap between groups (12)
+    }
+    pub fn rule_gap() -> f32 {
+        unit() // heading baseline → its underline rule (6)
+    }
+    pub fn col_gap() -> f32 {
+        unit() * 4.0 // chart column → board column (24)
+    }
 
     // --- The panel itself ---------------------------------------------------
-    pub const SCRIM: f32 = 0.5; // alpha of the dim behind the board
+    pub const SCRIM: f32 = 0.5; // alpha of the dim behind the board (ratio)
     pub const PANEL_W_FRAC: f32 = 0.92; // panel size as a fraction of the screen…
     pub const PANEL_H_FRAC: f32 = 0.9;
-    pub const PANEL_MAX_W: f32 = 940.0; // …capped here
-    pub const PANEL_MAX_H: f32 = 560.0;
-    pub const PANEL_BORDER: f32 = UNIT * 0.5; // panel edge stroke (3)
+    pub fn panel_max_w() -> f32 {
+        px(940.0) // …capped here (scaled, so a big screen gets a big board)
+    }
+    pub fn panel_max_h() -> f32 {
+        px(560.0)
+    }
+    pub fn panel_border() -> f32 {
+        unit() * 0.5 // panel edge stroke (3)
+    }
     /// Tab-bar button height.
     pub fn tab_h() -> f32 {
-        line_h(FS_BODY) + UNIT
+        line_h(fs_body()) + unit()
     }
 
     // --- Rules & chips ------------------------------------------------------
-    pub const RULE_W: f32 = 1.0; // hairline divider thickness
-    pub const BORDER_W: f32 = 1.5; // chip / outline stroke thickness
+    pub fn rule_w() -> f32 {
+        px(1.0) // hairline divider thickness
+    }
+    pub fn border_w() -> f32 {
+        px(1.5) // chip / outline stroke thickness
+    }
     /// Baseline drop from a line's vertical centre, as a fraction of font size —
-    /// used to vertically centre text in a chip.
+    /// used to vertically centre text in a chip (a ratio, not scaled).
     pub const CAP_RATIO: f32 = 0.35;
-    pub const CHIP_H: f32 = UNIT * 4.0; // action chip / button height (24)
-    pub const CHIP_W: f32 = UNIT * 17.0; // a fitting's fixed chip width (102)
-    pub const CHIP_GAP: f32 = UNIT; // gap a cost keeps left of its chip (6)
-    pub const CHIP_INNER: f32 = UNIT * 0.5; // gap between packed action chips (3)
-    pub const ROW_PAD_X: f32 = UNIT; // a focus highlight's horizontal overhang
+    pub fn chip_h() -> f32 {
+        unit() * 4.0 // action chip / button height (24)
+    }
+    pub fn chip_w() -> f32 {
+        unit() * 17.0 // a fitting's fixed chip width (102)
+    }
+    pub fn chip_gap() -> f32 {
+        unit() // gap a cost keeps left of its chip (6)
+    }
+    pub fn chip_inner() -> f32 {
+        unit() * 0.5 // gap between packed action chips (3)
+    }
+    pub fn row_pad_x() -> f32 {
+        unit() // a focus highlight's horizontal overhang
+    }
     /// Height of a list row (a chip plus breathing room).
     pub fn row_h() -> f32 {
-        CHIP_H + UNIT
+        chip_h() + unit()
     }
-    pub const TAB_PAD_X: f32 = UNIT * 2.0; // padding either side of a tab label
-    pub const TAB_GAP: f32 = UNIT * 2.0; // gap between tabs
-    pub const BTN_WIDE: f32 = UNIT * 52.0; // a full-width action button's cap (312)
+    pub fn tab_pad_x() -> f32 {
+        unit() * 2.0 // padding either side of a tab label
+    }
+    pub fn tab_gap() -> f32 {
+        unit() * 2.0 // gap between tabs
+    }
+    pub fn btn_wide() -> f32 {
+        unit() * 52.0 // a full-width action button's cap (312)
+    }
 
     // --- Table column splits (fractions of the board width) -----------------
     // Market: name | price | held | four action chips.
@@ -656,16 +694,16 @@ impl PortScreen {
         // Dim the world so the board reads as the captain's focus.
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, SCRIM));
 
-        let pw = (w * PANEL_W_FRAC).min(PANEL_MAX_W);
-        let ph = (h * PANEL_H_FRAC).min(PANEL_MAX_H);
+        let pw = (w * PANEL_W_FRAC).min(panel_max_w());
+        let ph = (h * PANEL_H_FRAC).min(panel_max_h());
         let x0 = (w - pw) / 2.0;
         let y0 = (h - ph) / 2.0;
         draw_rectangle(x0, y0, pw, ph, parchment());
-        draw_rectangle_lines(x0, y0, pw, ph, PANEL_BORDER, parchment_edge());
+        draw_rectangle_lines(x0, y0, pw, ph, panel_border(), parchment_edge());
 
-        let left = x0 + PAD;
-        let right = x0 + pw - PAD;
-        let inner_w = pw - 2.0 * PAD;
+        let left = x0 + pad();
+        let right = x0 + pw - pad();
+        let inner_w = pw - 2.0 * pad();
 
         // --- Header: eyebrow, port name, purse ------------------------------
         let eyebrow = if port.is_shipyard {
@@ -673,29 +711,29 @@ impl PortScreen {
         } else {
             "PORT OF CALL"
         };
-        let eyebrow_y = y0 + PAD + FS_SMALL as f32;
-        let name_y = eyebrow_y + line_h(FS_TITLE);
+        let eyebrow_y = y0 + pad() + fs_small() as f32;
+        let name_y = eyebrow_y + line_h(fs_title());
         crate::font::heading(|| {
-            draw_text(eyebrow, left, eyebrow_y, FS_SMALL as f32, dim_ink());
-            draw_text(&port.name, left, name_y, FS_TITLE as f32, ink());
+            draw_text(eyebrow, left, eyebrow_y, fs_small() as f32, dim_ink());
+            draw_text(&port.name, left, name_y, fs_title() as f32, ink());
         });
 
         // Purse, right-aligned in the header. Either lights red and jiggles when an
         // action runs out of coin (the purse) or out of hold room (the tally).
         let gold = format!("Gold {}", gs.gold);
         let hold = format!("Hold {}/{}", gs.hold_used(), gs.hold_capacity);
-        let gold_y = y0 + PAD + FS_HEADING as f32;
-        let hold_y = gold_y + line_h(FS_SMALL);
-        right_text_flash(&gold, right, gold_y, FS_HEADING, self.flash_of(FlashTarget::Gold));
-        right_text_flash(&hold, right, hold_y, FS_SMALL, self.flash_of(FlashTarget::Hold));
+        let gold_y = y0 + pad() + fs_heading() as f32;
+        let hold_y = gold_y + line_h(fs_small());
+        right_text_flash(&gold, right, gold_y, fs_heading(), self.flash_of(FlashTarget::Gold));
+        right_text_flash(&hold, right, hold_y, fs_small(), self.flash_of(FlashTarget::Hold));
 
-        let bar_y = name_y + GAP;
+        let bar_y = name_y + gap();
         rule(left, bar_y, inner_w);
 
         // --- Tab bar --------------------------------------------------------
         let yard_label = if port.is_shipyard { "Shipyard" } else { "Drydock" };
         let on_bar = self.focus == Focus::TabBar;
-        let tab_y = bar_y + GAP;
+        let tab_y = bar_y + gap();
         let mut tx = left;
         tx = self.tab_button("Market", Tab::Market, tx, tab_y, on_bar);
         tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
@@ -703,8 +741,8 @@ impl PortScreen {
         let _ = self.tab_button("Racing", Tab::Race, tx, tab_y, on_bar);
 
         // --- Body: chart on the left, the active board on the right ----------
-        let body_top = tab_y + tab_h() + GAP;
-        let chart_size = (ph - (body_top - y0) - PAD).min(pw * CHART_FRAC);
+        let body_top = tab_y + tab_h() + gap();
+        let chart_size = (ph - (body_top - y0) - pad()).min(pw * CHART_FRAC);
         let chart = Rect::new(left, body_top, chart_size, chart_size);
         let cpal = MinimapPalette::parchment();
         // Mark every accepted contract's destination ("M") and the booked race's
@@ -717,23 +755,23 @@ impl PortScreen {
         minimap::render(world, kin, wind, chart, &cpal, &marks, &race_marks, route, &[], None);
         // Name the local waters under the chart.
         let waters = &world.cluster_at(kin.pos).name;
-        let cd = measure_text(waters, None, FS_SMALL, 1.0);
+        let cd = measure_text(waters, None, fs_small(), 1.0);
         draw_text(
             waters,
             chart.x + (chart_size - cd.width) / 2.0,
-            chart.y + chart_size + line_h(FS_SMALL),
-            FS_SMALL as f32,
+            chart.y + chart_size + line_h(fs_small()),
+            fs_small() as f32,
             ink(),
         );
 
-        let board_x = chart.x + chart_size + COL_GAP;
+        let board_x = chart.x + chart_size + col_gap();
         let board_w = right - board_x;
         // The chart on the left is a rect whose *top edge* sits at `body_top`, but the
         // boards lead with text drawn on a *baseline* — so starting them at `body_top`
         // floats their first line a full ascent above it, riding up against the tab bar.
         // Drop the board down by one heading ascent so its first line's cap-height lines
         // up with the chart's top edge.
-        let board_top = body_top + FS_HEADING as f32;
+        let board_top = body_top + fs_heading() as f32;
         match self.tab {
             Tab::Market => self.render_market(gs, market, board_x, board_top, board_w),
             Tab::Contracts => self.render_contracts(gs, world, board_x, board_top, board_w),
@@ -745,8 +783,8 @@ impl PortScreen {
         draw_text(
             "Arrows move · Tab switches board · Enter trades · Esc sets sail",
             left,
-            y0 + ph - PAD,
-            FS_SMALL as f32,
+            y0 + ph - pad(),
+            fs_small() as f32,
             dim_ink(),
         );
     }
@@ -754,8 +792,8 @@ impl PortScreen {
     /// Draw a tab button; returns the x where the next one should start.
     fn tab_button(&self, label: &str, tab: Tab, x: f32, y: f32, on_bar: bool) -> f32 {
         use style::*;
-        let dims = measure_text(label, None, FS_BODY, 1.0);
-        let bw = dims.width + 2.0 * TAB_PAD_X;
+        let dims = measure_text(label, None, fs_body(), 1.0);
+        let bw = dims.width + 2.0 * tab_pad_x();
         let bh = tab_h();
         self.record_hit(Rect::new(x, y, bw, bh), HitEffect::Tab(tab));
         let active = self.tab == tab;
@@ -763,14 +801,14 @@ impl PortScreen {
             draw_rectangle(x, y, bw, bh, chip_fill());
             // A lit ring while the cursor rests on the bar.
             if on_bar {
-                draw_rectangle_lines(x, y, bw, bh, BORDER_W + 1.0, tab_ring());
+                draw_rectangle_lines(x, y, bw, bh, border_w() + 1.0, tab_ring());
             }
         } else {
-            draw_rectangle_lines(x, y, bw, bh, BORDER_W, parchment_edge());
+            draw_rectangle_lines(x, y, bw, bh, border_w(), parchment_edge());
         }
         let c = if active { parchment() } else { ink() };
-        draw_text(label, x + TAB_PAD_X, y + bh / 2.0 + FS_BODY as f32 * CAP_RATIO, FS_BODY as f32, c);
-        x + bw + TAB_GAP
+        draw_text(label, x + tab_pad_x(), y + bh / 2.0 + fs_body() as f32 * CAP_RATIO, fs_body() as f32, c);
+        x + bw + tab_gap()
     }
 
     fn render_market(&self, gs: &GameState, market: &Market, x: f32, y: f32, w: f32) {
@@ -780,11 +818,11 @@ impl PortScreen {
         let held_r = x + w * MKT_HELD_R; // right edge of the hold column
         let actions_x = x + w * MKT_ACTIONS_X;
 
-        draw_text("Commodity", x, y, FS_SMALL as f32, dim_ink());
-        right_text("Price", price_r, y, FS_SMALL);
-        right_text("Hold", held_r, y, FS_SMALL);
-        draw_text("Trade", actions_x, y, FS_SMALL as f32, dim_ink());
-        rule(x, y + RULE_GAP, w);
+        draw_text("Commodity", x, y, fs_small() as f32, dim_ink());
+        right_text("Price", price_r, y, fs_small());
+        right_text("Hold", held_r, y, fs_small());
+        draw_text("Trade", actions_x, y, fs_small() as f32, dim_ink());
+        rule(x, y + rule_gap(), w);
 
         const ACTIONS: [&str; 4] = ["Buy", "Fill", "Dump", "Sell"];
         let step = row_h();
@@ -796,17 +834,17 @@ impl PortScreen {
             }
             // Tapping the commodity (left of the chips) just highlights its row.
             self.record_hit(
-                Rect::new(x - ROW_PAD_X, row_center(ry) - row_h() / 2.0, actions_x - x, row_h()),
+                Rect::new(x - row_pad_x(), row_center(ry) - row_h() / 2.0, actions_x - x, row_h()),
                 HitEffect::Select { focus: Focus::Good(i), column: None, activate: false },
             );
-            draw_text(good.label(), x, ry, FS_BODY as f32, ink());
-            right_text(&market.price(*good).to_string(), price_r, ry, FS_BODY);
+            draw_text(good.label(), x, ry, fs_body() as f32, ink());
+            right_text(&market.price(*good).to_string(), price_r, ry, fs_body());
             // The held tally jiggles red on a Sell/Dump with nothing to sell.
             right_text_flash(
                 &gs.quantity_of(*good).to_string(),
                 held_r,
                 ry,
-                FS_BODY,
+                fs_body(),
                 self.flash_of(FlashTarget::Held(i)),
             );
 
@@ -815,7 +853,7 @@ impl PortScreen {
             for (c, label) in ACTIONS.iter().enumerate() {
                 let cx = actions_x + c as f32 * chip_w;
                 let focused = active_row && self.column == c;
-                let chip = Rect::new(cx + CHIP_INNER, chip_y(ry), chip_w - 2.0 * CHIP_INNER, CHIP_H);
+                let chip = Rect::new(cx + chip_inner(), chip_y(ry), chip_w - 2.0 * chip_inner(), chip_h());
                 button(chip.x, chip.y, chip.w, chip.h, label, focused);
                 // Tapping a chip selects this good + column and commits the trade.
                 self.record_hit(
@@ -833,31 +871,31 @@ impl PortScreen {
     fn render_yard(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
         use style::*;
         let val_x = x + w * YARD_VAL_X; // inner column where stat values begin
-        let chip_x = x + w - CHIP_W;
-        let cost_r = chip_x - CHIP_GAP; // cost right-aligned just left of the chip
-        let step = line_h(FS_BODY);
+        let chip_x = x + w - chip_w();
+        let cost_r = chip_x - chip_gap(); // cost right-aligned just left of the chip
+        let step = line_h(fs_body());
 
         // A cost right-aligned left of the action chip, both centred in a block of
         // height `bh` whose top is `ry`.
         let cost_chip = |ry: f32, bh: f32, cost: &str, label: &str, focused: bool| {
-            let chip_top = ry + (bh - CHIP_H) / 2.0;
-            button(chip_x, chip_top, CHIP_W, CHIP_H, label, focused);
-            right_text(cost, cost_r, chip_top + CHIP_H / 2.0 + FS_BODY as f32 * CAP_RATIO, FS_BODY);
+            let chip_top = ry + (bh - chip_h()) / 2.0;
+            button(chip_x, chip_top, chip_w(), chip_h(), label, focused);
+            right_text(cost, cost_r, chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO, fs_body());
         };
         let highlight = |ry: f32, bh: f32| {
-            draw_rectangle(x - ROW_PAD_X, ry, w + 2.0 * ROW_PAD_X, bh, row_highlight());
+            draw_rectangle(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh, row_highlight());
         };
 
         // ===== Drydock — hull repair: one line ==============================
         let mut ry = section("DRYDOCK · HULL REPAIR", x, y, w);
         {
             let active = self.focus == Focus::Repair;
-            let bh = step + GAP;
+            let bh = step + gap();
             if active {
                 highlight(ry, bh);
             }
             self.record_hit(
-                Rect::new(x - ROW_PAD_X, ry, w + 2.0 * ROW_PAD_X, bh),
+                Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
                 HitEffect::Select { focus: Focus::Repair, column: None, activate: true },
             );
             let base = ry + step;
@@ -867,12 +905,12 @@ impl PortScreen {
                 gs.max_hull(),
                 (hull::fraction(gs) * 100.0).round() as i32
             );
-            draw_text("Hull · Mend", x, base, FS_BODY as f32, ink());
-            draw_text(&cond, val_x, base, FS_BODY as f32, ink());
+            draw_text("Hull · Mend", x, base, fs_body() as f32, ink());
+            draw_text(&cond, val_x, base, fs_body() as f32, ink());
             let dmg = hull::damage(gs);
             let cost = if dmg <= 0 { "—".to_string() } else { hull::repair_cost(gs).to_string() };
             cost_chip(ry, bh, &cost, if dmg <= 0 { "Sound" } else { "Repair" }, active);
-            ry += bh + GAP;
+            ry += bh + gap();
         }
 
         // ===== Shipyard — hull / sails / hold fittings ======================
@@ -930,15 +968,15 @@ impl PortScreen {
                 }
 
                 // Title line + data lines, plus a little breathing room.
-                let bh = (1 + lines.len()) as f32 * step + GAP;
+                let bh = (1 + lines.len()) as f32 * step + gap();
                 if active {
                     highlight(ry, bh);
                 }
                 self.record_hit(
-                    Rect::new(x - ROW_PAD_X, ry, w + 2.0 * ROW_PAD_X, bh),
+                    Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
                     HitEffect::Select { focus: Focus::Upgrade(kind), column: None, activate: true },
                 );
-                draw_text(&title, x, ry + step, FS_BODY as f32, ink());
+                draw_text(&title, x, ry + step, fs_body() as f32, ink());
                 for (i, (label, value)) in lines.iter().enumerate() {
                     stat(label, value, x, val_x, ry + step * (i as f32 + 2.0));
                 }
@@ -948,14 +986,14 @@ impl PortScreen {
                     Some(c) => (c.to_string(), "Fit"),
                 };
                 cost_chip(ry, bh, &cost, label, active);
-                ry += bh + GAP;
+                ry += bh + gap();
             }
         } else {
             draw_text(
                 "No shipyard here — find a shipyard port to outfit.",
                 x,
                 ry + step,
-                FS_BODY as f32,
+                fs_body() as f32,
                 dim_ink(),
             );
         }
@@ -967,20 +1005,20 @@ impl PortScreen {
     fn render_race(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
         use style::*;
         let origin = &world.islands[self.island_id as usize];
-        crate::font::heading(|| draw_text("Harbour Race · Wager", x, y, FS_HEADING as f32, ink()));
-        let mut ry = y + line_h(FS_HEADING);
-        let step = line_h(FS_BODY);
+        crate::font::heading(|| draw_text("Harbour Race · Wager", x, y, fs_heading() as f32, ink()));
+        let mut ry = y + line_h(fs_heading());
+        let step = line_h(fs_body());
 
         // Label (dim, left) + value (right-aligned) line within the board.
         let line = |label: &str, value: &str, ry: f32| {
-            draw_text(label, x, ry, FS_BODY as f32, dim_ink());
-            right_text(value, x + w, ry, FS_BODY);
+            draw_text(label, x, ry, fs_body() as f32, dim_ink());
+            right_text(value, x + w, ry, fs_body());
         };
 
         if let Some(race) = gs.race {
             let target = &world.islands[race.target_id as usize];
-            crate::font::heading(|| draw_text("Race booked", x, ry, FS_HEADING as f32, ink()));
-            ry += line_h(FS_HEADING);
+            crate::font::heading(|| draw_text("Race booked", x, ry, fs_heading() as f32, ink()));
+            ry += line_h(fs_heading());
             line("Race to", &target.name, ry);
             ry += step;
             line("Rival hull", &hull_mark(race.required_level), ry);
@@ -988,15 +1026,15 @@ impl PortScreen {
             line("Stake", &race.stake.to_string(), ry);
             ry += step;
             line("On winning", &(race.stake * 2).to_string(), ry);
-            ry += step + GAP;
-            draw_text("Set sail and the rival draws up alongside.", x, ry, FS_SMALL as f32, dim_ink());
-            ry += line_h(FS_SMALL);
-            draw_text("Heave to, then raise sail to start level.", x, ry, FS_SMALL as f32, dim_ink());
-            ry += line_h(FS_SMALL) + GAP;
+            ry += step + gap();
+            draw_text("Set sail and the rival draws up alongside.", x, ry, fs_small() as f32, dim_ink());
+            ry += line_h(fs_small());
+            draw_text("Heave to, then raise sail to start level.", x, ry, fs_small() as f32, dim_ink());
+            ry += line_h(fs_small()) + gap();
             let focused = self.focus == Focus::RaceWithdraw;
-            button(x, ry, w.min(BTN_WIDE), CHIP_H, "Abandon race (stake refunded)", focused);
+            button(x, ry, w.min(btn_wide()), chip_h(), "Abandon race (stake refunded)", focused);
             self.record_hit(
-                Rect::new(x, ry, w.min(BTN_WIDE), CHIP_H),
+                Rect::new(x, ry, w.min(btn_wide()), chip_h()),
                 HitEffect::Select { focus: Focus::RaceWithdraw, column: None, activate: true },
             );
             return;
@@ -1008,7 +1046,7 @@ impl PortScreen {
                 "Hull too battered — no harbour will stake you in a race.",
                 x,
                 ry,
-                FS_BODY as f32,
+                fs_body() as f32,
                 flash_red(),
             );
             return;
@@ -1016,25 +1054,25 @@ impl PortScreen {
 
         let offers = race::offers(gs, world);
         if offers.is_empty() {
-            draw_text("No rival ports in these waters to race to.", x, ry, FS_BODY as f32, dim_ink());
+            draw_text("No rival ports in these waters to race to.", x, ry, fs_body() as f32, dim_ink());
             return;
         }
 
-        draw_text("Beat a rival sloop to another port. The stake rises", x, ry, FS_SMALL as f32, dim_ink());
-        ry += line_h(FS_SMALL);
-        draw_text("with the distance of the leg. Enter to take one on.", x, ry, FS_SMALL as f32, dim_ink());
-        ry += line_h(FS_SMALL) + GAP;
+        draw_text("Beat a rival sloop to another port. The stake rises", x, ry, fs_small() as f32, dim_ink());
+        ry += line_h(fs_small());
+        draw_text("with the distance of the leg. Enter to take one on.", x, ry, fs_small() as f32, dim_ink());
+        ry += line_h(fs_small()) + gap();
 
         // Columns: port name, the required hull tier, the stake right-aligned, then
         // an Accept chip — the same shape as a contract row.
         let tier_r = x + w * RACE_TIER_R;
         let stake_r = x + w * RACE_STAKE_R;
         let action_x = x + w * RACE_ACT_X;
-        draw_text("Race to", x, ry, FS_SMALL as f32, dim_ink());
-        right_text("Hull", tier_r, ry, FS_SMALL);
-        right_text("Stake", stake_r, ry, FS_SMALL);
-        rule(x, ry + RULE_GAP, w);
-        ry += line_h(FS_HEADING);
+        draw_text("Race to", x, ry, fs_small() as f32, dim_ink());
+        right_text("Hull", tier_r, ry, fs_small());
+        right_text("Stake", stake_r, ry, fs_small());
+        rule(x, ry + rule_gap(), w);
+        ry += line_h(fs_heading());
 
         // Each rival port is its own row: highlight it and Enter (or the Accept
         // chip) books the race — none is marked until then, the same as contracts.
@@ -1049,7 +1087,7 @@ impl PortScreen {
                 row_rect(x, ry, w),
                 HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: false },
             );
-            draw_text(&p.name, x, ry, FS_BODY as f32, ink());
+            draw_text(&p.name, x, ry, fs_body() as f32, ink());
             let (stake, required) = race::offer_terms(origin, p);
             // The hull tier the leg demands, always shown (`Mk I` for an open race):
             // normal ink when the captain can meet it, alarm-red (and jiggling on a
@@ -1060,20 +1098,20 @@ impl PortScreen {
                     .flash_of(FlashTarget::Tier(p.id))
                     .map(|(dx, _)| dx)
                     .unwrap_or(0.0);
-                let dims = measure_text(&tier_txt, None, FS_BODY, 1.0);
-                draw_text(&tier_txt, tier_r - dims.width + dx, ry, FS_BODY as f32, flash_red());
+                let dims = measure_text(&tier_txt, None, fs_body(), 1.0);
+                draw_text(&tier_txt, tier_r - dims.width + dx, ry, fs_body() as f32, flash_red());
             } else {
-                right_text(&tier_txt, tier_r, ry, FS_BODY);
+                right_text(&tier_txt, tier_r, ry, fs_body());
             }
             // The stake jiggles red when the purse can't cover the wager.
             right_text_flash(
                 &stake.to_string(),
                 stake_r,
                 ry,
-                FS_BODY,
+                fs_body(),
                 self.flash_of(FlashTarget::Stake(p.id)),
             );
-            let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, CHIP_H);
+            let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, chip_h());
             button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, "Accept", active);
             self.record_hit(
                 chip_rect,
@@ -1118,14 +1156,14 @@ impl PortScreen {
         let mut ry = y;
 
         // --- Cargo Contracts (jobs offered here) -----------------------------
-        crate::font::heading(|| draw_text("Cargo Contracts", x, ry, FS_HEADING as f32, ink()));
-        ry += line_h(FS_HEADING);
-        draw_text("Cargo", x, ry, FS_SMALL as f32, dim_ink());
-        draw_text("To", x + w * CON_TO_X, ry, FS_SMALL as f32, dim_ink());
-        right_text("Deposit", x + w * CON_DEP_R, ry, FS_SMALL);
-        right_text("Reward", x + w * CON_REW_R, ry, FS_SMALL);
-        rule(x, ry + RULE_GAP, w);
-        ry += line_h(FS_HEADING);
+        crate::font::heading(|| draw_text("Cargo Contracts", x, ry, fs_heading() as f32, ink()));
+        ry += line_h(fs_heading());
+        draw_text("Cargo", x, ry, fs_small() as f32, dim_ink());
+        draw_text("To", x + w * CON_TO_X, ry, fs_small() as f32, dim_ink());
+        right_text("Deposit", x + w * CON_DEP_R, ry, fs_small());
+        right_text("Reward", x + w * CON_REW_R, ry, fs_small());
+        rule(x, ry + rule_gap(), w);
+        ry += line_h(fs_heading());
 
         let offered = mission::offered_at(gs, world);
         if !hull::can_take_jobs(gs) {
@@ -1135,12 +1173,12 @@ impl PortScreen {
                 "Hull too battered — no cargo will be entrusted to you.",
                 x,
                 ry,
-                FS_BODY as f32,
+                fs_body() as f32,
                 flash_red(),
             );
             ry += step;
         } else if offered.is_empty() {
-            draw_text("No contracts on the board.", x, ry, FS_BODY as f32, dim_ink());
+            draw_text("No contracts on the board.", x, ry, fs_body() as f32, dim_ink());
             ry += step;
         } else {
             for m in &offered {
@@ -1154,9 +1192,9 @@ impl PortScreen {
         // --- Deliveries owed at this very port -------------------------------
         let deliveries = mission::deliverable_at(gs, world);
         if !deliveries.is_empty() {
-            ry += GAP;
-            crate::font::heading(|| draw_text("Deliveries Awaiting", x, ry, FS_HEADING as f32, ink()));
-            ry += line_h(FS_HEADING);
+            ry += gap();
+            crate::font::heading(|| draw_text("Deliveries Awaiting", x, ry, fs_heading() as f32, ink()));
+            ry += line_h(fs_heading());
             for m in &deliveries {
                 let from = format!("from {}", world.islands[m.origin_id as usize].name);
                 let focus = Focus::Delivery(m.id);
@@ -1168,9 +1206,9 @@ impl PortScreen {
         // --- Reserved cargo bound elsewhere (the hold manifest) --------------
         let reserved = mission::reserved_at(gs, world);
         if !reserved.is_empty() {
-            ry += GAP;
-            crate::font::heading(|| draw_text("Reserved Cargo · Hold Manifest", x, ry, FS_HEADING as f32, ink()));
-            ry += line_h(FS_HEADING);
+            ry += gap();
+            crate::font::heading(|| draw_text("Reserved Cargo · Hold Manifest", x, ry, fs_heading() as f32, ink()));
+            ry += line_h(fs_heading());
             for m in &reserved {
                 let to = format!("→ {}", world.islands[m.target_id as usize].name);
                 let focus = Focus::Manifest(m.id);
@@ -1211,23 +1249,23 @@ impl PortScreen {
             format!("{} {}", m.quantity, m.good.label()),
             x + udx,
             ry,
-            FS_BODY as f32,
+            fs_body() as f32,
             flash_ink(ured),
         );
-        draw_text(to_text, x + w * CON_TO_X, ry, FS_BODY as f32, ink());
+        draw_text(to_text, x + w * CON_TO_X, ry, fs_body() as f32, ink());
         if show_money {
             // The deposit jiggles red when the purse can't cover the buy-in.
             right_text_flash(
                 &m.deposit.to_string(),
                 x + w * CON_DEP_R,
                 ry,
-                FS_BODY,
+                fs_body(),
                 self.flash_of(FlashTarget::Deposit(m.id)),
             );
-            right_text(&m.reward.to_string(), x + w * CON_REW_R, ry, FS_BODY);
+            right_text(&m.reward.to_string(), x + w * CON_REW_R, ry, fs_body());
         }
         let action_x = x + w * CON_ACT_X;
-        let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, CHIP_H);
+        let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, chip_h());
         button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, chip, active);
         self.record_hit(
             chip_rect,
@@ -1265,16 +1303,16 @@ pub fn render_prompt(
     // Drawn over the open sea (not the parchment board), so it keeps the larger
     // title size to catch the eye; sizes/spacing still come from `style`.
     use style::*;
-    let fs = FS_TITLE;
+    let fs = fs_title();
     let dims = measure_text(&msg, None, fs, 1.0);
     let bx = w * 0.5 - dims.width / 2.0;
     let by = h * 0.80;
-    let pill_h = line_h(fs) + GAP;
+    let pill_h = line_h(fs) + gap();
     let center = by - fs as f32 * CAP_RATIO;
     draw_rectangle(
-        bx - GAP,
+        bx - gap(),
         center - pill_h / 2.0,
-        dims.width + 2.0 * GAP,
+        dims.width + 2.0 * gap(),
         pill_h,
         Color::new(0.0, 0.0, 0.0, SCRIM),
     );
@@ -1299,26 +1337,26 @@ fn right_text(text: &str, right_x: f32, y: f32, fs: u16) {
 
 /// A hairline divider across `w` at `y`.
 fn rule(x: f32, y: f32, w: f32) {
-    draw_line(x, y, x + w, y, style::RULE_W, dim_ink());
+    draw_line(x, y, x + w, y, style::rule_w(), dim_ink());
 }
 
 /// A section header in the display face, with a hairline rule under it spanning `w`.
 /// Returns the baseline `y` for the first body line beneath it.
 fn section(text: &str, x: f32, y: f32, w: f32) -> f32 {
-    crate::font::heading(|| draw_text(text, x, y, style::FS_HEADING as f32, ink()));
-    rule(x, y + style::RULE_GAP, w);
-    y + style::line_h(style::FS_HEADING)
+    crate::font::heading(|| draw_text(text, x, y, style::fs_heading() as f32, ink()));
+    rule(x, y + style::rule_gap(), w);
+    y + style::line_h(style::fs_heading())
 }
 
 /// One data line: a dim label on the left, its value at column `val_x`.
 fn stat(label: &str, value: &str, x: f32, val_x: f32, y: f32) {
-    draw_text(label, x, y, style::FS_BODY as f32, dim_ink());
-    draw_text(value, val_x, y, style::FS_BODY as f32, ink());
+    draw_text(label, x, y, style::fs_body() as f32, dim_ink());
+    draw_text(value, val_x, y, style::fs_body() as f32, ink());
 }
 
 /// The vertical centre of a list row whose text baseline is `ry`.
 fn row_center(ry: f32) -> f32 {
-    ry - style::FS_BODY as f32 * style::CAP_RATIO
+    ry - style::fs_body() as f32 * style::CAP_RATIO
 }
 
 /// The rect of a list row whose text baseline is `ry`: `w` plus a small overhang
@@ -1327,9 +1365,9 @@ fn row_center(ry: f32) -> f32 {
 fn row_rect(x: f32, ry: f32, w: f32) -> Rect {
     let h = style::row_h();
     Rect::new(
-        x - style::ROW_PAD_X,
+        x - style::row_pad_x(),
         row_center(ry) - h / 2.0,
-        w + 2.0 * style::ROW_PAD_X,
+        w + 2.0 * style::row_pad_x(),
         h,
     )
 }
@@ -1340,9 +1378,9 @@ fn highlight_row(x: f32, ry: f32, w: f32) {
     draw_rectangle(r.x, r.y, r.w, r.h, row_highlight());
 }
 
-/// The top-left `y` for a `CHIP_H`-tall chip centred on a row whose baseline is `ry`.
+/// The top-left `y` for a `chip_h()`-tall chip centred on a row whose baseline is `ry`.
 fn chip_y(ry: f32) -> f32 {
-    row_center(ry) - style::CHIP_H / 2.0
+    row_center(ry) - style::chip_h() / 2.0
 }
 
 /// Roman numeral for a small tier (covers every fitting ladder).
@@ -1403,9 +1441,9 @@ fn button(x: f32, y: f32, w: f32, h: f32, label: &str, focused: bool) {
     if focused {
         draw_rectangle(x, y, w, h, chip_fill());
     } else {
-        draw_rectangle_lines(x, y, w, h, style::BORDER_W, parchment_edge());
+        draw_rectangle_lines(x, y, w, h, style::border_w(), parchment_edge());
     }
-    let fs = style::FS_CHIP;
+    let fs = style::fs_chip();
     let dims = measure_text(label, None, fs, 1.0);
     let c = if focused { parchment() } else { ink() };
     draw_text(
