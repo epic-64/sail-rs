@@ -585,11 +585,14 @@ impl PortScreen {
         if touch.tapped_in(crate::touch_ui::back_button(screen_width(), screen_height())) {
             return true;
         }
+        // Resolve to the *smallest* region the tap falls in, so an action chip
+        // nested inside its select-only row wins over the row.
         let hit = self
             .hits
             .borrow()
             .iter()
-            .find(|hr| touch.tapped_in(hr.rect))
+            .filter(|hr| touch.tapped_in(hr.rect))
+            .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
             .map(|hr| hr.effect);
         if let Some(effect) = hit {
             match effect {
@@ -1019,9 +1022,11 @@ impl PortScreen {
             if active {
                 highlight_row(x, ry, w);
             }
+            // Row selects (previews the leg on the chart); the Accept chip below
+            // books it — the same row-vs-chip split as the market and contracts.
             self.record_hit(
                 row_rect(x, ry, w),
-                HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: true },
+                HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: false },
             );
             draw_text(&p.name, x, ry, FS_BODY as f32, ink());
             let (stake, required) = race::offer_terms(origin, p);
@@ -1047,7 +1052,12 @@ impl PortScreen {
                 FS_BODY,
                 self.flash_of(FlashTarget::Stake(p.id)),
             );
-            button(action_x, chip_y(ry), x + w - action_x, CHIP_H, "Accept", active);
+            let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, CHIP_H);
+            button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, "Accept", active);
+            self.record_hit(
+                chip_rect,
+                HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: true },
+            );
             ry += row_h();
         }
     }
@@ -1114,12 +1124,8 @@ impl PortScreen {
         } else {
             for m in &offered {
                 let to = world.islands[m.target_id as usize].name.clone();
-                let active = self.focus == Focus::Contract(m.id);
-                self.contract_line(m, &to, true, "Accept", active, x, ry, w);
-                self.record_hit(
-                    row_rect(x, ry, w),
-                    HitEffect::Select { focus: Focus::Contract(m.id), column: None, activate: true },
-                );
+                let focus = Focus::Contract(m.id);
+                self.contract_line(m, &to, true, "Accept", focus, x, ry, w);
                 ry += step;
             }
         }
@@ -1132,12 +1138,8 @@ impl PortScreen {
             ry += line_h(FS_HEADING);
             for m in &deliveries {
                 let from = format!("from {}", world.islands[m.origin_id as usize].name);
-                let active = self.focus == Focus::Delivery(m.id);
-                self.contract_line(m, &from, true, "Deliver", active, x, ry, w);
-                self.record_hit(
-                    row_rect(x, ry, w),
-                    HitEffect::Select { focus: Focus::Delivery(m.id), column: None, activate: true },
-                );
+                let focus = Focus::Delivery(m.id);
+                self.contract_line(m, &from, true, "Deliver", focus, x, ry, w);
                 ry += step;
             }
         }
@@ -1150,12 +1152,8 @@ impl PortScreen {
             ry += line_h(FS_HEADING);
             for m in &reserved {
                 let to = format!("→ {}", world.islands[m.target_id as usize].name);
-                let active = self.focus == Focus::Manifest(m.id);
-                self.contract_line(m, &to, false, "Abandon", active, x, ry, w);
-                self.record_hit(
-                    row_rect(x, ry, w),
-                    HitEffect::Select { focus: Focus::Manifest(m.id), column: None, activate: true },
-                );
+                let focus = Focus::Manifest(m.id);
+                self.contract_line(m, &to, false, "Abandon", focus, x, ry, w);
                 ry += step;
             }
         }
@@ -1170,15 +1168,22 @@ impl PortScreen {
         to_text: &str,
         show_money: bool,
         chip: &str,
-        active: bool,
+        focus: Focus,
         x: f32,
         ry: f32,
         w: f32,
     ) {
         use style::*;
+        let active = self.focus == focus;
         if active {
             highlight_row(x, ry, w);
         }
+        // Tapping the row body selects it (so the chart previews the leg); only the
+        // action chip commits — mirroring the market's row-vs-chip split.
+        self.record_hit(
+            row_rect(x, ry, w),
+            HitEffect::Select { focus, column: None, activate: false },
+        );
         // The haulage units jiggle red when accepting would overflow the hold.
         let (udx, ured) = self.flash_of(FlashTarget::Units(m.id)).unwrap_or((0.0, 0.0));
         draw_text(
@@ -1201,7 +1206,12 @@ impl PortScreen {
             right_text(&m.reward.to_string(), x + w * CON_REW_R, ry, FS_BODY);
         }
         let action_x = x + w * CON_ACT_X;
-        button(action_x, chip_y(ry), x + w - action_x, CHIP_H, chip, active);
+        let chip_rect = Rect::new(action_x, chip_y(ry), x + w - action_x, CHIP_H);
+        button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, chip, active);
+        self.record_hit(
+            chip_rect,
+            HitEffect::Select { focus, column: None, activate: true },
+        );
     }
 }
 
