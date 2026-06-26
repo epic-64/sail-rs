@@ -413,6 +413,25 @@ pub struct GameState {
     /// The wager race booked at a port, if any — armed until the player or the
     /// rival reaches the mark, or the captain withdraws (see [`crate::race`]).
     pub race: Option<Race>,
+    /// The captain's lifetime tally, kept across the whole voyage and shown on the
+    /// captain's log's record page. Persisted with the rest of the state.
+    pub stats: Stats,
+}
+
+/// The running ledger of a captain's career: contracts honoured, wagers won and
+/// lost, and the sea-miles logged. Accumulated for the life of a voyage (never
+/// reset by a refit or a trade) and surfaced on the captain's log's record spread.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stats {
+    /// Haulage contracts delivered to their destination (see [`GameState::deliver`]).
+    pub contracts_fulfilled: u32,
+    /// Wager races reached first (see [`GameState::win_race`]).
+    pub races_won: u32,
+    /// Wager races the rival reached first (see [`GameState::lose_race`]).
+    pub races_lost: u32,
+    /// Whole metres sailed over the voyage, banked from [`GameState::wear_distance`]
+    /// and shown as kilometres. Held as a float so short hops accumulate exactly.
+    pub meters_traveled: f64,
 }
 
 impl GameState {
@@ -431,6 +450,7 @@ impl GameState {
             hull_wear: 0.0,
             active_missions: Vec::new(),
             race: None,
+            stats: Stats::default(),
         }
     }
 
@@ -462,7 +482,13 @@ impl GameState {
     /// even a string of short hops grinds the planking down over a voyage.
     /// `meters` is the world-distance (1 unit = 1 m) covered this step.
     pub fn wear_distance(&mut self, meters: f64) {
-        if meters <= 0.0 || self.hull <= 0 {
+        if meters <= 0.0 {
+            return;
+        }
+        // Log the sea-miles first, before the hull guard: distance is tallied for
+        // the captain's record even on a wrecked (0-hull) hull that's still adrift.
+        self.stats.meters_traveled += meters;
+        if self.hull <= 0 {
             return;
         }
         let km = meters / 1000.0;
@@ -642,6 +668,7 @@ impl GameState {
             .ok_or(TradeError::NoDelivery)?;
         self.gold += mission.deposit + mission.reward;
         self.active_missions.retain(|m| m.id != mission.id);
+        self.stats.contracts_fulfilled += 1;
         Ok(())
     }
 
@@ -710,13 +737,16 @@ impl GameState {
         if let Some(r) = self.race {
             self.gold += r.stake * 2;
             self.race = None;
+            self.stats.races_won += 1;
         }
     }
 
     /// Settle a race the player has lost — the stake was already forfeited when the
     /// race was booked, so this only clears it. (`Race.lose`.)
     pub fn lose_race(&mut self) {
-        self.race = None;
+        if self.race.take().is_some() {
+            self.stats.races_lost += 1;
+        }
     }
 
     /// Abandon a booked race at port before it has started — the stake is handed
@@ -835,6 +865,29 @@ mod tests {
         let mut gs = GameState::start();
         gs.hull = gs.max_hull() / 2;
         assert_eq!(gs.caulk_with_plank(), Err(TradeError::NotEnoughCargo));
+    }
+
+    #[test]
+    fn lifetime_stats_tally_distance_races_and_contracts() {
+        let mut gs = GameState::start();
+        // Distance is logged in metres, even once the hull is wrecked and adrift.
+        gs.wear_distance(2_500.0);
+        gs.hull = 0;
+        gs.wear_distance(500.0);
+        assert!((gs.stats.meters_traveled - 3_000.0).abs() < 1e-9);
+
+        // A won race counts once and clears the wager; a lost one likewise.
+        gs.race = Some(Race { origin_id: 0, target_id: 1, stake: 100, required_level: 0 });
+        gs.win_race();
+        assert_eq!(gs.stats.races_won, 1);
+        assert!(gs.race.is_none());
+        gs.race = Some(Race { origin_id: 0, target_id: 1, stake: 100, required_level: 0 });
+        gs.lose_race();
+        assert_eq!(gs.stats.races_lost, 1);
+        // With no race afoot, settling again is a no-op and doesn't pad the tally.
+        gs.win_race();
+        gs.lose_race();
+        assert_eq!((gs.stats.races_won, gs.stats.races_lost), (1, 1));
     }
 
     #[test]

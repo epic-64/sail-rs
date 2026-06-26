@@ -11,6 +11,8 @@
 //!    parchment [[crate::minimap]] (the opening spread, the look kept from before).
 //! 1. **The Vessel** | **The Hold** — purse/hull/rig figures, and the manifest.
 //! 2. **Bearings** | **Performance** — contract/race/shipyard headings, and FPS.
+//! 3. **The Ledger** | **The Wager Book** — the captain's lifetime tally: contracts
+//!    honoured and sea-miles logged, then the race record (see `game_state::Stats`).
 
 use macroquad::prelude::*;
 
@@ -27,7 +29,7 @@ use crate::ui::{
 use crate::world::World;
 
 /// How many two-page spreads the book holds; `main` clamps the page cursor to this.
-pub const NUM_SPREADS: usize = 3;
+pub const NUM_SPREADS: usize = 4;
 
 /// How many pressable buttons the given spread carries — `main` uses it to clamp
 /// the Up/Down selection cursor. Only the Vessel spread (1) has one so far: the
@@ -164,9 +166,13 @@ pub fn render(
             page_vessel(&left, gs, sel);
             page_hold(&right, gs);
         }
-        _ => {
+        2 => {
             page_bearings(&left, world, kin, gs);
             page_performance(&right, frame_dt);
+        }
+        _ => {
+            page_ledger(&left, gs);
+            page_wagers(&right, gs);
         }
     }
 
@@ -504,4 +510,42 @@ fn page_performance(p: &Page, frame_dt: f32) {
     row("FPS", &format!("{}", get_fps()), p.x, y, p.col_w, fs);
     y += lh;
     row("Frame time", &format!("{:.1} ms", frame_dt * 1000.0), p.x, y, p.col_w, fs);
+}
+
+/// **The Ledger** — the lifetime tally of honest work: contracts honoured and the
+/// sea-miles logged over the whole voyage (see [`crate::game_state::Stats`]).
+fn page_ledger(p: &Page, gs: &GameState) {
+    heading(p, "The Ledger");
+
+    let fs = fs_body();
+    let lh = line_h(fs);
+    let mut y = p.body_y;
+
+    let st = &gs.stats;
+    row("Contracts fulfilled", &format!("{}", st.contracts_fulfilled), p.x, y, p.col_w, fs);
+    y += lh * 1.4;
+    draw_line(p.x, y - lh * 0.5, p.x + p.col_w, y - lh * 0.5, px(1.0), dim_ink());
+
+    // Distance logged, shown in the same km/m form as the rest of the UI.
+    row("Distance sailed", &format_dist(st.meters_traveled as f32), p.x, y, p.col_w, fs);
+}
+
+/// **The Wager Book** — the captain's racing record: wagers won, wagers lost, and
+/// the tally of races sailed.
+fn page_wagers(p: &Page, gs: &GameState) {
+    heading(p, "The Wager Book");
+
+    let fs = fs_body();
+    let lh = line_h(fs);
+    let mut y = p.body_y;
+
+    let st = &gs.stats;
+    row("Races won", &format!("{}", st.races_won), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Races lost", &format!("{}", st.races_lost), p.x, y, p.col_w, fs);
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+    let sailed = st.races_won + st.races_lost;
+    row("Races sailed", &format!("{sailed}"), p.x, y, p.col_w, fs);
 }
