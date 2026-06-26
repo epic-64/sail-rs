@@ -28,6 +28,10 @@ use crate::sailing::Kinematics;
 
 /// The storage key (a `localStorage` entry on the web, a `<KEY>.sav` file natively).
 const KEY: &str = "sailrs_save";
+/// A separate key for global preferences that aren't voyage state (so they survive a
+/// change of world and don't ride the per-seed save). Currently just the scenery
+/// density level (the pause-menu performance slider).
+const SETTINGS_KEY: &str = "sailrs_settings";
 /// First line of a save; bumped if the format changes so old saves are rejected.
 const MAGIC: &str = "sailrs-save-v1";
 
@@ -93,13 +97,16 @@ impl Save {
             &mut o,
             "stats",
             &format!(
-                "{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{}",
                 s.contracts_fulfilled,
                 s.contract_earnings,
                 s.races_won,
                 s.races_lost,
                 s.race_winnings,
-                s.meters_traveled
+                s.meters_traveled,
+                s.flotsam_collected,
+                s.flotsam_gold,
+                s.days_passed
             ),
         );
         // A rival on the water: its position and the race phase, so a running race
@@ -261,6 +268,16 @@ pub fn clear() {
     backend::remove(KEY);
 }
 
+/// Persist the scenery-density level (a global preference, see [`SETTINGS_KEY`]).
+pub fn store_feat_density(level: usize) {
+    backend::write(SETTINGS_KEY, &level.to_string());
+}
+
+/// Read the saved scenery-density level, if one was stored and parses.
+pub fn load_feat_density() -> Option<usize> {
+    backend::read(SETTINGS_KEY).and_then(|s| s.trim().parse().ok())
+}
+
 // --- Serialisation helpers ---------------------------------------------------
 
 /// Append a `key=value` line.
@@ -330,6 +347,9 @@ fn parse_stats(v: &str) -> Stats {
         races_lost: field(3).parse().unwrap_or(0),
         race_winnings: field(4).parse().unwrap_or(0),
         meters_traveled: field(5).parse().unwrap_or(0.0),
+        flotsam_collected: field(6).parse().unwrap_or(0),
+        flotsam_gold: field(7).parse().unwrap_or(0),
+        days_passed: field(8).parse().unwrap_or(0),
     }
 }
 
@@ -464,6 +484,9 @@ mod tests {
             races_lost: 2,
             race_winnings: -150,
             meters_traveled: 123_456.5,
+            flotsam_collected: 31,
+            flotsam_gold: 1_870,
+            days_passed: 12,
         };
         Save {
             seed: 42,
