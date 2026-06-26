@@ -245,6 +245,9 @@ mod style {
     pub fn border_w() -> f32 {
         px(1.5) // chip / outline stroke thickness
     }
+    pub fn tab_underline() -> f32 {
+        px(3.5) // the thick rule under the entered (active) tab
+    }
     /// Baseline drop from a line's vertical centre, as a fraction of font size —
     /// used to vertically centre text in a chip (a ratio, not scaled).
     pub const CAP_RATIO: f32 = 0.35;
@@ -592,9 +595,15 @@ impl PortScreen {
     ) -> bool {
         let n = crate::touch_ui::nav_cluster(screen_width(), screen_height());
 
-        // Cast off: Esc, or the cluster's ✕.
+        // Back out: Esc, or the cluster's ✕. With the cursor down in a tab's rows
+        // it first lifts back up to the tab bar; pressed again on the bar it casts
+        // off and closes the board.
         if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
-            return true;
+            if self.focus == Focus::TabBar {
+                return true;
+            }
+            self.focus = Focus::TabBar;
+            return false;
         }
         // Tab cycles the board (keyboard only — touch taps the tab labels direct).
         if is_key_pressed(KeyCode::Tab) {
@@ -804,7 +813,7 @@ impl PortScreen {
 
         // Footer hint.
         draw_text(
-            "Arrows move · Tab switches board · Enter trades · Esc sets sail",
+            "Arrows move · Tab switches board · Enter trades · Esc backs out",
             left,
             y0 + ph - pad(),
             fs_small() as f32,
@@ -819,18 +828,23 @@ impl PortScreen {
         let bw = dims.width + 2.0 * tab_pad_x();
         let bh = tab_h();
         self.record_hit(Rect::new(x, y, bw, bh), HitEffect::Tab(tab));
-        let active = self.tab == tab;
-        if active {
+        let active = self.tab == tab; // the board this tab shows is the one on screen
+        let highlighted = active && on_bar; // the cursor is resting on this tab
+        if highlighted {
+            // The cursor highlight: filled, the same as a focused chip.
             draw_rectangle(x, y, bw, bh, chip_fill());
-            // A lit ring while the cursor rests on the bar.
-            if on_bar {
-                draw_rectangle_lines(x, y, bw, bh, border_w() + 1.0, tab_ring());
-            }
         } else {
             draw_rectangle_lines(x, y, bw, bh, border_w(), parchment_edge());
         }
-        let c = if active { parchment() } else { ink() };
+        let c = if highlighted { parchment() } else { ink() };
         draw_text(label, x + tab_pad_x(), y + bh / 2.0 + fs_body() as f32 * CAP_RATIO, fs_body() as f32, c);
+        // Once a tab is entered (the cursor has dropped into its rows) it sheds the
+        // highlight and is marked active by a thick underline instead, so the cursor
+        // down in the body is never confused with the tab it came from.
+        if active && !on_bar {
+            let uy = y + bh;
+            draw_line(x, uy, x + bw, uy, tab_underline(), ink());
+        }
         x + bw + tab_gap()
     }
 
@@ -1492,11 +1506,6 @@ fn right_text_flash(text: &str, right_x: f32, y: f32, fs: u16, flash: Option<(f3
 /// The filled colour of a focused chip / active tab.
 fn chip_fill() -> Color {
     Color::new(0.31, 0.19, 0.09, 1.0)
-}
-
-/// The lit gold ring around the active tab while the cursor rests on the bar.
-fn tab_ring() -> Color {
-    Color::new(0.85, 0.66, 0.30, 1.0)
 }
 
 /// A small action chip: filled when focused, outlined otherwise, label centred.
