@@ -138,14 +138,13 @@ impl IsleTerrain {
         // the noise-waves then fold the slopes. Volcanic keeps a recognisable cone;
         // rocky is the craggiest; green/jungle roll gently.
         let mut peaks = Vec::new();
-        let relief;
-        match isle.terrain {
+        let relief = match isle.terrain {
             IsleKind::Volcanic => {
                 peaks.push(peak(&mut rng, 0.0, 0.10, h, 0.30));
                 if rng.next_f64() < 0.6 {
                     peaks.push(peak(&mut rng, 0.20, 0.42, h * 0.5, 0.22));
                 }
-                relief = h * 0.22;
+                h * 0.22
             }
             IsleKind::Rocky => {
                 peaks.push(peak(&mut rng, 0.0, 0.16, h, 0.30));
@@ -154,7 +153,7 @@ impl IsleTerrain {
                     let hh = rng.between(0.5, 0.85) as f32 * h;
                     peaks.push(peak(&mut rng, 0.18, 0.48, hh, 0.22));
                 }
-                relief = h * 0.42;
+                h * 0.42
             }
             IsleKind::Green | IsleKind::Jungle => {
                 peaks.push(peak(&mut rng, 0.0, 0.18, h, 0.36));
@@ -163,9 +162,9 @@ impl IsleTerrain {
                     let hh = rng.between(0.5, 0.85) as f32 * h;
                     peaks.push(peak(&mut rng, 0.18, 0.46, hh, 0.30));
                 }
-                relief = h * 0.32;
+                h * 0.32
             }
-        }
+        };
 
         // Overlapping height-waves: four octaves of directional value-noise, each
         // half the wavelength and ~half the amplitude of the last. The longest is a

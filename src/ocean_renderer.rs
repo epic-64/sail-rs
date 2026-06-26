@@ -22,9 +22,10 @@ use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::isle_features::IsleFeature;
 use crate::islands_render::{paint_island, IslandView};
 use crate::ocean;
-use crate::palette::{self, Palette, PALETTE_LEN};
+use crate::palette::{self, Palette};
 use crate::projection::BASE_EYE;
 use crate::sailing::Kinematics;
+use crate::scene::SceneView;
 use crate::world::Island;
 
 /// Vertical exaggeration applied to wave displacement (and to the ship's heave,
@@ -215,17 +216,6 @@ impl OceanRenderer {
         }
     }
 
-    /// The current far / mid / near water colours (daytime-eased, storm-blended),
-    /// so a static distant backdrop can read the same depth ramp. Valid after
-    /// [`OceanRenderer::render`].
-    pub fn water_ramp(&self) -> (Color, Color, Color) {
-        (
-            col3(self.p_far, 1.0),
-            col3(self.p_mid, 1.0),
-            col3(self.p_near, 1.0),
-        )
-    }
-
     fn live_col(&self, o: usize) -> [f32; 3] {
         [self.shown[o], self.shown[o + 1], self.shown[o + 2]]
     }
@@ -279,9 +269,15 @@ impl OceanRenderer {
         let k = clamp(dt * 0.9, 0.0, 1.0);
         let target = *target_sea;
         let storm_blend = clamp(storm, 0.0, 1.0) * 0.9;
-        for p in 0..PALETTE_LEN {
-            self.live[p] += (target[p] - self.live[p]) * k;
-            self.shown[p] = self.live[p] + (palette::STORM_PALETTE[p] - self.live[p]) * storm_blend;
+        for (((live, shown), &tgt), &storm) in self
+            .live
+            .iter_mut()
+            .zip(self.shown.iter_mut())
+            .zip(target.iter())
+            .zip(palette::STORM_PALETTE.iter())
+        {
+            *live += (tgt - *live) * k;
+            *shown = *live + (storm - *live) * storm_blend;
         }
         self.p_near = self.live_col(0);
         self.p_mid = self.live_col(3);
@@ -315,6 +311,25 @@ impl OceanRenderer {
 
         let fwd = Vec2::from_heading(kin.heading_rad);
         let right = Vec2::new(kin.heading_rad.cos(), -kin.heading_rad.sin());
+
+        // The per-frame sea camera, handed to every billboard and the flow pass so
+        // each reads the projection it needs instead of a dozen positional floats.
+        // `light` here is `rival_light` — the scene light the floating objects take.
+        let scene = SceneView {
+            kin,
+            t,
+            sea,
+            heave,
+            light: rival_light,
+            horizon,
+            px_per_rad,
+            px_per_rad_h,
+            half_fov_h_view,
+            fwd,
+            right,
+            w,
+            h,
+        };
 
         // Active-light direction in the camera's (right, forward, up) frame. The
         // altitude is passed as its sine (the vertical component); the horizontal
@@ -362,10 +377,7 @@ impl OceanRenderer {
             }
             if let (Some(rk), Some(d)) = (rival, rival_dist) {
                 if d >= f {
-                    crate::rival_render::draw(
-                        &rk, kin, t, sea, heave, rival_light, horizon, px_per_rad,
-                        half_fov_h_view, w, crate::rival_render::RIVAL_PENNANT,
-                    );
+                    crate::rival_render::draw(&rk, &scene, crate::rival_render::RIVAL_PENNANT);
                     rival_done = true;
                 }
             }
@@ -434,16 +446,14 @@ impl OceanRenderer {
             draw_rival(f);
             while trd_idx < traders.len() && kin.pos.distance_to(traders[trd_idx].pos) >= f {
                 crate::rival_render::draw(
-                    &traders[trd_idx], kin, t, sea, heave, rival_light, horizon, px_per_rad,
-                    half_fov_h_view, w, crate::rival_render::TRADER_PENNANT,
+                    &traders[trd_idx],
+                    &scene,
+                    crate::rival_render::TRADER_PENNANT,
                 );
                 trd_idx += 1;
             }
             while flot_idx < flotsam.len() && kin.pos.distance_to(flotsam[flot_idx].0) >= f {
-                crate::flotsam_render::draw(
-                    flotsam[flot_idx].0, flotsam[flot_idx].1, kin, t, sea, heave, rival_light,
-                    horizon, px_per_rad, half_fov_h_view, w,
-                );
+                crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
                 flot_idx += 1;
             }
 
@@ -482,25 +492,17 @@ impl OceanRenderer {
         draw_rival(0.0);
         // Any traders nearer than the closest band stand in front of all the water.
         while trd_idx < traders.len() {
-            crate::rival_render::draw(
-                &traders[trd_idx], kin, t, sea, heave, rival_light, horizon, px_per_rad,
-                half_fov_h_view, w, crate::rival_render::TRADER_PENNANT,
-            );
+            crate::rival_render::draw(&traders[trd_idx], &scene, crate::rival_render::TRADER_PENNANT);
             trd_idx += 1;
         }
         // Any salvage nearer than the closest band floats in front of all the water.
         while flot_idx < flotsam.len() {
-            crate::flotsam_render::draw(
-                flotsam[flot_idx].0, flotsam[flot_idx].1, kin, t, sea, heave, rival_light, horizon,
-                px_per_rad, half_fov_h_view, w,
-            );
+            crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
             flot_idx += 1;
         }
 
         // Streak the surface flecks on top of the finished wave mesh.
-        self.paint_flow(
-            kin, t, sea, heave, horizon, px_per_rad, px_per_rad_h, half_fov_h_view, fwd, right, w, h,
-        );
+        self.paint_flow(&scene);
     }
 
     /// Fill the strip of quads between the previous (farther) row and the current
@@ -723,22 +725,22 @@ impl OceanRenderer {
     /// Scatter the world-anchored foam flecks over the near water, each smeared
     /// from where it sat one shutter ago to where it sits now — its real
     /// screen-space optical flow.
-    #[allow(clippy::too_many_arguments)]
-    fn paint_flow(
-        &self,
-        kin: &Kinematics,
-        t: f32,
-        sea: f32,
-        heave: f32,
-        horizon: f32,
-        px_per_rad: f32,
-        px_per_rad_h: f32,
-        half_fov_h_view: f32,
-        fwd: Vec2,
-        right: Vec2,
-        w: f32,
-        h: f32,
-    ) {
+    fn paint_flow(&self, view: &SceneView) {
+        let SceneView {
+            kin,
+            t,
+            sea,
+            heave,
+            horizon,
+            px_per_rad,
+            px_per_rad_h,
+            half_fov_h_view,
+            fwd,
+            right,
+            w,
+            h,
+            ..
+        } = *view;
         let max_phi = half_fov_h_view * self.fov_margin;
         // The camera one shutter ago: way is made along the heading, so the gap
         // between a fleck's old and new screen spot is the optical flow we draw.
@@ -785,7 +787,7 @@ impl OceanRenderer {
                 // Occlude flecks behind a swell: march the surface along this bearing
                 // out toward the fleck; if a nearer point rises above it on screen,
                 // an opaque crest stands in front. Early-out on the first hit.
-                if self.flow_occluded(kin, d, dist, t, sea, heave, horizon, px_per_rad, sy) {
+                if self.flow_occluded(view, d, dist, sy) {
                     continue;
                 }
                 let sz = clamp(220.0 / f, 0.6, 3.0) * (0.7 + jx * 0.6);
@@ -807,19 +809,16 @@ impl OceanRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn flow_occluded(
-        &self,
-        kin: &Kinematics,
-        d: Vec2,
-        dist: f32,
-        t: f32,
-        sea: f32,
-        heave: f32,
-        horizon: f32,
-        px_per_rad: f32,
-        sy: f32,
-    ) -> bool {
+    fn flow_occluded(&self, view: &SceneView, d: Vec2, dist: f32, sy: f32) -> bool {
+        let SceneView {
+            kin,
+            t,
+            sea,
+            heave,
+            horizon,
+            px_per_rad,
+            ..
+        } = *view;
         let ray_dir = d * (1.0 / dist);
         let mut dd = self.flow_near + self.flow_step;
         let mut steps = 0;

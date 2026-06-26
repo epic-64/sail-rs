@@ -44,7 +44,6 @@ pub struct Cluster {
     pub id: i32,
     pub name: String,
     pub center: Vec2,
-    pub radius: f32,
     pub island_ids: Vec<i32>,
 }
 
@@ -220,7 +219,6 @@ pub fn generate(seed: i64) -> World {
             id: c_idx,
             name: cname,
             center,
-            radius: CLUSTER_RADIUS as f32,
             island_ids,
         });
         islands.extend(isles);

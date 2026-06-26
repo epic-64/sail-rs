@@ -112,6 +112,7 @@ fn clip_segment(x0: f32, y0: f32, x1: f32, y1: f32, r: Rect) -> Option<(f32, f32
 
 /// Draw a dashed line from (x0,y0) to (x1,y1) — macroquad only draws solid lines,
 /// so we lay down `dash`-long segments separated by `gap`.
+#[allow(clippy::too_many_arguments)] // two endpoints + stroke style is inherent
 fn draw_dashed_line(x0: f32, y0: f32, x1: f32, y1: f32, thick: f32, dash: f32, gap: f32, color: Color) {
     let dx = x1 - x0;
     let dy = y1 - y0;

@@ -242,7 +242,6 @@ mod tests {
                 id: 0,
                 name: "Waters".into(),
                 center: Vec2::ZERO,
-                radius: 20000.0,
                 island_ids: vec![0, 1, 2, 3, 4, 5],
             }],
         }
@@ -420,7 +419,7 @@ mod tests {
     fn a_long_leg_demands_a_sturdier_hull() {
         let world = race_world();
         let mut gs = flush_docked();
-        let target = targets_at(&gs, &world).into_iter().last().unwrap(); // furthest port
+        let target = targets_at(&gs, &world).into_iter().next_back().unwrap(); // furthest port
         let (stake, required) = offer_terms(&world.islands[0], target);
         assert!(required >= 1, "the furthest leg should demand a better hull");
         // The stake carries no tier premium — it is just the bare quadratic leg wager.

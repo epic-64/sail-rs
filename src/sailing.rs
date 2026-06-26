@@ -68,7 +68,10 @@ impl Wind {
     /// Drive multiplier for a hull on `heading_rad` in this wind, in [0, MAX_BOOST].
     /// Zero inside the no-go zone; jumps to `FLOOR_DRIVE` the instant the bow falls
     /// off, climbs to the `MAX_BOOST` peak at a beam reach, then eases to `RUN_DRIVE`
-    /// dead before the wind. `shared.Wind.factor`.
+    /// dead before the wind. `shared.Wind.factor`. The renderer reads the curve via
+    /// `wind_factor_rel` directly, so this faithful-port wrapper is exercised only by
+    /// the tests that pin the drive curve.
+    #[allow(dead_code)]
     pub fn factor(&self, heading_rad: f32) -> f32 {
         wind_factor_rel(wrap_angle(self.toward_rad - heading_rad))
     }

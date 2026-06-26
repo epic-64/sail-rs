@@ -12,6 +12,7 @@ use std::f32::consts::{PI, TAU};
 
 use crate::geometry::{clamp, wrap_angle};
 use crate::rng::Rng;
+use crate::scene::SkyView;
 
 /// The world bearing the sun transits at noon: due south (0 = N, CW), so it climbs
 /// the southern sky like the real northern-hemisphere sun.
@@ -170,21 +171,16 @@ fn mix(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
 }
 
 /// Draw a soft glowing disc (sun or moon) with a faint halo.
-#[allow(clippy::too_many_arguments)]
-fn draw_body(
-    az: f32,
-    alt: f32,
-    heading: f32,
-    half_fov_h: f32,
-    w: f32,
-    horizon: f32,
-    r: f32,
-    color: (f32, f32, f32),
-    vis: f32,
-) {
+fn draw_body(view: &SkyView, az: f32, alt: f32, r: f32, color: (f32, f32, f32), vis: f32) {
     if vis <= 0.01 {
         return;
     }
+    let SkyView {
+        heading,
+        half_fov_h,
+        w,
+        horizon,
+    } = *view;
     let Some((x, y)) = project(az, alt, heading, half_fov_h, w, horizon) else {
         return;
     };
@@ -225,18 +221,13 @@ fn draw_streak(x: f32, y: f32, half_len: f32, half_thick: f32, color: (f32, f32,
 /// Paint the stars (behind), then the moon, then the sun — all above the horizon,
 /// so the sea drawn afterwards covers anything dipping below it. `storm` dims the
 /// whole sky toward overcast.
-#[allow(clippy::too_many_arguments)]
-pub fn draw(
-    sky: &Sky,
-    stars: &StarField,
-    t: f32,
-    heading: f32,
-    half_fov_h: f32,
-    w: f32,
-    h: f32,
-    horizon: f32,
-    storm: f32,
-) {
+pub fn draw(sky: &Sky, stars: &StarField, t: f32, view: &SkyView, h: f32, storm: f32) {
+    let SkyView {
+        heading,
+        half_fov_h,
+        w,
+        horizon,
+    } = *view;
     let dim = 1.0 - clamp(storm, 0.0, 1.0); // overcast swallows the stars and moon
 
     let star_a = sky.star_alpha * dim;
@@ -280,7 +271,7 @@ pub fn draw(
     if sky.moon_alt > -0.03 {
         // A touch dimmer than before, so the moon glows softly rather than glaring.
         let vis = clamp(sky.moon_alt * 2.0, 0.0, 1.0) * dim * 0.7;
-        draw_body(sky.moon_az, sky.moon_alt, heading, half_fov_h, w, horizon, h * 0.038, (230.0, 234.0, 242.0), vis);
+        draw_body(view, sky.moon_az, sky.moon_alt, h * 0.038, (230.0, 234.0, 242.0), vis);
     }
 
     // Drawn until the whole disc has dipped below the horizon (the sea, painted
@@ -326,6 +317,6 @@ pub fn draw(
                 vis = (dim * (1.0 + 0.5 * flash)).min(1.0);
             }
         }
-        draw_body(sky.sun_az, sky.sun_alt, heading, half_fov_h, w, horizon, r, color, vis);
+        draw_body(view, sky.sun_az, sky.sun_alt, r, color, vis);
     }
 }
