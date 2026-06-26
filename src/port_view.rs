@@ -930,11 +930,13 @@ impl PortScreen {
                 gs.max_hull(),
                 (hull::fraction(gs) * 100.0).round() as i32
             );
-            draw_text("Hull · Mend", x, base, fs_body() as f32, ink());
+            draw_text("Hull status", x, base, fs_body() as f32, ink());
             draw_text(&cond, val_x, base, fs_body() as f32, ink());
-            let dmg = hull::damage(gs);
-            let cost = if dmg <= 0 { "—".to_string() } else { hull::repair_cost(gs).to_string() };
-            cost_chip(ry, bh, &cost, if dmg <= 0 { "Sound" } else { "Repair" }, active);
+            // Only a damaged hull shows a price and a Repair chip; a sound hull
+            // (100%) has nothing to mend, so we drop both.
+            if hull::damage(gs) > 0 {
+                cost_chip(ry, bh, &hull::repair_cost(gs).to_string(), "Repair", active);
+            }
             // Extra breathing room before the next section heading.
             ry += bh + gap() * 2.0;
         }
@@ -1016,13 +1018,37 @@ impl PortScreen {
                 ry += bh;
             }
         } else {
+            // Every archipelago has exactly one shipyard (its first port), so there's
+            // always one in these waters — name it, and how far it lies, rather than
+            // leaving the captain to hunt blind.
+            let here = &world.islands[self.island_id as usize];
+            let cluster = world.cluster_at(here.pos);
+            let yard = world.cluster_islands(cluster).into_iter().find(|i| i.is_shipyard);
             draw_text(
-                "No shipyard here — find a shipyard port to outfit.",
+                "No shipyard here. A shipyard outfits your vessel: a sturdier hull,",
                 x,
                 ry + step,
                 fs_body() as f32,
                 dim_ink(),
             );
+            draw_text(
+                "more sail, and a larger hold.",
+                x,
+                ry + step * 2.0,
+                fs_body() as f32,
+                dim_ink(),
+            );
+            if let Some(y) = yard {
+                let to_yard = here.pos.bearing_to(y.pos);
+                let msg = format!(
+                    "The {}'s shipyard lies at {} ({} {}).",
+                    cluster.name,
+                    y.name,
+                    format_dist(here.pos.distance_to(y.pos)),
+                    crate::geometry::compass(to_yard),
+                );
+                draw_text(&msg, x, ry + step * 3.0, fs_body() as f32, dim_ink());
+            }
         }
     }
 
@@ -1362,7 +1388,7 @@ pub fn render_prompt(
 
 // The ink / parchment palette and the type scale are shared with the captain's log;
 // see `crate::ui`.
-use crate::ui::{alarm_ink, dim_ink, ink, parchment, parchment_edge};
+use crate::ui::{alarm_ink, dim_ink, format_dist, ink, parchment, parchment_edge};
 
 fn row_highlight() -> Color {
     Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28)
