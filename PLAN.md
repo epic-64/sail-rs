@@ -1,5 +1,26 @@
 # Plan: Mobile (touch) controls for sail-rs
 
+> **Status (in progress).** Core controls landed and compiling (native + wasm):
+> `src/touch.rs` (pointer/tap/drag/hit-test layer, mouse-driven for desktop
+> testing, dormant until a real touch or `SAIL_TOUCH=1`), `src/touch_ui.rs`
+> (on-screen sailing HUD + menu nav cluster), wired into `main.rs`,
+> `port_view.rs`, `pause_menu.rs`, and the log paging. Web shell gets
+> `touch-action: none`.
+>
+> **Two deliberate scope calls vs. the design below:**
+> 1. **Menus use an on-screen nav cluster** (d-pad + ✓/✕ + Tab) that emits the
+>    existing arrow/Enter/Esc verbs, rather than per-button tap rects. The board's
+>    type/spacing is ~100 tokenised call sites with no bare literals; registering
+>    hit-rects from `render` is a bigger, riskier refactor that deserves its own
+>    pass. The cluster reuses 100% of the board/menu logic and is robust now.
+>    *Follow-up:* direct tap-to-activate on board rows/cells.
+> 2. **The `ui_scale` readability pass is deferred** (same ~100 call sites). On a
+>    high-DPI phone the parchment text will be small until this lands. *Follow-up:*
+>    route the `ui.rs` / `port_view::style` tokens through a screen-derived scale.
+>
+> Seed entry on mobile still needs a soft keyboard (noted in §9).
+
+
 **Target:** the existing WASM / itch.io build, played in a mobile browser
 (landscape phones & tablets). Native mobile is out of scope for now, but the
 touch layer is written platform-agnostically so a future `cargo-apk` build gets

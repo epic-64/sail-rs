@@ -21,6 +21,33 @@
 use macroquad::prelude::*;
 
 use crate::sound::SoundBank;
+use crate::touch::TouchState;
+
+/// The menu's directional verbs for this frame, OR-ing the keyboard with taps on
+/// the on-screen nav cluster (see `touch_ui`). The seed field still needs the
+/// keyboard (digit entry) — a soft keyboard is a later job.
+struct Nav {
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    confirm: bool,
+    back: bool,
+}
+
+impl Nav {
+    fn read(touch: &TouchState) -> Nav {
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), false);
+        Nav {
+            up: is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up),
+            down: is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down),
+            left: is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left),
+            right: is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right),
+            confirm: is_key_pressed(KeyCode::Enter) || touch.tapped_in(n.confirm),
+            back: is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back),
+        }
+    }
+}
 
 /// Which page of the menu is showing.
 #[derive(Clone, Copy, PartialEq)]
@@ -129,25 +156,26 @@ impl PauseMenu {
 
     /// Handle one frame of input while the menu is up. Returns the action the main
     /// loop should take. The master-volume slider writes straight to `sounds`.
-    pub fn handle_input(&mut self, sounds: &mut SoundBank) -> PauseAction {
+    pub fn handle_input(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
+        let nav = Nav::read(touch);
         match self.view {
-            View::Main => self.input_main(),
-            View::Options => self.input_options(sounds),
+            View::Main => self.input_main(&nav),
+            View::Options => self.input_options(sounds, &nav, touch),
         }
     }
 
-    fn input_main(&mut self) -> PauseAction {
-        if is_key_pressed(KeyCode::Down) {
+    fn input_main(&mut self, nav: &Nav) -> PauseAction {
+        if nav.down {
             self.cursor = (self.cursor + 1) % MAIN_ITEMS.len();
         }
-        if is_key_pressed(KeyCode::Up) {
+        if nav.up {
             self.cursor = (self.cursor + MAIN_ITEMS.len() - 1) % MAIN_ITEMS.len();
         }
         // Esc resumes — the same gesture that opened the menu closes it.
-        if is_key_pressed(KeyCode::Escape) {
+        if nav.back {
             return PauseAction::Resume;
         }
-        if is_key_pressed(KeyCode::Enter) {
+        if nav.confirm {
             match self.cursor {
                 0 => return PauseAction::Resume,
                 1 => {
@@ -160,29 +188,28 @@ impl PauseMenu {
         PauseAction::None
     }
 
-    fn input_options(&mut self, sounds: &mut SoundBank) -> PauseAction {
-        if is_key_pressed(KeyCode::Down) {
+    fn input_options(&mut self, sounds: &mut SoundBank, nav: &Nav, touch: &TouchState) -> PauseAction {
+        if nav.down {
             self.cursor = (self.cursor + 1) % OPTIONS_ROWS;
         }
-        if is_key_pressed(KeyCode::Up) {
+        if nav.up {
             self.cursor = (self.cursor + OPTIONS_ROWS - 1) % OPTIONS_ROWS;
         }
         // The seed field owns the keyboard while focused: digits edit it, Backspace
         // deletes, Enter applies, Esc backs out. Handle it on its own and return so
-        // none of the toggle/slider logic below sees the keys.
+        // none of the toggle/slider logic below sees the keys. (Touch can move the
+        // cursor here and back out, but typing a seed still needs a keyboard.)
         if self.cursor == ROW_SEED {
-            return self.input_seed(sounds);
+            return self.input_seed(sounds, nav, touch);
         }
-        // A row's toggle is worked with Enter or Left/Right.
-        let toggled = is_key_pressed(KeyCode::Enter)
-            || is_key_pressed(KeyCode::Left)
-            || is_key_pressed(KeyCode::Right);
+        // A row's toggle is worked with Enter / confirm or Left/Right.
+        let toggled = nav.confirm || nav.left || nav.right;
         // The slider (master volume): Left/Right nudge the master gain a notch.
         if self.cursor == ROW_MASTER {
-            if is_key_pressed(KeyCode::Right) {
+            if nav.right {
                 sounds.set_master(snap(sounds.master() + MASTER_STEP));
             }
-            if is_key_pressed(KeyCode::Left) {
+            if nav.left {
                 sounds.set_master(snap(sounds.master() - MASTER_STEP));
             }
         }
@@ -199,9 +226,8 @@ impl PauseMenu {
             self.fullscreen = !self.fullscreen;
             set_fullscreen(self.fullscreen);
         }
-        // Back to the main view, whether by Esc or Enter on the Back row.
-        let back = is_key_pressed(KeyCode::Escape)
-            || (is_key_pressed(KeyCode::Enter) && self.cursor == ROW_BACK);
+        // Back to the main view, whether by Esc/back or Enter on the Back row.
+        let back = nav.back || (nav.confirm && self.cursor == ROW_BACK);
         if back {
             self.view = View::Main;
             self.cursor = 1; // land back on Options
@@ -213,14 +239,16 @@ impl PauseMenu {
     /// to the length cap), Backspace deletes, Enter applies, Esc backs out to Main.
     /// A character the rule won't take — a non-digit, or a digit past the cap —
     /// is rejected with the standard buzzer + red jiggle, never silently dropped.
-    fn input_seed(&mut self, sounds: &mut SoundBank) -> PauseAction {
+    fn input_seed(&mut self, sounds: &mut SoundBank, nav: &Nav, _touch: &TouchState) -> PauseAction {
         if is_key_pressed(KeyCode::Backspace) {
             self.seed_text.pop();
         }
         if is_key_pressed(KeyCode::Enter) {
             return self.apply_seed(sounds);
         }
-        if is_key_pressed(KeyCode::Escape) {
+        // A touch tap on back (or Esc) leaves the field. Moving the cursor off the
+        // seed row is handled by `input_options` before it dispatches here.
+        if nav.back {
             self.view = View::Main;
             self.cursor = 1; // land back on Options
             return PauseAction::None;

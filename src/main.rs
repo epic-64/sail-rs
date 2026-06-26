@@ -31,6 +31,8 @@ mod scene;
 mod ship_render;
 mod sound;
 mod spray;
+mod touch;
+mod touch_ui;
 mod trader;
 mod ui;
 mod weather;
@@ -513,6 +515,11 @@ async fn run_game(
     // crosses to new waters (see `trader.rs`).
     let mut traders = trader::TraderFleet::new(&world, kin.pos);
 
+    // The mobile touch-control layer: turns finger taps/holds/drags into the same
+    // verbs the keyboard emits (see `touch.rs` / `touch_ui.rs`). Dormant until a
+    // real touch is seen, so desktop play is unchanged.
+    let mut touch = touch::TouchState::new();
+
     // Floating salvage drifting on the swell: crates, barrels and the rare
     // strongbox the captain scoops by sailing over them. Per-frame and seeded off
     // the world, topped up to keep fresh salvage ahead of the bow. A pickup flashes
@@ -541,6 +548,11 @@ async fn run_game(
         let h = screen_height();
         let horizon = h * 0.54;
 
+        // Refresh the touch pointers for this frame, then lay out the sailing HUD
+        // (the same rects the draw below uses). Done before any input is read.
+        touch.update(dt);
+        let hud = touch_ui::sail_hud(w, h);
+
         // Default every surface to the sans face each frame; the captain's log and the
         // port boards re-skin themselves to serif as they draw (see `font.rs`). Reset
         // here so last frame's serif board doesn't leak into this frame's HUD.
@@ -554,7 +566,7 @@ async fn run_game(
         // again by the helm's own Esc handler and reopen the menu the same frame.
         let paused = pause.open;
         if paused {
-            match pause.handle_input(sounds) {
+            match pause.handle_input(sounds, &touch) {
                 pause_menu::PauseAction::Resume => pause.open = false,
                 pause_menu::PauseAction::Quit => {
                     // Persist the voyage before leaving so quitting resumes here.
@@ -633,7 +645,7 @@ async fn run_game(
                 let set_sail = harbor
                     .screen
                     .as_mut()
-                    .map(|s| s.handle_input(&mut gs, &world, &market, sounds))
+                    .map(|s| s.handle_input(&mut gs, &world, &market, sounds, &touch))
                     .unwrap_or(true);
                 if set_sail {
                     harbor.set_sail(&mut gs);
@@ -658,10 +670,17 @@ async fn run_game(
             // While the log is open the up/down arrows are reserved (alongside
             // left/right) for the book, so only W/S work the sail.
             let prev_sail = sail_mode;
-            if is_key_pressed(KeyCode::W) || (!log_open && is_key_pressed(KeyCode::Up)) {
+            // The on-screen sail buttons are hidden while the log is open (the nav
+            // cluster takes that corner), so their taps are gated on `!log_open`,
+            // just like the arrow keys.
+            if is_key_pressed(KeyCode::W)
+                || (!log_open && (is_key_pressed(KeyCode::Up) || touch.tapped_in(hud.sail_up)))
+            {
                 sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
             }
-            if is_key_pressed(KeyCode::S) || (!log_open && is_key_pressed(KeyCode::Down)) {
+            if is_key_pressed(KeyCode::S)
+                || (!log_open && (is_key_pressed(KeyCode::Down) || touch.tapped_in(hud.sail_down)))
+            {
                 sail_mode = sail_mode.saturating_sub(1);
             }
             // A canvas flap only when the sail actually moved a notch (not when a
@@ -671,8 +690,16 @@ async fn run_game(
             } else if sail_mode < prev_sail {
                 sounds.sail_down();
             }
+            // Steer with the keys, or with the touch wheel when a finger has it (the
+            // wheel is hidden — and so ignored — while the log is open).
+            let mut turn = read_turn(log_open);
+            if !log_open {
+                if let Some(v) = touch.steering(hud.wheel) {
+                    turn = v;
+                }
+            }
             helm = Helm {
-                turn: read_turn(log_open),
+                turn,
                 throttle: SAIL_FRACTIONS[sail_mode],
             };
 
@@ -789,7 +816,10 @@ async fn run_game(
 
             // Offer the port the bow is pointed at; tie up on Space, sails struck.
             harbor.update_dockable(&world, &kin);
-            if is_key_pressed(KeyCode::Space) && sail_mode == 0 && harbor.try_dock(&mut gs) {
+            if (is_key_pressed(KeyCode::Space) || touch.tapped_in(hud.dock))
+                && sail_mode == 0
+                && harbor.try_dock(&mut gs)
+            {
                 log_open = false;
             }
 
@@ -815,7 +845,7 @@ async fn run_game(
             if is_key_pressed(KeyCode::Y) {
                 tod = (tod - 0.02).rem_euclid(1.0);
             }
-            if is_key_pressed(KeyCode::L) {
+            if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
                 log_open = !log_open;
                 // Open the book to its first spread each time (the original rewinds
                 // to spread 0 on close).
@@ -825,13 +855,19 @@ async fn run_game(
                 }
             }
             // Page the open log with the left/right arrows (no mouse to click the
-            // original's nav arrows). Clamped at the covers — no wrap-around.
+            // original's nav arrows), or the on-screen nav cluster on touch. Clamped
+            // at the covers — no wrap-around.
             if log_open {
-                if is_key_pressed(KeyCode::Right) {
+                let n = touch_ui::nav_cluster(w, h, false);
+                // The nav cluster's back button closes the book on touch.
+                if touch.tapped_in(n.back) {
+                    log_open = false;
+                }
+                if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
                     log_spread = (log_spread + 1).min(captains_log::NUM_SPREADS - 1);
                     log_sel = 0;
                 }
-                if is_key_pressed(KeyCode::Left) {
+                if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
                     log_spread = log_spread.saturating_sub(1);
                     log_sel = 0;
                 }
@@ -841,18 +877,24 @@ async fn run_game(
                 // caulks the hull with a plank; a no-op without timber or on a sound hull.
                 let buttons = captains_log::button_count(log_spread);
                 if buttons > 0 {
-                    if is_key_pressed(KeyCode::Up) {
+                    if is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up) {
                         log_sel = log_sel.saturating_sub(1);
                     }
-                    if is_key_pressed(KeyCode::Down) {
+                    if is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down) {
                         log_sel = (log_sel + 1).min(buttons - 1);
                     }
-                    if is_key_pressed(KeyCode::Enter) && log_spread == 1 && log_sel == 0 {
+                    if (is_key_pressed(KeyCode::Enter) || touch.tapped_in(n.confirm))
+                        && log_spread == 1
+                        && log_sel == 0
+                    {
                         let _ = gs.caulk_with_plank();
                     }
                 }
             }
-            if is_key_pressed(KeyCode::Escape) {
+            // The pause button raises the menu while sailing; it's hidden while the
+            // log is open (the book is closed with Esc / the cluster's back instead).
+            let pause_tap = !log_open && touch.tapped_in(hud.pause);
+            if is_key_pressed(KeyCode::Escape) || pause_tap {
                 if log_open {
                     log_open = false;
                 } else {
@@ -969,8 +1011,10 @@ async fn run_game(
         // a view-only copy of the kinematics carries the flipped heading into every
         // bearing-relative draw below, and the forward deck/spray are hidden while it's
         // held. Suppressed when a board or the log owns the screen.
-        let look_back =
-            is_key_down(KeyCode::C) && !log_open && !harbor.is_open() && !pause.open;
+        let look_back = (is_key_down(KeyCode::C) || touch.held_in(hud.astern))
+            && !log_open
+            && !harbor.is_open()
+            && !pause.open;
         let view_heading = if look_back {
             wrap_angle(kin.heading_rad + std::f32::consts::PI)
         } else {
@@ -1338,6 +1382,28 @@ async fn run_game(
         // The pause menu sits over everything (it only opens in open water).
         if pause.open {
             pause.render(sounds, w, h);
+        }
+
+        // --- Touch controls overlay --------------------------------------------
+        // Drawn last so it sits over every surface, and only once the touch layer
+        // has woken (a real touch, or SAIL_TOUCH on native) — so desktop play is
+        // untouched. A menu shows the nav cluster (the board adds a Tab button);
+        // open water shows the sailing helm.
+        if touch.active() {
+            if pause.open || log_open {
+                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, false));
+            } else if harbor.is_open() {
+                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, true));
+            } else {
+                touch_ui::draw_sail_hud(
+                    &hud,
+                    helm.turn,
+                    sail_mode,
+                    SAIL_FRACTIONS.len() - 1,
+                    harbor.dockable.is_some(),
+                    look_back,
+                );
+            }
         }
 
         // Periodic autosave: while the world is live (not frozen by the pause menu),
