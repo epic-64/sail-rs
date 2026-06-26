@@ -723,12 +723,14 @@ impl OceanRenderer {
                     road += pl.on_facet(s_mid, f_near_row, mid_z, nx, ny, nz, vx, vy, vz);
                 }
                 if road > 0.0 {
-                    let q = clamp(road, 0.0, 1.0);
+                    // The town road reads far too hot; scale it right down so it sits as
+                    // a faint shimmer on the night sea rather than a bright glitter road.
+                    let q = clamp(road * 0.12, 0.0, 1.0);
                     r += (road_r - r) * q;
                     g += (road_g - g) * q;
                     b += (road_b - b) * q;
                     // Hot cores whiten so the glitter road sparkles rather than smears.
-                    let hot = q * q * q * 0.6;
+                    let hot = q * q * q * 0.3;
                     r += (255.0 - r) * hot;
                     g += (255.0 - g) * hot;
                     b += (255.0 - b) * hot;
