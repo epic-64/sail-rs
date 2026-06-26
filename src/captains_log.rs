@@ -21,8 +21,8 @@ use crate::sailing::{Kinematics, Wind, KNOT};
 // The ink/parchment palette, the type scale and `format_dist` are shared with the
 // port board; see `crate::ui`. Only the log's own warning inks live below.
 use crate::ui::{
-    dim_ink, format_dist, fs_body, fs_chip, fs_heading, fs_small, fs_title, ink, line_h, parchment,
-    parchment_edge, px,
+    alarm_ink, dim_ink, format_dist, fs_body, fs_chip, fs_heading, fs_small, fs_title, ink, line_h,
+    parchment, parchment_edge, px,
 };
 use crate::world::World;
 
@@ -39,14 +39,11 @@ pub fn button_count(spread: usize) -> usize {
     }
 }
 
-/// Warning inks for a battered hull / overladen hold (amber → red), matching the
-/// original's `log-damaged` / `log-crippled` value classes — the log's own, atop the
-/// shared parchment palette.
+/// Warning ink for a battered hull (amber), matching the original's `log-damaged`
+/// value class — the log's own, atop the shared parchment palette. The deeper
+/// `log-crippled` red is [`crate::ui::alarm_ink`], shared with the port header.
 fn warn_ink() -> Color {
     Color::new(150.0 / 255.0, 78.0 / 255.0, 20.0 / 255.0, 1.0)
-}
-fn alarm_ink() -> Color {
-    Color::new(150.0 / 255.0, 38.0 / 255.0, 24.0 / 255.0, 1.0)
 }
 
 /// Draw a label (left) and value (right-aligned) within a column of width `col_w`.

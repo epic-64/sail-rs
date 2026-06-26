@@ -718,14 +718,37 @@ impl PortScreen {
             draw_text(&port.name, left, name_y, fs_title() as f32, ink());
         });
 
-        // Purse, right-aligned in the header. Either lights red and jiggles when an
-        // action runs out of coin (the purse) or out of hold room (the tally).
+        // Purse + hold tally, right-aligned in the header. The gold lights red and
+        // jiggles when an action runs out of coin; the hold tally does the same when
+        // it runs out of room. The hold line also carries the sail's haul tolerance.
+        let used = gs.hold_used();
+        let cap = gs.hold_capacity;
+        let haul = upgrades::max_haul(gs.sail_level);
         let gold = format!("Gold {}", gs.gold);
-        let hold = format!("Hold {}/{}", gs.hold_used(), gs.hold_capacity);
+        let hold = format!("Hold {used}/{cap} · Sail tolerance {haul}");
         let gold_y = y0 + pad() + fs_heading() as f32;
         let hold_y = gold_y + line_h(fs_small());
         right_text_flash(&gold, right, gold_y, fs_heading(), self.flash_of(FlashTarget::Gold));
         right_text_flash(&hold, right, hold_y, fs_small(), self.flash_of(FlashTarget::Hold));
+
+        // A laden-fill bar beneath the tally, mirroring the captain's-log hold bar:
+        // the hold's laden fraction, with a notch at the sail's haul tolerance. It
+        // turns red once the load passes that tolerance — i.e. once she's overladen
+        // and taking the overload penalty.
+        let bar_w = px(150.0);
+        let bar_h = px(7.0);
+        let bar_x = right - bar_w;
+        let fill_top = hold_y + line_h(fs_small()) * 0.4;
+        let overladen = used > haul;
+        draw_rectangle(bar_x, fill_top, bar_w, bar_h, Color::new(0.0, 0.0, 0.0, 0.10));
+        let frac = if cap > 0 { (used as f32 / cap as f32).clamp(0.0, 1.0) } else { 0.0 };
+        let fill_col = if overladen { alarm_ink() } else { parchment_edge() };
+        draw_rectangle(bar_x, fill_top, bar_w * frac, bar_h, fill_col);
+        draw_rectangle_lines(bar_x, fill_top, bar_w, bar_h, px(1.0), dim_ink());
+        if cap > 0 && haul < cap {
+            let nx = bar_x + bar_w * (haul as f32 / cap as f32).clamp(0.0, 1.0);
+            draw_line(nx, fill_top - px(2.0), nx, fill_top + bar_h + px(2.0), px(1.5), alarm_ink());
+        }
 
         let bar_y = name_y + gap();
         rule(left, bar_y, inner_w);
@@ -887,7 +910,9 @@ impl PortScreen {
         };
 
         // ===== Drydock — hull repair: one line ==============================
-        let mut ry = section("DRYDOCK · HULL REPAIR", x, y, w);
+        // Pull the first row up snug under the heading rule (the section advance
+        // plus the row's own top pad otherwise stack ~two blank lines).
+        let mut ry = section("DRYDOCK · HULL REPAIR", x, y, w) - gap();
         {
             let active = self.focus == Focus::Repair;
             let bh = step + gap();
@@ -910,11 +935,12 @@ impl PortScreen {
             let dmg = hull::damage(gs);
             let cost = if dmg <= 0 { "—".to_string() } else { hull::repair_cost(gs).to_string() };
             cost_chip(ry, bh, &cost, if dmg <= 0 { "Sound" } else { "Repair" }, active);
-            ry += bh + gap();
+            // Extra breathing room before the next section heading.
+            ry += bh + gap() * 2.0;
         }
 
         // ===== Shipyard — hull / sails / hold fittings ======================
-        ry = section("SHIPYARD · OUTFITTING", x, ry, w);
+        ry = section("SHIPYARD · OUTFITTING", x, ry, w) - gap();
         if self.is_shipyard(world) {
             for kind in [UpgradeKind::Hull, UpgradeKind::Sail, UpgradeKind::Cargo] {
                 let active = self.focus == Focus::Upgrade(kind);
@@ -928,9 +954,10 @@ impl PortScreen {
                     _ => format!("{} · Lv {}", kind.label(), lvl0 + 1),
                 };
 
-                // The fitting's data lines: the current→next gain, and (for hull and
-                // sails) a live readout of how the ship stands today. The hold shows
-                // only its slot count — its live "in use" is already on the purse line.
+                // The fitting's data lines: the current→next gain, plus (for the hull)
+                // a live readout of how the ship stands today. The sail and hold show
+                // only their tolerance/slot count — live "in use" is on the purse line
+                // and the hold-vs-tolerance bar in the header.
                 let mut lines: Vec<(&str, String)> = Vec::new();
                 match kind {
                     UpgradeKind::Hull => {
@@ -949,12 +976,11 @@ impl PortScreen {
                     UpgradeKind::Sail => {
                         let haul = upgrades::max_haul(gs.sail_level);
                         if maxed {
-                            lines.push(("Haul capacity", format!("{haul} units")));
+                            lines.push(("Cargo tolerance", format!("{haul} units")));
                         } else {
                             let h1 = upgrades::max_haul(gs.sail_level + 1);
-                            lines.push(("Haul capacity", format!("{haul}{ARROW}{h1} units")));
+                            lines.push(("Cargo tolerance", format!("{haul}{ARROW}{h1} units")));
                         }
-                        lines.push(("Now carrying", format!("{} / {} units", gs.hold_used(), haul)));
                     }
                     UpgradeKind::Cargo => {
                         let cap = gs.hold_capacity;
@@ -986,7 +1012,8 @@ impl PortScreen {
                     Some(c) => (c.to_string(), "Fit"),
                 };
                 cost_chip(ry, bh, &cost, label, active);
-                ry += bh + gap();
+                // `bh` already carries a trailing `gap()`; don't double it between rows.
+                ry += bh;
             }
         } else {
             draw_text(
@@ -1323,7 +1350,7 @@ pub fn render_prompt(
 
 // The ink / parchment palette and the type scale are shared with the captain's log;
 // see `crate::ui`.
-use crate::ui::{dim_ink, ink, parchment, parchment_edge};
+use crate::ui::{alarm_ink, dim_ink, ink, parchment, parchment_edge};
 
 fn row_highlight() -> Color {
     Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28)
