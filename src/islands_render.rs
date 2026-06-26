@@ -71,10 +71,15 @@ pub struct IslandView {
     /// World-space unit vector pointing toward the active light (x, y on chart;
     /// z up) — the sun by day, the moon by night.
     pub sun: (f32, f32, f32),
-    /// Overall brightness from the day/night clock (1 = full noon, ~0.3 deep
-    /// night), multiplied into every facet so the isle darkens to a moonlit
-    /// silhouette after dusk.
-    pub light: f32,
+    /// The directional ("key") light colour, day/night brightness already folded
+    /// in: warm-white at noon, blood-orange at dusk, dim cool-blue under the moon.
+    /// Lights the sun-facing portion of every facet ([`IslandView::lit`]).
+    pub key: (f32, f32, f32),
+    /// The ambient sky-fill colour with brightness: the hue the dome washes over
+    /// the shadowed faces (cool blue by day, purple-orange at dusk). Sets the floor
+    /// of every facet's shading, so the land takes the hour's colour rather than
+    /// only darkening into a grey silhouette.
+    pub ambient: (f32, f32, f32),
     /// How brightly the houses' windows burn (0 by day, 1 once the sun is well
     /// down): the dusk ramp from [`crate::port_lights::dusk_glow`]. Lights only the
     /// settlement on a port island.
@@ -318,14 +323,77 @@ fn palette(isle: &Island) -> ([f32; 3], [f32; 3]) {
     }
 }
 
+/// Multiply a base colour (0–255 channels) by a per-channel light multiplier and
+/// stamp an alpha. The multiplier carries both the day/night brightness and the
+/// hour's tint, so an island reddens at dusk and cools under the moon rather than
+/// just dimming.
 #[inline]
-fn col(base: [f32; 3], shade: f32, alpha: f32) -> Color {
+fn lit_col(base: [f32; 3], m: (f32, f32, f32), alpha: f32) -> Color {
     Color::new(
-        base[0] / 255.0 * shade,
-        base[1] / 255.0 * shade,
-        base[2] / 255.0 * shade,
+        base[0] / 255.0 * m.0,
+        base[1] / 255.0 * m.1,
+        base[2] / 255.0 * m.2,
         alpha,
     )
+}
+
+// --- Day/night island lighting -----------------------------------------------
+// The land is lit by two coloured lights pulled from the same time-of-day palette
+// the sea uses: a *key* (the sun by day, the moon by night) whose warmth swings
+// from white noon through blood-orange dusk to cool moonlight, and an *ambient*
+// sky fill that washes the shadowed faces with the colour of the dome overhead.
+// Each reference hue is normalised to pure chroma then eased back toward neutral by
+// these fractions, so the isles take the hour's colour without going as lurid as
+// the water and sky they stand against. Raise them for a more saturated land,
+// lower for a more muted one; 0 returns the old grey-only day/night dimming.
+const KEY_TINT: f32 = 0.7;
+const AMBIENT_TINT: f32 = 0.55;
+
+/// Normalise an RGB triple to pure chroma (mean channel = 1), then ease it back
+/// toward neutral grey: `sat` scales how strongly the resulting hue reads (0 = grey,
+/// 1 = full chroma).
+fn tint(c: [f32; 3], sat: f32) -> (f32, f32, f32) {
+    let mean = ((c[0] + c[1] + c[2]) / 3.0).max(1e-3);
+    let n = |x: f32| 1.0 + (x / mean - 1.0) * sat;
+    (n(c[0]), n(c[1]), n(c[2]))
+}
+
+/// The isles' key and ambient light colours for one frame. `brightness` is the
+/// overall day/night level (1 at noon, ~0.35 under the moon); `sun` is the key
+/// light's reference hue (the sea palette's warmth channel) and `sky` the ambient
+/// fill's (the sky dome). Both returned colours already fold in `brightness`, and
+/// reduce to neutral grey × `brightness` when their hues are colourless, so a flat
+/// white light leaves the old behaviour untouched.
+pub fn island_light(
+    brightness: f32,
+    sun: [f32; 3],
+    sky: [f32; 3],
+) -> ((f32, f32, f32), (f32, f32, f32)) {
+    let scale = |t: (f32, f32, f32)| (t.0 * brightness, t.1 * brightness, t.2 * brightness);
+    (scale(tint(sun, KEY_TINT)), scale(tint(sky, AMBIENT_TINT)))
+}
+
+impl IslandView {
+    /// The light multiplier on a facet whose Lambert term is `diff` (0 in shadow,
+    /// 1 fully sunlit): the ambient sky fill plus the key light scaled by the
+    /// facet's exposure. With neutral (grey) lights this is exactly the old
+    /// `brightness × (AMBIENT + (1 - AMBIENT) · diff)` shading.
+    #[inline]
+    fn lit(&self, diff: f32) -> (f32, f32, f32) {
+        let key = (1.0 - AMBIENT) * diff;
+        (
+            self.ambient.0 * AMBIENT + self.key.0 * key,
+            self.ambient.1 * AMBIENT + self.key.1 * key,
+            self.ambient.2 * AMBIENT + self.key.2 * key,
+        )
+    }
+
+    /// The flat, fully-lit multiplier (`diff` = 1) for the floor disc and the
+    /// billboard scenery, which carry no surface normal to shade against.
+    #[inline]
+    fn flat(&self) -> (f32, f32, f32) {
+        self.lit(1.0)
+    }
 }
 
 /// Project a world point at elevation `z` (m). When `waterline`, use the low
@@ -361,8 +429,10 @@ fn fill_poly(xs: &[f32], ys: &[f32], front: &[bool], color: Color) {
     }
 }
 
-/// Flat-shade a triangle from its world-space (x, y, z) corners against the sun.
-fn shade(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &IslandView) -> f32 {
+/// The raw Lambert diffuse term (0 in shadow, 1 face-on to the light) of a triangle,
+/// from its world-space (x, y, z) corners against the sun. The ambient floor and the
+/// light's colour are applied later by [`IslandView::lit`].
+fn diffuse(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &IslandView) -> f32 {
     let (ux, uy, uz) = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
     let (vx, vy, vz) = (c.0 - a.0, c.1 - a.1, c.2 - a.2);
     let (mut nx, mut ny, mut nz) = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
@@ -372,8 +442,7 @@ fn shade(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &IslandV
         nz = -nz;
     }
     let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
-    let diff = ((nx * v.sun.0 + ny * v.sun.1 + nz * v.sun.2) / len).max(0.0);
-    AMBIENT + (1.0 - AMBIENT) * diff
+    ((nx * v.sun.0 + ny * v.sun.1 + nz * v.sun.2) / len).max(0.0)
 }
 
 /// One ready-to-draw, depth-keyed mound triangle. Screen points are kept as plain
@@ -419,8 +488,8 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
         fill_poly(&xs, &ys, &front, color);
     };
-    floor_ring(1.10, col(SHADOW, v.light, alpha * 0.45));
-    floor_ring(1.0, col(sand, v.light, alpha));
+    floor_ring(1.10, lit_col(SHADOW, v.flat(), alpha * 0.45));
+    floor_ring(1.0, lit_col(sand, v.flat(), alpha));
 
     // --- Faceted heightfield body --------------------------------------------
     // Build a polar grid (rings × segments) of world (x, y, z) + screen points,
@@ -471,13 +540,13 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     let mut push = |base: [f32; 3],
                     a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32),
                     pa: (f32, f32), pb: (f32, f32), pc: (f32, f32)| {
-        let sh = shade(a, b, c, v);
+        let diff = diffuse(a, b, c, v);
         let cx = (a.0 + b.0 + c.0) / 3.0;
         let cy = (a.1 + b.1 + c.1) / 3.0;
         tris.push(Tri {
             key: kin.pos.distance_to(Vec2::new(cx, cy)),
             p: [pa, pb, pc],
-            color: col(base, sh * v.light, alpha),
+            color: lit_col(base, v.lit(diff), alpha),
         });
     };
     for lvl in 0..levels - 1 {
@@ -545,7 +614,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             continue;
         }
         let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
-        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v.light);
+        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v.flat());
         // After dusk the settlement's windows light up: a tiny warm or cold lamp in
         // each house, the watchtower carrying a brighter beacon. Drawn over the
         // building it belongs to, so it rides the island's depth slot and a nearer
@@ -643,7 +712,7 @@ fn feature_aspect(kind: FeatureKind) -> f32 {
 // ground, 1 = top), mapped to screen at (cx + lx·w, foot − ly·h). Two-tone where
 // it helps imply form, matching the faceted low-poly look.
 
-fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, light: f32) {
+fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, light: (f32, f32, f32)) {
     // Local→screen.
     let p = |lx: f32, ly: f32| vec2(cx + lx * w, foot - ly * h);
     let quad = |x0: f32, y0: f32, x1: f32, y1: f32, c: Color| {
@@ -653,10 +722,11 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
     let tri = |a: (f32, f32), b: (f32, f32), cc: (f32, f32), c: Color| {
         draw_triangle(p(a.0, a.1), p(b.0, b.1), p(cc.0, cc.1), c);
     };
-    // Shadow the module `rgba` with one dimmed by the day/night light, so every
-    // feature colour below darkens with the rest of the isle after dusk.
+    // Shadow the module `rgba` with one tinted by the day/night light, so every
+    // feature colour below takes the hour's warmth and darkens with the rest of the
+    // isle after dusk.
     let rgba = |c: [f32; 3], a: f32| {
-        Color::new(c[0] / 255.0 * light, c[1] / 255.0 * light, c[2] / 255.0 * light, a)
+        Color::new(c[0] / 255.0 * light.0, c[1] / 255.0 * light.1, c[2] / 255.0 * light.2, a)
     };
 
     const TRUNK: [f32; 3] = [92.0, 64.0, 40.0];
@@ -769,5 +839,68 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
             tri((-0.5, 0.1), (0.5, 0.5), (-0.34, 0.55), rgba(WRECK_DK, alpha));
             quad(0.02, 0.45, 0.14, 1.0, rgba(WOOD_DK, alpha));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A view lit by `key`/`ambient`, the camera fields left at harmless values
+    /// (only the light colours matter for the shading maths under test).
+    fn view(key: (f32, f32, f32), ambient: (f32, f32, f32)) -> IslandView {
+        IslandView {
+            w: 0.0,
+            horizon: 0.0,
+            px_per_rad: 0.0,
+            px_per_rad_h: 0.0,
+            half_fov_h_view: 0.0,
+            eye_rise: 0.0,
+            sun: (0.0, 0.0, 1.0),
+            key,
+            ambient,
+            lamp: 0.0,
+            t: 0.0,
+        }
+    }
+
+    /// A colourless (grey) light must reproduce the original scalar shading exactly:
+    /// `brightness × (AMBIENT + (1 - AMBIENT) · diff)`, on every channel. This is the
+    /// invariant that keeps daytime looking as it always did.
+    #[test]
+    fn neutral_light_matches_the_old_scalar_shading() {
+        let brightness = 0.8;
+        let (key, ambient) = island_light(brightness, [120.0, 120.0, 120.0], [40.0, 40.0, 40.0]);
+        let v = view(key, ambient);
+        for &diff in &[0.0, 0.3, 1.0] {
+            let want = brightness * (AMBIENT + (1.0 - AMBIENT) * diff);
+            let (r, g, b) = v.lit(diff);
+            for got in [r, g, b] {
+                assert!((got - want).abs() < 1e-5, "diff {diff}: {got} vs {want}");
+            }
+        }
+    }
+
+    /// A warm key light (orange sun) reddens the sunlit faces: the lit multiplier's
+    /// red channel outruns its blue. The shadowed floor (`diff` = 0) leans on the
+    /// ambient sky fill instead, so a cool sky there keeps blue ahead of red.
+    #[test]
+    fn warm_sun_reddens_lit_faces_cool_sky_fills_shadow() {
+        let (key, ambient) = island_light(1.0, [255.0, 112.0, 60.0], [40.0, 80.0, 160.0]);
+        let v = view(key, ambient);
+        let (r1, _, b1) = v.lit(1.0); // full sun
+        assert!(r1 > b1, "sunlit face should be warm: r {r1} <= b {b1}");
+        let (r0, _, b0) = v.lit(0.0); // shadow, ambient only
+        assert!(b0 > r0, "shadowed face should be cool: b {b0} <= r {r0}");
+    }
+
+    /// Brightness scales both lights linearly, so night is a dimmer version of the
+    /// same hue rather than a different colour.
+    #[test]
+    fn brightness_scales_the_lights() {
+        let (ka, aa) = island_light(1.0, [255.0, 112.0, 60.0], [40.0, 80.0, 160.0]);
+        let (kb, ab) = island_light(0.5, [255.0, 112.0, 60.0], [40.0, 80.0, 160.0]);
+        assert!((kb.0 - ka.0 * 0.5).abs() < 1e-5);
+        assert!((ab.2 - aa.2 * 0.5).abs() < 1e-5);
     }
 }

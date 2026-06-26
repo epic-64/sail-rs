@@ -352,6 +352,21 @@ impl OceanRenderer {
         let ly = light_rel.cos() * light_horiz;
         let lz = light_alt;
 
+        // Day/night island lighting: an overall brightness (never to full black, so a
+        // moonlit silhouette keeps a fifth of its daylight and its shape still reads),
+        // split into a coloured key light (hue from the sea palette's sun-warmth
+        // channel) and an ambient sky fill (hue from the mean of the sky dome). The
+        // land thus reddens at dusk and cools under the moon with the sea and sky,
+        // instead of only dimming. Both feed off the storm-blended live colours, so a
+        // gale drains the warmth toward pewter along with everything else.
+        let brightness = 0.22 + 0.78 * light_strength;
+        let sky_mean = [
+            (self.sky_zenith[0] + self.sky_horizon[0]) * 0.5,
+            (self.sky_zenith[1] + self.sky_horizon[1]) * 0.5,
+            (self.sky_zenith[2] + self.sky_horizon[2]) * 0.5,
+        ];
+        let (key, ambient) = crate::islands_render::island_light(brightness, self.p_sun, sky_mean);
+
         // Island view: same camera, with the light in *world* space (chart x/y, z up)
         // so the landmass facets shade consistently as the ship turns and the sun moves.
         let view = IslandView {
@@ -366,9 +381,8 @@ impl OceanRenderer {
                 light_az.cos() * light_horiz,
                 light_alt,
             ),
-            // Darken the whole isle into the night, never to full black — a moonlit
-            // silhouette keeps a fifth of its daylight so its shape still reads.
-            light: 0.22 + 0.78 * light_strength,
+            key,
+            ambient,
             lamp,
             t,
         };
