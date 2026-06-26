@@ -5,9 +5,10 @@
 //!   (lower-left), sail up/down (lower-right), dock (centre), and a stack of
 //!   pause / log / look-astern on the right;
 //! - the **menu nav cluster** ([`nav_cluster`] / [`draw_nav_cluster`]): a d-pad
-//!   plus confirm / back (and an optional Tab), which emit the same arrow / Enter
-//!   / Esc verbs the keyboard-driven boards already consume, so no board logic
-//!   changes.
+//!   plus confirm / back, which emit the same arrow / Enter / Esc verbs the
+//!   keyboard-driven pause menu and captain's log already consume. (The port
+//!   board is tapped directly — see [`crate::port_view`] — and shows only the
+//!   cast-off [`back_button`].)
 //!
 //! Each rect is derived from the screen size so the controls track rotation, and
 //! the hit-test (in `touch.rs`) and the draw here read the *same* layout fns —
@@ -188,8 +189,9 @@ pub fn draw_sail_hud(
 // Menu nav cluster
 // =====================================================================
 
-/// The menu nav cluster's hit-rects: a d-pad (lower-left), confirm / back
-/// (lower-right), and an optional Tab (top-centre, boards only).
+/// The menu nav cluster's hit-rects: a d-pad (lower-left) plus confirm / back
+/// (lower-right). Used by the pause menu and the captain's log (the port board is
+/// tapped directly instead).
 pub struct NavRects {
     pub up: Rect,
     pub down: Rect,
@@ -197,12 +199,10 @@ pub struct NavRects {
     pub right: Rect,
     pub confirm: Rect,
     pub back: Rect,
-    pub tab: Option<Rect>,
 }
 
-/// Lay out the nav cluster for a `w`×`h` screen. `with_tab` adds the Tab button
-/// (the port board cycles tabs; the pause menu and log don't).
-pub fn nav_cluster(w: f32, h: f32, with_tab: bool) -> NavRects {
+/// Lay out the nav cluster for a `w`×`h` screen.
+pub fn nav_cluster(w: f32, h: f32) -> NavRects {
     let mg = margin(h);
     let b = btn(h);
 
@@ -219,9 +219,20 @@ pub fn nav_cluster(w: f32, h: f32, with_tab: bool) -> NavRects {
     let confirm = Rect::new(w - mg - b, h - mg - b, b, b);
     let back = Rect::new(confirm.x - b - gap, h - mg - b, b, b);
 
-    let tab = with_tab.then(|| Rect::new(w * 0.5 - b, mg, 2.0 * b, b * 0.8));
+    NavRects { up, down, left, right, confirm, back }
+}
 
-    NavRects { up, down, left, right, confirm, back, tab }
+fn check(r: Rect) {
+    let c = center(r);
+    let s = r.w * 0.22;
+    draw_line(c.x - s, c.y, c.x - s * 0.2, c.y + s, EDGE_W + 1.0, glyph());
+    draw_line(c.x - s * 0.2, c.y + s, c.x + s, c.y - s, EDGE_W + 1.0, glyph());
+}
+fn cross(r: Rect) {
+    let c = center(r);
+    let s = r.w * 0.2;
+    draw_line(c.x - s, c.y - s, c.x + s, c.y + s, EDGE_W + 1.0, glyph());
+    draw_line(c.x - s, c.y + s, c.x + s, c.y - s, EDGE_W + 1.0, glyph());
 }
 
 /// Draw the nav cluster over an open board / menu.
@@ -236,23 +247,19 @@ pub fn draw_nav_cluster(n: &NavRects) {
     tri_right(n.right, glyph());
 
     panel(n.confirm, true);
-    // check mark
-    {
-        let c = center(n.confirm);
-        let s = n.confirm.w * 0.22;
-        draw_line(c.x - s, c.y, c.x - s * 0.2, c.y + s, EDGE_W + 1.0, glyph());
-        draw_line(c.x - s * 0.2, c.y + s, c.x + s, c.y - s, EDGE_W + 1.0, glyph());
-    }
+    check(n.confirm);
     panel(n.back, false);
-    // cross
-    {
-        let c = center(n.back);
-        let s = n.back.w * 0.2;
-        draw_line(c.x - s, c.y - s, c.x + s, c.y + s, EDGE_W + 1.0, glyph());
-        draw_line(c.x - s, c.y + s, c.x + s, c.y - s, EDGE_W + 1.0, glyph());
-    }
-    if let Some(tab) = n.tab {
-        panel(tab, false);
-        label(tab, "TAB", glyph());
-    }
+    cross(n.back);
+}
+
+/// The lone "cast off" (✕) button the port board shows — its rows and chips are
+/// tapped directly, so it needs no d-pad. Shares the nav cluster's back corner.
+pub fn back_button(w: f32, h: f32) -> Rect {
+    nav_cluster(w, h).back
+}
+
+/// Draw the board's cast-off button.
+pub fn draw_back_button(r: Rect) {
+    panel(r, false);
+    cross(r);
 }
