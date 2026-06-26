@@ -14,7 +14,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 // (filename, channels, bitrate) — ambience/SFX to mono 80k, the sailing music to
@@ -104,7 +104,7 @@ fn main() {
 }
 
 /// Locate an ffmpeg binary: first on PATH, then any vendored copy under `.tools/`.
-fn find_ffmpeg(manifest: &PathBuf) -> Option<PathBuf> {
+fn find_ffmpeg(manifest: &Path) -> Option<PathBuf> {
     let on_path = Command::new("ffmpeg")
         .arg("-version")
         .stdout(Stdio::null())

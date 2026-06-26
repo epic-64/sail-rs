@@ -117,7 +117,7 @@ pub fn generate(origin: &Island, world: &World) -> Vec<Mission> {
     let mut built = Vec::with_capacity(PER_PORT as usize);
     for slot in 0..PER_PORT {
         let good = *rng.pick(&Good::ALL);
-        let target: &Island = *rng.pick(&others);
+        let target = *rng.pick(&others);
         // The last `BULK_SLOTS` slots are heavy bulk hauls (up to 64 units, a maxed
         // hold); the rest are the everyday small jobs.
         let is_bulk = slot >= PER_PORT - BULK_SLOTS;
@@ -173,7 +173,6 @@ mod tests {
                 id: 0,
                 name: "Waters".into(),
                 center: Vec2::ZERO,
-                radius: 4000.0,
                 island_ids: vec![0, 1],
             }],
         }
@@ -287,6 +286,6 @@ mod tests {
         let mut gs = flush_state();
         let contract = offered_at(&gs, &world)[0];
         gs.accept(&world, contract.id).unwrap();
-        assert!(!offered_at(&gs, &world).iter().any(|m| *m == contract));
+        assert!(!offered_at(&gs, &world).contains(&contract));
     }
 }

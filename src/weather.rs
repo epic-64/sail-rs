@@ -95,9 +95,10 @@ impl Weather {
         let ord = self.ordinal();
         if ord == 0 {
             self.stormier()
-        } else if ord == Self::LADDER.len() - 1 {
-            self.calmer()
-        } else if rng.next_f64() < CALM_BIAS {
+        } else if ord == Self::LADDER.len() - 1 || rng.next_f64() < CALM_BIAS {
+            // At the stormy end there is only one way to go; in the middle it eases
+            // calmer with probability `CALM_BIAS`. The `||` short-circuits at the end
+            // so the rng draw still happens only on the middle rungs (draw order intact).
             self.calmer()
         } else {
             self.stormier()

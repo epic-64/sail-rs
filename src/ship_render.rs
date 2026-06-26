@@ -103,6 +103,7 @@ impl ShipRenderer {
     }
 
     /// Advance the eased trim, then draw the deck and rig for this frame.
+    #[allow(clippy::too_many_arguments)] // per-frame rig + swell + camera inputs
     pub fn render(
         &mut self,
         rig: &RigInput,
@@ -372,6 +373,7 @@ impl ShipRenderer {
     /// luff), then the whole yard rotated about the mast (the brace) before
     /// projecting through the fake perspective. Panels draw back-to-front so the
     /// curved surface overlaps correctly.
+    #[allow(clippy::too_many_arguments)] // sway/projection inputs for the rig
     fn draw_rig(
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,

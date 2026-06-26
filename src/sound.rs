@@ -300,13 +300,9 @@ fn decode_mp3_to_wav(bytes: &'static [u8]) -> Vec<u8> {
     let mut rate: u32 = 44_100;
     let mut buf: Option<SampleBuffer<i16>> = None;
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            // Symphonia signals end-of-stream as an IO `UnexpectedEof`; any other
-            // read error ends decoding too — we keep whatever we got.
-            Err(_) => break,
-        };
+    // Symphonia signals end-of-stream as an IO `UnexpectedEof`; any other read
+    // error ends decoding too — we keep whatever we got and stop.
+    while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
             continue;
         }

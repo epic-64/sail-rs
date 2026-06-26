@@ -17,7 +17,7 @@ use crate::geometry::{clamp, Vec2};
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
 use crate::projection::{BASE_EYE, MAX_VIEW};
-use crate::sailing::Kinematics;
+use crate::scene::SceneView;
 
 const TOP_M: f32 = 3.0; // metres from the waterline to the top of the object
 const MAG: f32 = 1.6; // drawn a touch larger than life so it stays spottable
@@ -28,22 +28,21 @@ const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
 /// Called inside the world-camera pass (interleaved with the wave bands) so it
 /// rides the camera ride and sits on the painted sea. `heave` is the player's
 /// heave (the camera's rise); `light` dims it into the night with the scene.
-#[allow(clippy::too_many_arguments)]
-pub fn draw(
-    pos: Vec2,
-    kind: FlotsamKind,
-    kin: &Kinematics,
-    t: f32,
-    sea: f32,
-    heave: f32,
-    light: f32,
-    horizon: f32,
-    px_per_rad: f32,
-    half_fov_h_view: f32,
-    w: f32,
-) {
+pub fn draw(pos: Vec2, kind: FlotsamKind, view: &SceneView) {
+    let SceneView {
+        kin,
+        t,
+        sea,
+        heave,
+        light,
+        horizon,
+        px_per_rad,
+        half_fov_h_view,
+        w,
+        ..
+    } = *view;
     let d = kin.pos.distance_to(pos);
-    if d < 1.0 || d > MAX_VIEW {
+    if !(1.0..=MAX_VIEW).contains(&d) {
         return;
     }
     let phi = crate::geometry::wrap_angle(kin.pos.bearing_to(pos) - kin.heading_rad);
