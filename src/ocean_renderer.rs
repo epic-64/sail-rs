@@ -260,10 +260,10 @@ impl OceanRenderer {
         // How brightly the harbour lights burn (the dusk ramp): fed to the island
         // view so a port's houses light their windows after dark.
         lamp: f32,
-        // The harbour-light reflection glints, sorted *descending* by distance
-        // (farthest first) like the salvage, so each sparkle slots into the depth
-        // march and nearer crests occlude it instead of shining through the swell.
-        glints: &[crate::port_lights::Glint],
+        // The visible ports' town lights (after dusk). Each is baked into the per-
+        // facet wave shading as a low, warm local light, so the road is occluded by
+        // nearer crests for free instead of shining through the swell.
+        lights: &[crate::port_lights::PortLight],
     ) {
         // Ease the live palette toward the clock's target with a slow cross-fade,
         // then blend toward the cold storm palette by the gale's fury.
@@ -318,6 +318,10 @@ impl OceanRenderer {
 
         let fwd = Vec2::from_heading(kin.heading_rad);
         let right = Vec2::new(kin.heading_rad.cos(), -kin.heading_rad.sin());
+
+        // Resolve the visible ports' town lights into this frame's camera basis once,
+        // so the band march can shade each into the wave facets without re-projecting.
+        let cam_lights = crate::port_lights::camera_frame(lights, kin, fwd, right);
 
         // The per-frame sea camera, handed to every billboard and the flow pass so
         // each reads the projection it needs instead of a dozen positional floats.
@@ -380,10 +384,6 @@ impl OceanRenderer {
         // the band march descends past its distance (farthest first), so nearer bands
         // then paint over it just as they do the islands' bases.
         let mut flot_idx = 0;
-        // Harbour-light glints march in alongside the salvage, each drawn once the
-        // band march descends past its distance (farthest first) so nearer crests
-        // then paint over it.
-        let mut glint_idx = 0;
         let mut draw_rival = |f: f32| {
             if rival_done {
                 return;
@@ -469,13 +469,9 @@ impl OceanRenderer {
                 crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
                 flot_idx += 1;
             }
-            while glint_idx < glints.len() && kin.pos.distance_to(glints[glint_idx].pos) >= f {
-                crate::port_lights::draw(&glints[glint_idx], &scene);
-                glint_idx += 1;
-            }
 
             if j > 0 {
-                self.paint_band(f, prev_f - f, sea, lx, ly, lz);
+                self.paint_band(f, prev_f - f, sea, lx, ly, lz, &cam_lights);
             }
 
             std::mem::swap(&mut self.prev_y, &mut self.cur_y);
@@ -517,11 +513,6 @@ impl OceanRenderer {
             crate::flotsam_render::draw(flotsam[flot_idx].0, flotsam[flot_idx].1, &scene);
             flot_idx += 1;
         }
-        // Any glints nearer than the closest band sparkle in front of all the water.
-        while glint_idx < glints.len() {
-            crate::port_lights::draw(&glints[glint_idx], &scene);
-            glint_idx += 1;
-        }
 
         // Streak the surface flecks on top of the finished wave mesh.
         self.paint_flow(&scene);
@@ -529,8 +520,20 @@ impl OceanRenderer {
 
     /// Fill the strip of quads between the previous (farther) row and the current
     /// (nearer) row, shading each from its slope against the sun. `f_near_row` is
-    /// the current row's distance, used for the depth-based base colour.
-    fn paint_band(&self, f_near_row: f32, row_df: f32, sea: f32, lx: f32, ly: f32, lz: f32) {
+    /// the current row's distance, used for the depth-based base colour. `lights` are
+    /// the visible ports' town lights (camera frame), baked into each facet as a warm
+    /// local light so the harbour road shades the water like a low sun.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_band(
+        &self,
+        f_near_row: f32,
+        row_df: f32,
+        sea: f32,
+        lx: f32,
+        ly: f32,
+        lz: f32,
+        lights: &[crate::port_lights::CamLight],
+    ) {
         let depth = clamp((f_near_row - self.f_near) / (self.depth_far - self.f_near), 0.0, 1.0);
         let [near_r, near_g, near_b] = self.p_near;
         let [mid_r, mid_g, mid_b] = self.p_mid;
@@ -573,6 +576,8 @@ impl OceanRenderer {
         let crest_r = clamp(cr_lum + (cr_r - cr_lum) * 1.5, 0.0, 255.0);
         let crest_g = clamp(cr_lum + (cr_g - cr_lum) * 1.5, 0.0, 255.0);
         let crest_b = clamp(cr_lum + (cr_b - cr_lum) * 1.5, 0.0, 255.0);
+
+        let (road_r, road_g, road_b) = crate::port_lights::ROAD_COL;
 
         let nearness = 1.0 - depth;
         let max_amp = (0.4_f32).max(ocean::MAX_AMPLITUDE * sea);
@@ -708,6 +713,26 @@ impl OceanRenderer {
                 r += (glint_r - r) * sp;
                 g += (glint_g - g) * sp;
                 b += (glint_b - b) * sp;
+            }
+            // Harbour town lights: a warm pool on the swell faces turned toward the
+            // port, plus a Blinn-Phong glitter road toward the eye. Independent of the
+            // scene light (the town burns its own lamps), so it lifts the night sea.
+            if !lights.is_empty() {
+                let mut road = 0.0;
+                for pl in lights {
+                    road += pl.on_facet(s_mid, f_near_row, mid_z, nx, ny, nz, vx, vy, vz);
+                }
+                if road > 0.0 {
+                    let q = clamp(road, 0.0, 1.0);
+                    r += (road_r - r) * q;
+                    g += (road_g - g) * q;
+                    b += (road_b - b) * q;
+                    // Hot cores whiten so the glitter road sparkles rather than smears.
+                    let hot = q * q * q * 0.6;
+                    r += (255.0 - r) * hot;
+                    g += (255.0 - g) * hot;
+                    b += (255.0 - b) * hot;
+                }
             }
             if foam > 0.0 {
                 // Whitecaps fade into the water as the light fails and take on the
