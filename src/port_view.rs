@@ -538,7 +538,12 @@ impl PortScreen {
         }
     }
 
-    /// Read keys and drive the board. Returns true when the captain sets sail.
+    /// Read input and drive the board. Returns true when the captain sets sail.
+    ///
+    /// Three ways in, all converging on the same `cycle_tab`/`move_cursor`/
+    /// `activate`: the keyboard; the on-screen nav cluster (an emulated d-pad +
+    /// ✓/✕ for captains who'd rather not tap precisely); and direct taps on the
+    /// tabs/rows/chips themselves (the regions `render` recorded last frame).
     pub fn handle_input(
         &mut self,
         gs: &mut GameState,
@@ -547,66 +552,82 @@ impl PortScreen {
         sounds: &SoundBank,
         touch: &TouchState,
     ) -> bool {
-        // --- Keyboard (unchanged) ------------------------------------------
-        if is_key_pressed(KeyCode::Escape) {
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height());
+
+        // Cast off: Esc, or the cluster's ✕.
+        if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
             return true;
         }
+        // Tab cycles the board (keyboard only — touch taps the tab labels direct).
         if is_key_pressed(KeyCode::Tab) {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             self.cycle_tab(if back { -1 } else { 1 });
         }
-        if is_key_pressed(KeyCode::Up) {
+
+        // Directional verbs: keyboard arrows or the nav cluster's d-pad / ✓.
+        let up = is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up);
+        let down = is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down);
+        let left = is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left);
+        let right = is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right);
+        let confirm =
+            is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || touch.tapped_in(n.confirm);
+
+        if up {
             self.move_cursor(gs, world, -1);
         }
-        if is_key_pressed(KeyCode::Down) {
+        if down {
             self.move_cursor(gs, world, 1);
         }
-        if is_key_pressed(KeyCode::Left) {
+        if left {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(-1),
                 Focus::Good(_) if self.column > 0 => self.column -= 1,
                 _ => self.slide_tab(gs, world, -1),
             }
         }
-        if is_key_pressed(KeyCode::Right) {
+        if right {
             match self.focus {
                 Focus::TabBar => self.cycle_tab(1),
                 Focus::Good(_) if self.column < LAST_COLUMN => self.column += 1,
                 _ => self.slide_tab(gs, world, 1),
             }
         }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) {
+        if confirm {
             self.activate(gs, world, market, sounds);
         }
 
-        // --- Touch: tap a tab / row / chip directly ------------------------
-        // The ✕ button casts off; otherwise resolve the tap against the regions
-        // `render` recorded last frame and drive the same `cycle_tab`/`activate`.
-        if touch.tapped_in(crate::touch_ui::back_button(screen_width(), screen_height())) {
-            return true;
-        }
-        // Resolve to the *smallest* region the tap falls in, so an action chip
-        // nested inside its select-only row wins over the row.
-        let hit = self
-            .hits
-            .borrow()
-            .iter()
-            .filter(|hr| touch.tapped_in(hr.rect))
-            .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
-            .map(|hr| hr.effect);
-        if let Some(effect) = hit {
-            match effect {
-                HitEffect::Tab(tab) => {
-                    self.tab = tab;
-                    self.focus = Focus::TabBar;
-                }
-                HitEffect::Select { focus, column, activate } => {
-                    self.focus = focus;
-                    if let Some(c) = column {
-                        self.column = c;
+        // Direct tap-to-activate on the board — tabs, rows, chips — *unless* this
+        // tap already worked a nav-cluster button (so a cluster press sitting over a
+        // row doesn't also fire the row beneath it).
+        let cluster_used = touch.tapped_in(n.up)
+            || touch.tapped_in(n.down)
+            || touch.tapped_in(n.left)
+            || touch.tapped_in(n.right)
+            || touch.tapped_in(n.confirm);
+        if !cluster_used {
+            // Resolve to the *smallest* region the tap falls in, so an action chip
+            // nested inside its select-only row wins over the row.
+            let hit = self
+                .hits
+                .borrow()
+                .iter()
+                .filter(|hr| touch.tapped_in(hr.rect))
+                .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
+                .map(|hr| hr.effect);
+            if let Some(effect) = hit {
+                match effect {
+                    HitEffect::Tab(tab) => {
+                        self.tab = tab;
+                        self.focus = Focus::TabBar;
                     }
-                    if activate {
-                        self.activate(gs, world, market, sounds);
+                    HitEffect::Select { focus, column, activate } => {
+                        self.focus = focus;
+                        if let Some(c) = column {
+                            self.column = c;
+                        }
+                        if activate {
+                            self.activate(gs, world, market, sounds);
+                        }
                     }
                 }
             }
