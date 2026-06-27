@@ -88,11 +88,39 @@ pub struct ShipRenderer {
     /// Visually-eased sail set, chasing the chosen notch so the canvas furls/unfurls
     /// smoothly instead of teleporting between None/Half/Full.
     set: f32,
+    /// Screen-space outline of the deck as drawn this frame (bow tip + both cap
+    /// rails down off the bottom edge), recorded by `draw_deck`. The foreground
+    /// rain queries it (`deck_covers`) so its sea rings hide behind the deck
+    /// instead of painting over the planks. Empty while the deck isn't drawn
+    /// (glancing astern), so it then covers nothing.
+    deck_silhouette: Vec<Vec2>,
 }
 
 #[inline]
 fn rgba(c: [f32; 3], shade: f32, a: f32) -> Color {
     Color::new(c[0] / 255.0 * shade, c[1] / 255.0 * shade, c[2] / 255.0 * shade, a)
+}
+
+/// Even-odd ray cast: is point `p` inside the (possibly non-convex) polygon `poly`?
+/// Used for the deck silhouette so the rain can tell sea behind the deck from sea
+/// in the clear. A polygon of fewer than three points covers nothing.
+fn point_in_poly(poly: &[Vec2], p: Vec2) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[j]);
+        if (a.y > p.y) != (b.y > p.y) {
+            let cross = a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x);
+            if p.x < cross {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
 }
 
 impl ShipRenderer {
@@ -101,7 +129,15 @@ impl ShipRenderer {
             wheel_angle: 0.0,
             brace_angle: 0.0,
             set: 0.0,
+            deck_silhouette: Vec::new(),
         }
+    }
+
+    /// True if screen point (`x`, `y`) lies under the deck as drawn this frame, so
+    /// foreground rain rings behind the deck can be hidden by it. False when the
+    /// deck wasn't drawn (empty silhouette), so nothing is occluded then.
+    pub fn deck_covers(&self, x: f32, y: f32) -> bool {
+        point_in_poly(&self.deck_silhouette, vec2(x, y))
     }
 
     /// Advance the eased trim, then draw the deck and rig for this frame.
@@ -154,13 +190,22 @@ impl ShipRenderer {
             vec2(pvx + rx + dx, pvy + ry + dy)
         };
 
-        self.draw_deck(&sway, pitch_ang, lit, h, w);
+        self.deck_silhouette = self.draw_deck(&sway, pitch_ang, lit, h, w);
         self.draw_rig(&sway, rig, pitch_ang, lit, t, h, w);
     }
 
     /// Deck floor, bulwarks and the ship's wheel — the static woodwork the camera
     /// is bolted to. A planked perspective trapezoid that just sways with the hull.
-    fn draw_deck(&self, sway: &impl Fn(f32, f32) -> Vec2, pitch_ang: f32, lit: f32, h: f32, w: f32) {
+    /// Draws the deck and returns its screen-space outer silhouette (bow tip, both
+    /// cap rails, down past the bottom edge) for the rain's occlusion test.
+    fn draw_deck(
+        &self,
+        sway: &impl Fn(f32, f32) -> Vec2,
+        pitch_ang: f32,
+        lit: f32,
+        h: f32,
+        w: f32,
+    ) -> Vec<Vec2> {
         let cx = w * 0.5;
         // Far (toward the bow) and near (under the helm) edges of the deck plank.
         // The fore-aft nod tilts the plane about mid-deck: bow-up lifts the far edge
@@ -348,6 +393,24 @@ impl ShipRenderer {
         }
 
         self.draw_wheel(sway, lit, h, w);
+
+        // Outer silhouette for rain occlusion: the bow tip, then each cap rail's
+        // top edge swept aft to the helm and down past the bottom of the screen, so
+        // the polygon encloses every plank, bulwark and rail the deck paints. Built
+        // through the same `sway`, so it tracks the deck's heel, pitch and bob.
+        let cap_far_top = cap_far - post_h_at(cap_far);
+        let cap_near_top = cap_near - post_h_at(cap_near);
+        let out_far = far_hw * 1.04; // outer edge of the bulwark cap (matches above)
+        let out_near = near_hw * 1.02;
+        vec![
+            sway(cx, stem_cap_y),            // bow tip (the deck's highest point)
+            sway(cx - out_far, cap_far_top), // port: far cap top
+            sway(cx - out_near, cap_near_top), // port: helm cap top
+            sway(cx - out_near, near_y),     // port: helm foot (off the bottom edge)
+            sway(cx + out_near, near_y),     // starboard: helm foot
+            sway(cx + out_near, cap_near_top), // starboard: helm cap top
+            sway(cx + out_far, cap_far_top), // starboard: far cap top
+        ]
     }
 
     /// The ship's wheel at the helm, spun toward the rudder. A spoked ring with a

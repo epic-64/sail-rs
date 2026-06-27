@@ -25,8 +25,8 @@ const SLANT_FRAC: f32 = 0.55; // how much of the fall speed the wind throws side
 const STREAK: f32 = 0.028; // streak length as a fraction of the per-second fall
 
 // --- Ripples ------------------------------------------------------------------
-const RIPPLE_RATE: f32 = 24.0; // rings/sec on the sea at full fury
-const MAX_RIPPLES: usize = 70;
+const RIPPLE_RATE: f32 = 42.0; // rings/sec on the sea at full fury
+const MAX_RIPPLES: usize = 130;
 const RIPPLE_LIFE_MIN: f32 = 0.6;
 const RIPPLE_LIFE_MAX: f32 = 1.05;
 const RIPPLE_SEGS: usize = 16; // line segments per ring
@@ -131,14 +131,39 @@ impl Rain {
     /// Advance every layer, spawn fresh rain for this frame's fury, and draw the lot.
     /// Screen-space; call after the world camera is reset and the ship is drawn (so
     /// the deck crowns sit over the planks), under the HUD.
-    pub fn render(&mut self, input: &RainInput, dt: f32, w: f32, h: f32) {
+    ///
+    /// `wave_lift` drops a ring's (still-unrolled) spawn point onto the live sea:
+    /// given a screen (x, y) on the flat sea plane it returns the y the wavy surface
+    /// actually reaches there, so rings ride crests and troughs instead of a flat
+    /// band. `deck_covers` reports whether a final (rolled) screen point sits behind
+    /// the foreground deck, so rings there are hidden rather than painted on the planks.
+    pub fn render(
+        &mut self,
+        input: &RainInput,
+        wave_lift: impl Fn(f32, f32) -> f32,
+        deck_covers: impl Fn(f32, f32) -> bool,
+        dt: f32,
+        w: f32,
+        h: f32,
+    ) {
         let storm = clamp(input.storm, 0.0, 1.0);
         let slant = clamp(input.slant, -1.0, 1.0);
         let lit = clamp(input.day_lit, 0.0, 1.0);
         let scale = (h / 720.0).max(0.6);
 
         self.streaks(storm, slant, lit, scale, dt, w, h);
-        self.sea_rings(storm, lit, scale, input.water_line, input.roll_deg, dt, w, h);
+        self.sea_rings(
+            storm,
+            lit,
+            scale,
+            input.water_line,
+            input.roll_deg,
+            wave_lift,
+            deck_covers,
+            dt,
+            w,
+            h,
+        );
         self.deck_crowns(storm, lit, scale, input.deck, dt, w, h);
     }
 
@@ -191,7 +216,19 @@ impl Rain {
 
     /// Expanding rings punched in the sea below the live, rolled sea line.
     #[allow(clippy::too_many_arguments)]
-    fn sea_rings(&mut self, storm: f32, lit: f32, scale: f32, water_line: f32, roll_deg: f32, dt: f32, w: f32, h: f32) {
+    fn sea_rings(
+        &mut self,
+        storm: f32,
+        lit: f32,
+        scale: f32,
+        water_line: f32,
+        roll_deg: f32,
+        wave_lift: impl Fn(f32, f32) -> f32,
+        deck_covers: impl Fn(f32, f32) -> bool,
+        dt: f32,
+        w: f32,
+        h: f32,
+    ) {
         self.ripples.retain_mut(|r| {
             r.age += dt;
             r.age < r.life
@@ -210,16 +247,25 @@ impl Rain {
             if self.ripples.len() >= MAX_RIPPLES || band_h <= 0.0 {
                 break;
             }
-            // depth: 0 far (near the sea line) .. 1 near (toward the deck). Bias to
-            // the near half, where rings read large and round.
-            let depth = self.rand().max(self.rand());
+            // depth: 0 far (near the sea line) .. 1 near (toward the deck). Spread
+            // across the whole band so the rings reach right out toward the horizon
+            // rather than clustering in the near few metres; perspective already
+            // shrinks and flattens the far ones (rmax/aspect below scale with depth).
+            let depth = self.rand();
             let bx = self.range(-0.15 * w, 1.15 * w);
-            let by = band_top + band_h * depth;
+            // Drop the flat-band point onto the live wave surface, so a ring that
+            // lands on a crest sits higher up the screen than one in a trough.
+            let by = wave_lift(bx, band_top + band_h * depth);
             // Lay the point on the rolled sea: rotate about the screen centre.
             let ox = bx - w * 0.5;
             let oy = by - h * 0.5;
             let px = w * 0.5 + ox * rc - oy * rs;
             let py = h * 0.5 + ox * rs + oy * rc;
+            // The foreground deck stands in front of the sea: drop rings that would
+            // land behind it rather than paint them onto the planks.
+            if deck_covers(px, py) {
+                continue;
+            }
             let rmax = (0.016 + 0.045 * depth) * h * self.range(0.7, 1.2);
             let aspect = 0.16 + 0.26 * depth;
             let life = self.range(RIPPLE_LIFE_MIN, RIPPLE_LIFE_MAX);
@@ -236,6 +282,11 @@ impl Rain {
 
         let thick = scale.max(0.7);
         for r in &self.ripples {
+            // Re-test occlusion each frame: a ring spawned in the clear can fall
+            // behind the deck as she heels and pitches over its short life.
+            if deck_covers(r.pos.x, r.pos.y) {
+                continue;
+            }
             let f = r.age / r.life; // 0..1
             let rx = r.rmax * f;
             let ry = rx * r.aspect;
