@@ -13,6 +13,9 @@
 //! 2. **Bearings** | **Performance** — contract/race/shipyard headings, and FPS.
 //! 3. **The Ledger** | **The Wager Book** — the captain's lifetime tally: contracts
 //!    honoured and sea-miles logged, then the race record (see `game_state::Stats`).
+//! 4. **The World** — a full-spread (no spine), fully zoomed-out, hand-drawn chart of
+//!    every archipelago at once, named, with no ship marked: the captain's keepsake
+//!    map (see [[crate::minimap]] `render_world`).
 
 use macroquad::prelude::*;
 
@@ -29,7 +32,11 @@ use crate::ui::{
 use crate::world::World;
 
 /// How many two-page spreads the book holds; `main` clamps the page cursor to this.
-pub const NUM_SPREADS: usize = 4;
+pub const NUM_SPREADS: usize = 5;
+
+/// The closing spread: the full-spread world map (no spine, no second page). Singled
+/// out so `render` can skip the centre spine and hand the whole leaf to the chart.
+const WORLD_SPREAD: usize = NUM_SPREADS - 1;
 
 /// How many pressable buttons the given spread carries — `main` uses it to clamp
 /// the Up/Down selection cursor. Only the Vessel spread (1) has one so far: the
@@ -133,9 +140,12 @@ pub fn render(
     let y0 = (h - ph) / 2.0;
     draw_rectangle(x0, y0, pw, ph, parchment());
     draw_rectangle_lines(x0, y0, pw, ph, px(3.0), parchment_edge());
-    // The spine down the middle.
+    // The spine down the middle. The world map spans the whole spread, so it gets no
+    // spine; every other spread is a two-page split divided by one.
     let spine = x0 + pw / 2.0;
-    draw_line(spine, y0 + px(10.0), spine, y0 + ph - px(10.0), px(1.5), dim_ink());
+    if spread != WORLD_SPREAD {
+        draw_line(spine, y0 + px(10.0), spine, y0 + ph - px(10.0), px(1.5), dim_ink());
+    }
 
     let pad = px(28.0);
 
@@ -173,9 +183,12 @@ pub fn render(
             page_bearings(&left, world, kin, gs);
             page_performance(&right, frame_dt);
         }
-        _ => {
+        3 => {
             page_ledger(&left, gs);
             page_wagers(&right, gs);
+        }
+        _ => {
+            page_world(world, x0, y0, pw, ph, pad, head_y);
         }
     }
 
@@ -273,6 +286,39 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
         fs_small() as f32,
         ink(),
     );
+}
+
+/// **The World** — a full spread (no centre spine): a fully zoomed-out, hand-drawn
+/// chart of every archipelago at once, each named, with no ship marked. A keepsake map
+/// rather than a live instrument (see [`crate::minimap::render_world`]).
+fn page_world(world: &World, x0: f32, y0: f32, pw: f32, ph: f32, pad: f32, head_y: f32) {
+    // Title centred across the whole spread, with a short rule under it.
+    let title = "The World";
+    let fs = fs_title();
+    crate::font::heading(|| {
+        let d = measure_text(title, None, fs, 1.0);
+        draw_text(title, x0 + (pw - d.width) / 2.0, head_y, fs as f32, ink());
+    });
+    let under_y = head_y + px(10.0);
+    let und_half = pw * 0.16;
+    draw_line(x0 + pw / 2.0 - und_half, under_y, x0 + pw / 2.0 + und_half, under_y, px(1.5), dim_ink());
+
+    // A square chart centred on the spread (the world is roughly square), leaving room
+    // for a caption and the footer below.
+    let map_top = head_y + px(26.0);
+    let map_bottom = y0 + ph - pad - px(30.0);
+    let side = (pw - 2.0 * pad).min(map_bottom - map_top).max(px(60.0));
+    let map_rect = Rect::new(x0 + (pw - side) / 2.0, map_top, side, side);
+    // Draw straight onto the logbook leaf (transparent panel) so it reads as inked into
+    // the page rather than pasted over it.
+    let mut pal = MinimapPalette::parchment();
+    pal.panel = Color::new(0.0, 0.0, 0.0, 0.0);
+    minimap::render_world(world, map_rect, &pal);
+
+    // Caption under the chart.
+    let cap = "All charted waters";
+    let cd = measure_text(cap, None, fs_small(), 1.0);
+    draw_text(cap, x0 + (pw - cd.width) / 2.0, map_rect.y + map_rect.h + px(20.0), fs_small() as f32, dim_ink());
 }
 
 /// **The Vessel** — purse, hull, larder, and the rig's figures. `sel` is the open
