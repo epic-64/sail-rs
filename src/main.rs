@@ -24,6 +24,7 @@ mod port_lights;
 mod port_view;
 mod projection;
 mod race;
+mod rain;
 mod rival_render;
 mod rng;
 mod sailing;
@@ -49,6 +50,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
+use rain::{Rain, RainInput};
 use spray::{Spray, SprayInput};
 use ui::{format_dist, px};
 use weather::{Weather, WeatherState};
@@ -444,6 +446,8 @@ async fn run_game(
     // frame rates that read as a frontal / side wave impact (`SLAM_REF` = m/s of
     // bow drop that counts as a full frontal slam).
     let mut spray = Spray::new();
+    // Storm rain: streaks raking the whole viewport, thickening with the gale's fury.
+    let mut rain = Rain::new();
     let mut prev_bow_lift: f32 = 0.0;
     let mut prev_lean: f32 = 0.0;
     const SLAM_REF: f32 = 7.0;
@@ -1215,6 +1219,21 @@ async fn run_game(
 
             ship.render(&rig, dt, t, day_lit, storm, w, h);
         }
+
+        // --- Storm rain --------------------------------------------------------
+        // Rain rakes the whole viewport (drawn even while glancing astern, since it
+        // falls all around), slanted by the apparent wind across the view and fading
+        // in and out with the same fury that swells the thunder and darkens the sky.
+        rain.render(
+            &RainInput {
+                storm,
+                slant: wind_rel.sin(),
+                day_lit,
+            },
+            dt,
+            w,
+            h,
+        );
 
         // --- HUD ---------------------------------------------------------------
         // Pared back to the essentials: the purse, the speed, the wind's quarter
