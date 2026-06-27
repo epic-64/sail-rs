@@ -803,14 +803,21 @@ async fn run_game(
             // whole hold — ordinary cargo *and* reserved mission goods riding along.
             let top_speed = upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used());
             let hull_debuff = hull::debuff(hull::fraction(&gs));
-            let prev_pos = kin.pos;
-            kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
-            // Keep the hull out of every nearby island.
-            let near = world.islands_near(kin.pos, 400.0);
-            kin = sailing::resolve_grounding(kin, &near);
-            // Hull decay: every kilometre sailed wears 1% off the hull, so the
-            // drydock has something to mend.
-            gs.wear_distance(kin.pos.distance_to(prev_pos) as f64);
+            // Sail the ship in step with the (dev) warped clock: each sub-step is a
+            // real-dt tick, so the hull covers `time_steps` ticks' worth of water per
+            // frame and exploring under F-warp is as fast as the sped-up time. Stepping
+            // at real dt (rather than one big `dt * time_steps` leap) keeps grounding
+            // resolution honest and stops the bow tunnelling through islands.
+            for _ in 0..time_steps {
+                let prev_pos = kin.pos;
+                kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
+                // Keep the hull out of every nearby island.
+                let near = world.islands_near(kin.pos, 400.0);
+                kin = sailing::resolve_grounding(kin, &near);
+                // Hull decay: every kilometre sailed wears 1% off the hull, so the
+                // drydock has something to mend.
+                gs.wear_distance(kin.pos.distance_to(prev_pos) as f64);
+            }
 
             // --- Salvage -------------------------------------------------------
             // Scoop up any flotsam the ship has sailed over (gold straight to the
