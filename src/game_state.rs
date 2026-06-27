@@ -176,7 +176,7 @@ const HAUL_BASE: i32 = 12;
 /// cargo upgrade adds, so haulers must over-invest in sails to keep a growing hold
 /// at full speed; a racer (light hold) barely needs them.
 const HAUL_PER_SAIL_LEVEL: i32 = 4;
-const MAX_PENALTY: f64 = 0.66;
+const MAX_PENALTY: f64 = 0.45;
 
 /// Top tier (0-indexed) for the sails and the hold — six steps each.
 pub const MAX_LEVEL: i32 = 6;
@@ -188,6 +188,9 @@ const CARGO_BASE_COST: f64 = 250.0;
 /// dearest to step up.
 const HULL_BASE_COST: f64 = 500.0;
 const COST_GROWTH: f64 = 2.2;
+/// The hull climbs a steeper curve than the sails/hold so the top tiers (mk3, mk4)
+/// are a serious late-game outlay, not just the next rung: 500 / 2500 / 12500.
+const HULL_COST_GROWTH: f64 = 5.0;
 
 const BASE_MAX_HULL: i32 = 180;
 /// Hull points gained per hull tier: 180 / 240 / 300 / 360. Because wear is a
@@ -252,7 +255,7 @@ pub mod upgrades {
         (CARGO_BASE_COST * COST_GROWTH.powi(level)).round() as i32
     }
     pub fn hull_cost(level: i32) -> i32 {
-        (HULL_BASE_COST * COST_GROWTH.powi(level)).round() as i32
+        (HULL_BASE_COST * HULL_COST_GROWTH.powi(level)).round() as i32
     }
 
     pub fn level_of(kind: UpgradeKind, s: &GameState) -> i32 {
