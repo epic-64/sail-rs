@@ -4,23 +4,27 @@
 //! The original is a leather book that opens to two-page spreads. We keep its
 //! *content* but not its DOM/CSS theatrics (the 3D `perspective()` page flips):
 //! a flat parchment book, flipped open with **L** and paged with the **arrow
-//! keys** (no mouse to click the original's nav arrows). Three spreads, in
-//! reading order:
+//! keys** (no mouse to click the original's nav arrows). The spreads in the book
+//! (the count is derived; see [`active_spreads`]), in reading order:
 //!
-//! 0. **Course & Conditions** | **The Chart** — the live readouts beside the
-//!    parchment [[crate::minimap]] (the opening spread, the look kept from before).
-//! 1. **The Vessel** | **The Hold** — purse/hull/rig figures, and the manifest.
-//! 2. **Bearings** | **Performance** — contract/race/shipyard headings, and FPS.
-//! 3. **The Ledger** | **The Wager Book** — the captain's lifetime tally: contracts
-//!    honoured and sea-miles logged, then the race record (see `game_state::Stats`).
-//! 4. **The World** — a full-spread (no spine), fully zoomed-out, hand-drawn chart of
-//!    every archipelago at once, named, with no ship marked: the captain's keepsake
-//!    map (see [[crate::minimap]] `render_world`).
+//! - **Course & Conditions** | **The Chart** — the live readouts beside the
+//!   parchment [[crate::minimap]] (the opening spread, the look kept from before).
+//! - **The Vessel** | **The Hold** — purse/hull/rig figures, and the manifest.
+//! - **Bearings** | **Performance** — contract/race/shipyard headings, and FPS.
+//! - **The Ledger** | **The Wager Book** — the captain's lifetime tally: contracts
+//!   honoured and sea-miles logged, then the race record (see `game_state::Stats`).
+//! - **The Almanac** — a full-spread price book across the local archipelago; present
+//!   only once the captain buys the Trader's Almanac (see [[crate::tavern]]).
+//! - **The World** — a full-spread (no spine), fully zoomed-out, hand-drawn chart of
+//!   every archipelago at once, named, with no ship marked: the captain's keepsake
+//!   map (see [[crate::minimap]] `render_world`); present only once the World Map is
+//!   bought (see [[crate::tavern]]).
 
 use macroquad::prelude::*;
 
-use crate::game_state::{hull, upgrades, GameState, Good};
+use crate::game_state::{hull, upgrades, GameState, Good, Market};
 use crate::minimap::{self, MinimapPalette};
+use crate::tavern::{self, SpecialItem};
 use crate::palette::Daytime;
 use crate::sailing::{Kinematics, Wind, KNOT};
 // The ink/parchment palette, the type scale and `format_dist` are shared with the
@@ -31,19 +35,58 @@ use crate::ui::{
 };
 use crate::world::World;
 
-/// How many two-page spreads the book holds; `main` clamps the page cursor to this.
-pub const NUM_SPREADS: usize = 5;
+/// One two-page spread of the log. The first four always stand; the Almanac and the
+/// World map appear only once the captain buys the tavern wares that unlock them (see
+/// [`crate::tavern`]), so the book grows over a voyage.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Spread {
+    CourseChart,
+    VesselHold,
+    BearingsPerformance,
+    LedgerWagers,
+    /// A price book across the local archipelago (the Trader's Almanac ware).
+    Almanac,
+    /// The full-spread keepsake world map (the World Map ware): no spine, no second
+    /// page, the whole leaf handed to the chart.
+    World,
+}
 
-/// The closing spread: the full-spread world map (no spine, no second page). Singled
-/// out so `render` can skip the centre spine and hand the whole leaf to the chart.
-const WORLD_SPREAD: usize = NUM_SPREADS - 1;
+/// The spreads in the book, in reading order: the four standing spreads, then the
+/// Almanac and the World map, each only when the captain owns the ware unlocking it.
+fn active_spreads(gs: &GameState) -> Vec<Spread> {
+    let mut v = vec![
+        Spread::CourseChart,
+        Spread::VesselHold,
+        Spread::BearingsPerformance,
+        Spread::LedgerWagers,
+    ];
+    if gs.owns(SpecialItem::TradersAlmanac) {
+        v.push(Spread::Almanac);
+    }
+    if gs.owns(SpecialItem::WorldMap) {
+        v.push(Spread::World);
+    }
+    v
+}
 
-/// How many pressable buttons the given spread carries — `main` uses it to clamp
-/// the Up/Down selection cursor. Only the Vessel spread (1) has one so far: the
+/// How many spreads the book holds for this captain; `main` clamps the page cursor
+/// to it.
+pub fn num_spreads(gs: &GameState) -> usize {
+    active_spreads(gs).len()
+}
+
+/// The page index of the world-map spread, if the captain owns the World Map, so
+/// `main` can flip straight to it on **M**.
+pub fn world_spread_index(gs: &GameState) -> Option<usize> {
+    active_spreads(gs).iter().position(|s| *s == Spread::World)
+}
+
+/// How many pressable buttons the spread at `index` carries — `main` uses it to clamp
+/// the Up/Down selection cursor. Only the Vessel spread has one so far: the
 /// **Caulk hull** field repair.
-pub fn button_count(spread: usize) -> usize {
-    match spread {
-        1 => 1,
+pub fn button_count(gs: &GameState, index: usize) -> usize {
+    match active_spreads(gs).get(index) {
+        Some(Spread::VesselHold) => 1,
         _ => 0,
     }
 }
@@ -108,7 +151,7 @@ fn heading(p: &Page, text: &str) {
 }
 
 /// Render the open log over the scene. Dims the world behind it first. `spread` is
-/// the page cursor (0..[`NUM_SPREADS`]); `frame_dt` is the last frame time, read on
+/// the page cursor (0..[`num_spreads`]); `frame_dt` is the last frame time, read on
 /// the Performance page.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
@@ -140,10 +183,19 @@ pub fn render(
     let y0 = (h - ph) / 2.0;
     draw_rectangle(x0, y0, pw, ph, parchment());
     draw_rectangle_lines(x0, y0, pw, ph, px(3.0), parchment_edge());
-    // The spine down the middle. The world map spans the whole spread, so it gets no
-    // spine; every other spread is a two-page split divided by one.
+
+    // Which spread is open. The book's pages depend on the wares owned (see
+    // `active_spreads`); the cursor index is clamped to whatever is in the book now.
+    let spreads = active_spreads(gs);
+    let kind = spreads
+        .get(spread.min(spreads.len().saturating_sub(1)))
+        .copied()
+        .unwrap_or(Spread::CourseChart);
+    // The full-spread pages (the world map and the almanac grid) span the whole leaf,
+    // so they get no centre spine; every other spread is a two-page split divided by one.
+    let full_spread = matches!(kind, Spread::Almanac | Spread::World);
     let spine = x0 + pw / 2.0;
-    if spread != WORLD_SPREAD {
+    if !full_spread {
         draw_line(spine, y0 + px(10.0), spine, y0 + ph - px(10.0), px(1.5), dim_ink());
     }
 
@@ -169,37 +221,42 @@ pub fn render(
         body_y,
     };
 
-    // The pages of each spread, in reading order.
-    match spread {
-        0 => {
+    // The pages of the open spread.
+    match kind {
+        Spread::CourseChart => {
             page_course(&left, kin, wind, sail_name, day, weather_label, dev_mode);
             page_chart(&right, world, kin, wind, chart_marks, race_marks, y0, ph, pad);
         }
-        1 => {
+        Spread::VesselHold => {
             page_vessel(&left, gs, sel);
             page_hold(&right, gs);
         }
-        2 => {
+        Spread::BearingsPerformance => {
             page_bearings(&left, world, kin, gs);
             page_performance(&right, frame_dt);
         }
-        3 => {
+        Spread::LedgerWagers => {
             page_ledger(&left, gs);
             page_wagers(&right, gs);
         }
-        _ => {
-            page_world(world, x0, y0, pw, ph, pad, head_y);
+        Spread::Almanac => {
+            page_almanac(world, kin, x0, pw, pad, head_y);
+        }
+        Spread::World => {
+            page_world(world, gs, x0, y0, pw, ph, pad, head_y);
         }
     }
 
     // --- Footer: page dots + the navigation hint ---------------------------
     let foot_y = y0 + ph - px(16.0);
-    // Three dots centred on the spine, the current spread filled.
+    // One dot per spread, centred on the spine, the current spread filled.
+    let n_spreads = spreads.len();
+    let cur = spread.min(n_spreads.saturating_sub(1));
     let gap = px(18.0);
-    let dots_w = gap * (NUM_SPREADS as f32 - 1.0);
+    let dots_w = gap * (n_spreads as f32 - 1.0);
     let mut dx = spine - dots_w / 2.0;
-    for i in 0..NUM_SPREADS {
-        if i == spread {
+    for i in 0..n_spreads {
+        if i == cur {
             draw_circle(dx, foot_y - px(5.0), px(4.0), ink());
         } else {
             draw_circle_lines(dx, foot_y - px(5.0), px(4.0), px(1.0), dim_ink());
@@ -207,7 +264,7 @@ pub fn render(
         dx += gap;
     }
     // Left footer: paging, plus the button cursor's keys on spreads that have one.
-    let nav = if button_count(spread) > 0 {
+    let nav = if matches!(kind, Spread::VesselHold) {
         "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use"
     } else {
         "\u{25C4} \u{25BA} turn the page"
@@ -289,9 +346,10 @@ fn page_chart(p: &Page, world: &World, kin: &Kinematics, wind: Wind, chart_marks
 }
 
 /// **The World** — a full spread (no centre spine): a fully zoomed-out, hand-drawn
-/// chart of every archipelago at once, each named, with no ship marked. A keepsake map
-/// rather than a live instrument (see [`crate::minimap::render_world`]).
-fn page_world(world: &World, x0: f32, y0: f32, pw: f32, ph: f32, pad: f32, head_y: f32) {
+/// chart of every archipelago at once, each named (and labelled with the legendary
+/// trinket its tavern sells), with no ship marked. A keepsake map rather than a live
+/// instrument (see [`crate::minimap::render_world`]).
+fn page_world(world: &World, gs: &GameState, x0: f32, y0: f32, pw: f32, ph: f32, pad: f32, head_y: f32) {
     // Title centred across the whole spread, with a short rule under it.
     let title = "The World";
     let fs = fs_title();
@@ -320,12 +378,98 @@ fn page_world(world: &World, x0: f32, y0: f32, pw: f32, ph: f32, pad: f32, head_
     // the page rather than pasted over it.
     let mut pal = MinimapPalette::parchment();
     pal.panel = Color::new(0.0, 0.0, 0.0, 0.0);
-    minimap::render_world(world, map_rect, &pal);
+    // The trinket each archipelago's tavern sells (and whether it's already in the kit),
+    // indexed by cluster id, so the chart can letter each cluster with its ware.
+    let wares: Vec<Option<(&str, bool)>> = world
+        .clusters
+        .iter()
+        .map(|c| {
+            world
+                .cluster_islands(c)
+                .into_iter()
+                .find(|i| i.is_shipyard)
+                .and_then(|sy| tavern::item_at(world, sy.id))
+                .map(|item| (item.name(), gs.owns(item)))
+        })
+        .collect();
+    minimap::render_world(world, map_rect, &pal, &wares);
 
     // Caption under the chart.
     let cap = "All charted waters";
     let cd = measure_text(cap, None, fs_small(), 1.0);
     draw_text(cap, x0 + (pw - cd.width) / 2.0, map_rect.y + map_rect.h + px(20.0), fs_small() as f32, dim_ink());
+}
+
+/// **The Almanac** — a full-spread price book (the Trader's Almanac ware): for each
+/// good, the cheapest port to buy it and the dearest to sell it across the local
+/// archipelago, with the margin between, so the captain can plan a run without
+/// sailing the cluster to read every board.
+fn page_almanac(world: &World, kin: &Kinematics, x0: f32, pw: f32, pad: f32, head_y: f32) {
+    // Title centred across the whole spread, underlined.
+    let title = "The Almanac";
+    let fs = fs_title();
+    crate::font::heading(|| {
+        let d = measure_text(title, None, fs, 1.0);
+        draw_text(title, x0 + (pw - d.width) / 2.0, head_y, fs as f32, ink());
+    });
+    let under_y = head_y + px(10.0);
+    let und_half = pw * 0.16;
+    draw_line(x0 + pw / 2.0 - und_half, under_y, x0 + pw / 2.0 + und_half, under_y, px(1.5), dim_ink());
+
+    let cluster = world.cluster_at(kin.pos);
+    let cap = format!("Best prices across the {}.", cluster.name);
+    let cd = measure_text(&cap, None, fs_small(), 1.0);
+    draw_text(&cap, x0 + (pw - cd.width) / 2.0, head_y + px(30.0), fs_small() as f32, dim_ink());
+
+    // Every port in these waters, with its (deterministic) price sheet.
+    let ports: Vec<_> = world
+        .cluster_islands(cluster)
+        .into_iter()
+        .filter(|i| i.is_port)
+        .map(|i| (i, Market::for_island(i, world.seed)))
+        .collect();
+
+    let x = x0 + pad;
+    let cw = pw - 2.0 * pad;
+    let buy_x = x + cw * 0.22;
+    let sell_x = x + cw * 0.54;
+    let margin_r = x + cw; // right edge for the right-aligned margin column
+
+    // Right-align `text` so its right edge sits at `rx`.
+    let right_at = |text: &str, rx: f32, y: f32, col: Color| {
+        let d = measure_text(text, None, fs_small(), 1.0);
+        draw_text(text, rx - d.width, y, fs_small() as f32, col);
+    };
+
+    let mut ry = head_y + px(54.0);
+    draw_text("Commodity", x, ry, fs_small() as f32, dim_ink());
+    draw_text("Cheapest to buy", buy_x, ry, fs_small() as f32, dim_ink());
+    draw_text("Dearest to sell", sell_x, ry, fs_small() as f32, dim_ink());
+    right_at("Margin", margin_r, ry, dim_ink());
+    draw_line(x, ry + px(6.0), x + cw, ry + px(6.0), px(1.0), dim_ink());
+    ry += line_h(fs_heading());
+
+    if ports.is_empty() {
+        draw_text("No ports in these waters.", x, ry, fs_body() as f32, dim_ink());
+        return;
+    }
+
+    let lh = line_h(fs_body());
+    for good in Good::ALL {
+        let lo = ports.iter().min_by_key(|(_, m)| m.price(good)).unwrap();
+        let hi = ports.iter().max_by_key(|(_, m)| m.price(good)).unwrap();
+        let lo_price = lo.1.price(good);
+        let hi_price = hi.1.price(good);
+        draw_text(good.label(), x, ry, fs_body() as f32, ink());
+        draw_text(&format!("{} · {}", lo.0.name, lo_price), buy_x, ry, fs_small() as f32, ink());
+        draw_text(&format!("{} · {}", hi.0.name, hi_price), sell_x, ry, fs_small() as f32, ink());
+        // The margin a perfect round trip would clear; greyed when flat (one port, or
+        // no spread to work).
+        let margin = hi_price - lo_price;
+        let (txt, col) = if margin > 0 { (format!("+{margin}"), ink()) } else { ("0".to_string(), dim_ink()) };
+        right_at(&txt, margin_r, ry, col);
+        ry += lh;
+    }
 }
 
 /// **The Vessel** — purse, hull, larder, and the rig's figures. `sel` is the open

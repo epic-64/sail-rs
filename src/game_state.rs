@@ -13,6 +13,7 @@
 use crate::mission::{self, Mission};
 use crate::race::{self, Race};
 use crate::rng::Rng;
+use crate::tavern::{self, SpecialItem};
 use crate::world::{Island, World};
 
 // --- Goods -------------------------------------------------------------------
@@ -132,6 +133,10 @@ pub enum TradeError {
     NoRace,
     /// The race demands a sturdier hull than the captain has fitted.
     HullTierTooLow,
+    /// This tavern doesn't stock the ware the captain tried to buy.
+    NotSoldHere,
+    /// The captain already owns this tavern ware.
+    AlreadyOwned,
 }
 
 /// Which fitting a shipyard upgrade improves.
@@ -399,6 +404,27 @@ pub enum Location {
     Sailing,
 }
 
+/// The special wares the captain has bought from shipyard taverns (see
+/// [`crate::tavern`]). Ownership is permanent for the voyage; the active wares
+/// additionally recharge once a day, tracked by the day they were last invoked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inventory {
+    /// Whether each ware is owned, indexed by [`SpecialItem::index`].
+    pub owned: [bool; SpecialItem::COUNT],
+    /// The day index (`stats.days_passed`) an active ware was last invoked, or `-1`
+    /// if never — an active is ready again once a fresh day has dawned since.
+    pub last_used_day: [i32; SpecialItem::COUNT],
+}
+
+impl Default for Inventory {
+    fn default() -> Self {
+        Inventory {
+            owned: [false; SpecialItem::COUNT],
+            last_used_day: [-1; SpecialItem::COUNT],
+        }
+    }
+}
+
 /// The discrete, persisted voyage state. The world itself is owned separately
 /// (the renderers borrow it); here we keep only what a voyage mutates.
 #[derive(Clone, Debug)]
@@ -424,6 +450,8 @@ pub struct GameState {
     /// The captain's lifetime tally, kept across the whole voyage and shown on the
     /// captain's log's record page. Persisted with the rest of the state.
     pub stats: Stats,
+    /// Special wares bought from shipyard taverns (see [`crate::tavern`]).
+    pub items: Inventory,
 }
 
 /// The running ledger of a captain's career: contracts honoured, wagers won and
@@ -486,6 +514,7 @@ impl GameState {
             active_missions: Vec::new(),
             race: None,
             stats: Stats::default(),
+            items: Inventory::default(),
         }
     }
 
@@ -665,6 +694,54 @@ impl GameState {
         self.cargo[Good::Plank.index()] -= 1;
         self.hull = (self.hull + HULL_PER_PLANK).min(self.max_hull());
         Ok(())
+    }
+
+    // --- Tavern wares (the logic of `crate::tavern`) -------------------------
+
+    /// Whether the captain owns the given special ware.
+    pub fn owns(&self, item: SpecialItem) -> bool {
+        self.items.owned[item.index()]
+    }
+
+    /// Buy the tavern ware `item`. Requires being docked at the shipyard whose
+    /// tavern stocks it, with the coin to spare and the ware not already owned.
+    pub fn buy_item(&mut self, world: &World, item: SpecialItem) -> Result<(), TradeError> {
+        let isle = self.docked_island(world).ok_or(TradeError::NotDocked)?;
+        if !isle.is_shipyard {
+            return Err(TradeError::NoShipyard);
+        }
+        if tavern::item_at(world, isle.id) != Some(item) {
+            return Err(TradeError::NotSoldHere);
+        }
+        if self.owns(item) {
+            return Err(TradeError::AlreadyOwned);
+        }
+        let cost = item.price();
+        if cost > self.gold {
+            return Err(TradeError::NotEnoughGold);
+        }
+        self.gold -= cost;
+        self.items.owned[item.index()] = true;
+        Ok(())
+    }
+
+    /// Whether an active ware is owned and recharged (its daily use not yet spent
+    /// today). Passive wares are never "ready" — they have no invocation.
+    pub fn item_ready(&self, item: SpecialItem) -> bool {
+        self.owns(item)
+            && item.is_active()
+            && self.items.last_used_day[item.index()] < self.stats.days_passed as i32
+    }
+
+    /// Invoke an active ware, spending its daily charge. Returns true if it fired
+    /// (it was ready); false if it wasn't owned or was already used today. The
+    /// caller applies the ware's effect only on a true return.
+    pub fn use_item(&mut self, item: SpecialItem) -> bool {
+        if !self.item_ready(item) {
+            return false;
+        }
+        self.items.last_used_day[item.index()] = self.stats.days_passed as i32;
+        true
     }
 
     // --- Missions (the logic of `shared.Missions`) ---------------------------

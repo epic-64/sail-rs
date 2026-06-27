@@ -20,11 +20,12 @@
 
 use std::collections::HashMap;
 
-use crate::game_state::{GameState, Good, Location, Stats};
+use crate::game_state::{GameState, Good, Inventory, Location, Stats};
 use crate::geometry::Vec2;
 use crate::mission::Mission;
 use crate::race::Race;
 use crate::sailing::Kinematics;
+use crate::tavern::SpecialItem;
 
 /// The storage key (a `localStorage` entry on the web, a `<KEY>.sav` file natively).
 const KEY: &str = "sailrs_save";
@@ -117,6 +118,28 @@ impl Save {
                 s.log_opened
             ),
         );
+        // Tavern wares (see `crate::tavern`): the owned set as a list of slot indices,
+        // and every ware's last-used day (for the active wares' daily cooldown). Both
+        // absent from pre-tavern saves, which load an empty kit (see `deserialize`).
+        let owned: String = gs
+            .items
+            .owned
+            .iter()
+            .enumerate()
+            .filter(|&(_, &on)| on)
+            .map(|(i, _)| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        kv(&mut o, "items", &owned);
+        let item_days = gs
+            .items
+            .last_used_day
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        kv(&mut o, "item_days", &item_days);
+
         // A rival on the water: its position and the race phase, so a running race
         // resumes exactly rather than restarting the approach.
         if let Some(rk) = self.rival {
@@ -206,6 +229,8 @@ impl Save {
             // The tally is optional: a save written before stats existed (or any
             // malformed line) loads a fresh, zeroed ledger rather than failing.
             stats: map.get("stats").map(|v| parse_stats(v)).unwrap_or_default(),
+            // Tavern wares are optional too: a pre-tavern save loads an empty kit.
+            items: parse_inventory(map.get("items"), map.get("item_days")),
         };
 
         let kin = parse_kin(map.get("kin")?)?;
@@ -375,6 +400,32 @@ fn parse_stats(v: &str) -> Stats {
     }
 }
 
+/// Rebuild the tavern kit from its two save lines, leniently: `owned` is a list of
+/// owned ware slot indices, `days` the per-ware last-used day (for the daily
+/// cooldown). Either may be absent (a pre-tavern save) or carry indices a future/older
+/// build doesn't know — unknown slots are simply skipped, so the kit never fails to
+/// load, it just keeps the wares it recognises.
+fn parse_inventory(owned: Option<&&str>, days: Option<&&str>) -> Inventory {
+    let mut inv = Inventory::default();
+    if let Some(owned) = owned {
+        for tok in owned.split(',').filter(|s| !s.is_empty()) {
+            if let Some(slot) = tok.parse::<usize>().ok().filter(|&i| i < SpecialItem::COUNT) {
+                inv.owned[slot] = true;
+            }
+        }
+    }
+    if let Some(days) = days {
+        for (slot, tok) in days.split(',').enumerate() {
+            if slot < SpecialItem::COUNT {
+                if let Ok(d) = tok.parse::<i32>() {
+                    inv.last_used_day[slot] = d;
+                }
+            }
+        }
+    }
+    inv
+}
+
 /// Parse a `race=` line's four comma-separated fields.
 fn parse_race(v: &str) -> Option<Race> {
     let p: Vec<&str> = v.split(',').collect();
@@ -514,6 +565,10 @@ mod tests {
             upgrades_bought: 5,
             log_opened: 9,
         };
+        // Own a couple of wares, one of them an active used on day 5.
+        gs.items.owned[SpecialItem::WorldMap.index()] = true;
+        gs.items.owned[SpecialItem::WindWhistle.index()] = true;
+        gs.items.last_used_day[SpecialItem::WindWhistle.index()] = 5;
         Save {
             seed: 42,
             gs,
@@ -553,6 +608,7 @@ mod tests {
         assert_eq!(back.gs.active_missions, s.gs.active_missions);
         assert_eq!(back.gs.race, s.gs.race);
         assert_eq!(back.gs.stats, s.gs.stats);
+        assert_eq!(back.gs.items, s.gs.items);
         assert_eq!(back.sail_mode, s.sail_mode);
         assert_eq!(back.kin.pos, s.kin.pos);
         assert!((back.kin.heading_rad - s.kin.heading_rad).abs() < 1e-6);
@@ -603,6 +659,22 @@ mod tests {
             .join("\n");
         let back = Save::deserialize(&stripped).expect("should parse");
         assert_eq!(back.gs.stats, Stats::default());
+    }
+
+    #[test]
+    fn a_save_without_tavern_lines_loads_an_empty_kit() {
+        // Pre-tavern saves carry no `items=`/`item_days=` lines; they must still load,
+        // with the captain owning nothing.
+        let mut s = sample();
+        s.gs.items = Inventory::default();
+        let text = s.serialize();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.starts_with("items=") && !l.starts_with("item_days="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let back = Save::deserialize(&stripped).expect("should parse");
+        assert_eq!(back.gs.items, Inventory::default());
     }
 
     #[test]
