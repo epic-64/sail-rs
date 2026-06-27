@@ -29,6 +29,7 @@ use crate::mission;
 use crate::race;
 use crate::sailing::{Kinematics, Wind};
 use crate::sound::SoundBank;
+use crate::tavern;
 use crate::touch::TouchState;
 use crate::world::{Island, World};
 
@@ -115,6 +116,8 @@ enum Tab {
     Contracts,
     Yard,
     Race,
+    /// The shipyard tavern's one special ware (only present at shipyard ports).
+    Tavern,
 }
 
 /// What the keyboard cursor rests on. Contracts and deliveries are keyed by
@@ -131,6 +134,8 @@ enum Focus {
     Manifest(i32),
     RaceTarget(i32),
     RaceWithdraw,
+    /// The tavern's special ware (one per shipyard; resolved via [`tavern::item_at`]).
+    TavernItem,
 }
 
 /// A constraint that an invalid action just bumped against, so the board can
@@ -147,6 +152,7 @@ enum FlashTarget {
     Tier(i32),     // a rival port's hull requirement (hull not sturdy enough)
     UpgradeCost(UpgradeKind), // a fitting's price (can't cover the refit)
     RepairCost,    // the drydock repair price (can't cover any mending)
+    ItemCost,      // the tavern ware's price (can't cover the buy)
 }
 
 /// A live red-jiggle on one constraint, started at `start` (seconds, `get_time`).
@@ -193,6 +199,8 @@ const FLASH_DUR: f32 = 0.42; // seconds the jiggle lasts
 const FLASH_AMP: f32 = 4.0; // peak horizontal wobble, px
 const FLASH_FREQ: f32 = 7.0; // wobble oscillations per second
 
+/// The tabs every port shows. A shipyard adds [`Tab::Tavern`] after these (see
+/// [`PortScreen::available_tabs`]).
 const TABS: [Tab; 4] = [Tab::Market, Tab::Contracts, Tab::Yard, Tab::Race];
 const LAST_COLUMN: usize = 3;
 
@@ -353,6 +361,16 @@ impl PortScreen {
         world.islands[self.island_id as usize].is_shipyard
     }
 
+    /// The tabs this port shows, in order: the common four, plus the tavern at a
+    /// shipyard port (the only port with a tavern to call at).
+    fn available_tabs(&self, world: &World) -> Vec<Tab> {
+        let mut v = TABS.to_vec();
+        if self.is_shipyard(world) {
+            v.push(Tab::Tavern);
+        }
+        v
+    }
+
     /// The navigable rows of the active tab, top to bottom (the tab bar is its
     /// own focus, above these). Derived from the live state so it always matches
     /// what's on screen as contracts come and go.
@@ -399,6 +417,16 @@ impl PortScreen {
                         .collect()
                 }
             }
+            // One ware per tavern; the row is focusable whether or not it's owned (so
+            // the captain can read it either way), and is absent only at a port with
+            // no tavern at all.
+            Tab::Tavern => {
+                if tavern::item_at(world, self.island_id).is_some() {
+                    vec![Focus::TavernItem]
+                } else {
+                    Vec::new()
+                }
+            }
         }
     }
 
@@ -431,19 +459,21 @@ impl PortScreen {
         }
     }
 
-    fn cycle_tab(&mut self, delta: i32) {
-        let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
-        let n = TABS.len() as i32;
-        self.tab = TABS[((i as i32 + delta).rem_euclid(n)) as usize];
+    fn cycle_tab(&mut self, world: &World, delta: i32) {
+        let tabs = self.available_tabs(world);
+        let i = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+        let n = tabs.len() as i32;
+        self.tab = tabs[((i as i32 + delta).rem_euclid(n)) as usize];
         self.focus = Focus::TabBar;
     }
 
     /// Switch to the adjacent tab but stay down in its rows (Left/Right paging
     /// once the cursor runs off the end of a row).
     fn slide_tab(&mut self, gs: &GameState, world: &World, delta: i32) {
-        let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0);
-        let n = TABS.len() as i32;
-        self.tab = TABS[((i as i32 + delta).rem_euclid(n)) as usize];
+        let tabs = self.available_tabs(world);
+        let i = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+        let n = tabs.len() as i32;
+        self.tab = tabs[((i as i32 + delta).rem_euclid(n)) as usize];
         self.focus = self
             .rows_of(gs, world, self.tab)
             .first()
@@ -600,6 +630,27 @@ impl PortScreen {
                 }
                 Err(_) => sounds.invalid(),
             },
+            // Buy the tavern's one ware (resolved from the port). A short purse jiggles
+            // the price and the header gold; an already-owned ware just no-ops.
+            Focus::TavernItem => {
+                let Some(item) = tavern::item_at(world, self.island_id) else {
+                    return;
+                };
+                // Already in the kit: nothing to buy, so don't buzz at the captain.
+                if gs.owns(item) {
+                    return;
+                }
+                match gs.buy_item(world, item) {
+                    Ok(()) => sounds.trade_bulk(),
+                    Err(e) => {
+                        sounds.invalid();
+                        if e == TradeError::NotEnoughGold {
+                            self.flash(FlashTarget::ItemCost);
+                            self.flash(FlashTarget::Gold);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -632,7 +683,7 @@ impl PortScreen {
         // Tab cycles the board (keyboard only — touch taps the tab labels direct).
         if is_key_pressed(KeyCode::Tab) {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-            self.cycle_tab(if back { -1 } else { 1 });
+            self.cycle_tab(world, if back { -1 } else { 1 });
         }
 
         // Directional verbs: keyboard arrows or the nav cluster's d-pad / ✓.
@@ -651,14 +702,14 @@ impl PortScreen {
         }
         if left {
             match self.focus {
-                Focus::TabBar => self.cycle_tab(-1),
+                Focus::TabBar => self.cycle_tab(world, -1),
                 Focus::Good(_) if self.column > 0 => self.column -= 1,
                 _ => self.slide_tab(gs, world, -1),
             }
         }
         if right {
             match self.focus {
-                Focus::TabBar => self.cycle_tab(1),
+                Focus::TabBar => self.cycle_tab(world, 1),
                 Focus::Good(_) if self.column < LAST_COLUMN => self.column += 1,
                 _ => self.slide_tab(gs, world, 1),
             }
@@ -794,7 +845,11 @@ impl PortScreen {
         tx = self.tab_button("Market", Tab::Market, tx, tab_y, on_bar);
         tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
         tx = self.tab_button(yard_label, Tab::Yard, tx, tab_y, on_bar);
-        let _ = self.tab_button("Racing", Tab::Race, tx, tab_y, on_bar);
+        tx = self.tab_button("Racing", Tab::Race, tx, tab_y, on_bar);
+        // Only a shipyard has a tavern to call at.
+        if port.is_shipyard {
+            let _ = self.tab_button("Tavern", Tab::Tavern, tx, tab_y, on_bar);
+        }
 
         // --- Body: chart on the left, the active board on the right ----------
         let body_top = tab_y + tab_h() + gap();
@@ -833,6 +888,7 @@ impl PortScreen {
             Tab::Contracts => self.render_contracts(gs, world, board_x, board_top, board_w),
             Tab::Yard => self.render_yard(gs, world, board_x, board_top, board_w),
             Tab::Race => self.render_race(gs, world, board_x, board_top, board_w),
+            Tab::Tavern => self.render_tavern(gs, world, board_x, board_top, board_w),
         }
 
         // Footer hint.
@@ -1218,6 +1274,112 @@ impl PortScreen {
                 HitEffect::Select { focus: Focus::RaceTarget(p.id), column: None, activate: true },
             );
             ry += row_h();
+        }
+    }
+
+    /// The Tavern board: the shipyard tavern's one special ware. Shows its name,
+    /// what it does, and a price + Buy chip; once owned, it reads as in the kit, and
+    /// an active ware spells out its helm key and once-a-day recharge.
+    fn render_tavern(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
+        use style::*;
+        crate::font::heading(|| draw_text("The Tavern", x, y, fs_heading() as f32, ink()));
+        let mut ry = y + line_h(fs_heading());
+
+        let Some(item) = tavern::item_at(world, self.island_id) else {
+            draw_text("This tavern has nothing for sale.", x, ry, fs_body() as f32, dim_ink());
+            return;
+        };
+
+        // A line of flavour above the ware itself.
+        draw_text(
+            "The taverner keeps one curio behind the bar, sold but once.",
+            x,
+            ry,
+            fs_small() as f32,
+            dim_ink(),
+        );
+        ry += line_h(fs_small()) + gap();
+
+        // Word-wrap a blurb into lines no wider than `w` at font size `fs`.
+        let wrap = |text: &str, fs: u16| -> Vec<String> {
+            let mut lines = Vec::new();
+            let mut cur = String::new();
+            for word in text.split_whitespace() {
+                let trial = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+                if !cur.is_empty() && measure_text(&trial, None, fs, 1.0).width > w {
+                    lines.push(std::mem::replace(&mut cur, word.to_string()));
+                } else {
+                    cur = trial;
+                }
+            }
+            if !cur.is_empty() {
+                lines.push(cur);
+            }
+            lines
+        };
+
+        let owned = gs.owns(item);
+        let active = self.focus == Focus::TavernItem;
+        let blurb = wrap(item.blurb(), fs_small());
+        // A closing line: how to use an owned active ware (its helm key + recharge),
+        // else nothing.
+        let status: Option<String> = if owned && item.is_active() {
+            let key = item.key_hint().unwrap_or("");
+            let ready = if gs.item_ready(item) { "ready" } else { "used today" };
+            Some(format!("Press {key} at the helm to use ({ready}). Recharges each day."))
+        } else {
+            None
+        };
+
+        // The ware sits in one block: a title row (name left, price+chip right), the
+        // blurb, then the optional status line. Size the block so the focus highlight
+        // and the touch hit-region cover the whole thing.
+        let step = line_h(fs_body());
+        let blurb_h = blurb.len() as f32 * line_h(fs_small());
+        let status_h = if status.is_some() { line_h(fs_small()) } else { 0.0 };
+        let bh = step + blurb_h + status_h + gap();
+        if active {
+            draw_rectangle(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh, row_highlight());
+        }
+        self.record_hit(
+            Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
+            HitEffect::Select { focus: Focus::TavernItem, column: None, activate: false },
+        );
+
+        // Title row: ware name on the left.
+        let title_base = ry + step;
+        crate::font::heading(|| draw_text(item.name(), x, title_base, fs_heading() as f32, ink()));
+
+        // Right side of the title row: a Buy chip with the price, or an "In kit" tag.
+        let chip_x = x + w - chip_w();
+        if owned {
+            right_text("In your kit", x + w, title_base, fs_body());
+        } else {
+            let chip_top = ry + (step - chip_h()) / 2.0;
+            let chip_rect = Rect::new(chip_x, chip_top, chip_w(), chip_h());
+            button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, "Buy", active);
+            self.record_hit(
+                chip_rect,
+                HitEffect::Select { focus: Focus::TavernItem, column: None, activate: true },
+            );
+            // The price jiggles red (with the header gold) when the purse falls short.
+            right_text_flash(
+                &item.price().to_string(),
+                chip_x - chip_gap(),
+                chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO,
+                fs_body(),
+                self.flash_of(FlashTarget::ItemCost),
+            );
+        }
+
+        // The blurb, then the status line.
+        let mut by = title_base + line_h(fs_small());
+        for line in &blurb {
+            draw_text(line, x, by, fs_small() as f32, dim_ink());
+            by += line_h(fs_small());
+        }
+        if let Some(s) = status {
+            draw_text(&s, x, by, fs_small() as f32, ink());
         }
     }
 

@@ -36,6 +36,7 @@ mod scene;
 mod ship_render;
 mod sound;
 mod spray;
+mod tavern;
 mod touch;
 mod touch_ui;
 mod trader;
@@ -53,6 +54,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
+use tavern::SpecialItem;
 use clouds::StormSky;
 use rain::{Rain, RainInput};
 use spray::{Spray, SprayInput};
@@ -297,7 +299,7 @@ fn read_turn(log_open: bool) -> f32 {
 /// keyboard mode (the touch HUD carries its own glyphs), so a captain at the
 /// helm always sees how to reach the log, strike sail, steer and dock. The
 /// dock hint only appears when there's a harbour within reach.
-fn draw_keybind_hints(dockable: bool, h: f32) {
+fn draw_keybind_hints(dockable: bool, extra: &[(&str, &str)], h: f32) {
     // (key, action) top to bottom; the log sits first as the headline hint.
     let mut hints: Vec<(&str, &str)> = vec![
         ("L", "Captain's Log"),
@@ -307,6 +309,9 @@ fn draw_keybind_hints(dockable: bool, h: f32) {
         ("\u{2190}\u{2192}", "Steer"),
         ("C", "Look astern"),
     ];
+    // Any tavern wares the captain has bought (the world map's M, the active wares'
+    // number keys), so their shortcuts are reminded only once they're earned.
+    hints.extend_from_slice(extra);
     if dockable {
         hints.push(("Space", "Dock"));
     }
@@ -651,6 +656,11 @@ async fn run_game(
     let mut salvage_flash: f32 = 0.0;
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
+    // A Dolphin's Draught speed burst running down (seconds left): while it lasts the
+    // ship's top speed is lifted by `DOLPHIN_BURST_KNOTS` (see `crate::tavern`).
+    let mut speed_burst: f32 = 0.0;
+    const DOLPHIN_BURST_SECS: f32 = 5.0;
+    const DOLPHIN_BURST_KNOTS: f32 = 10.0;
     // A fading toast announcing that the wind has backed/veered to a fresh quarter,
     // shown in step with the wind-shift whoosh (see `change_wind`).
     let mut wind_flash: f32 = 0.0;
@@ -677,7 +687,11 @@ async fn run_game(
         // Refresh the touch pointers for this frame, then lay out the sailing HUD
         // (the same rects the draw below uses). Done before any input is read.
         touch.update(dt);
-        let hud = touch_ui::sail_hud(w, h);
+        // Which active-ware HUD buttons to lay out: one per owned active ware, in
+        // helm-slot order (see `crate::tavern`).
+        let item_owned: [bool; 3] =
+            std::array::from_fn(|slot| SpecialItem::from_active_slot(slot).is_some_and(|it| gs.owns(it)));
+        let hud = touch_ui::sail_hud(w, h, item_owned);
 
         // Cheat entry: while the captain's log is open, watch the typed letters for the
         // word that toggles the dev controls. The character queue is always drained so
@@ -901,7 +915,11 @@ async fn run_game(
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
             // whole hold — ordinary cargo *and* reserved mission goods riding along.
-            let top_speed = upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used());
+            // A Dolphin's Draught burst lifts the speed ceiling while it runs down.
+            speed_burst = (speed_burst - dt).max(0.0);
+            let burst = if speed_burst > 0.0 { DOLPHIN_BURST_KNOTS * sailing::KNOT } else { 0.0 };
+            let top_speed =
+                upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used()) + burst;
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             // Sail the ship in step with the (dev) warped clock: each sub-step is a
             // real-dt tick, so the hull covers `time_steps` ticks' worth of water per
@@ -924,11 +942,17 @@ async fn run_game(
             // purse, with a chime + a fading toast), then keep fresh salvage drifting
             // ahead of the bow for the next stretch of open water.
             let haul = flotsam.collect_near(kin.pos, flotsam::REACH);
-            if haul.gold > 0 {
-                gs.gold += haul.gold;
+            // A Lucky Figurehead draws extra coin from every find: half again as much.
+            let gold = if gs.owns(SpecialItem::LuckyFigurehead) {
+                haul.gold + haul.gold / 2
+            } else {
+                haul.gold
+            };
+            if gold > 0 {
+                gs.gold += gold;
                 // Bank the salvage in the lifetime ledger (pieces + gold).
                 gs.stats.flotsam_collected += haul.picked.len() as u32;
-                gs.stats.flotsam_gold += haul.gold as i64;
+                gs.stats.flotsam_gold += gold as i64;
                 sounds.salvage();
                 salvage_flash = SALVAGE_FLASH_TIME;
                 // Name the best find so a rare strongbox feels like an event.
@@ -939,9 +963,9 @@ async fn run_game(
                     .map(|f| f.kind.label())
                     .unwrap_or("Salvage");
                 salvage_msg = if haul.picked.len() > 1 {
-                    format!("Salvage! +{} gold  ({} & more)", haul.gold, best)
+                    format!("Salvage! +{} gold  ({} & more)", gold, best)
                 } else {
-                    format!("{}! +{} gold", best, haul.gold)
+                    format!("{}! +{} gold", best, gold)
                 };
             }
             flotsam.replenish(kin.pos, kin.heading_rad, &world);
@@ -1071,6 +1095,55 @@ async fn run_game(
                     guide_open = false;
                 }
             }
+            // The world map: M flips the log straight to its world-map spread, once the
+            // captain has bought the chart from a tavern (see `crate::tavern`). Pressed
+            // again on that page it shuts the book; without the chart, M does nothing.
+            if is_key_pressed(KeyCode::M) {
+                if let Some(idx) = captains_log::world_spread_index(&gs) {
+                    if log_open && log_spread == idx {
+                        log_open = false;
+                    } else {
+                        if !log_open {
+                            gs.stats.log_opened += 1;
+                        }
+                        log_open = true;
+                        log_spread = idx;
+                        log_sel = 0;
+                        guide_open = false;
+                    }
+                }
+            }
+            // Special tavern wares invoked at the helm: the number keys 1/2/3 (and the
+            // on-screen HUD buttons) fire the active wares, each recharging once a day
+            // (see `crate::tavern`). A ware not owned, or spent for the day, just
+            // no-ops. Gated to the live helm, so the keys stay free for the open log.
+            if !overlay_open {
+                for (slot, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].into_iter().enumerate() {
+                    if !(is_key_pressed(key) || touch.tapped_in(hud.items[slot])) {
+                        continue;
+                    }
+                    let Some(item) = SpecialItem::from_active_slot(slot) else { continue };
+                    if !gs.use_item(item) {
+                        continue;
+                    }
+                    match item {
+                        SpecialItem::WindWhistle => change_wind(
+                            &mut wind,
+                            &mut pending_wind,
+                            &mut wind_change_delay,
+                            &mut wind_rng,
+                            &mut last_wind_shift,
+                            clock,
+                            sounds,
+                            &mut wind_flash,
+                            true,
+                        ),
+                        SpecialItem::DolphinsDraught => speed_burst = DOLPHIN_BURST_SECS,
+                        SpecialItem::StormGlass => weather.calm(),
+                        _ => {}
+                    }
+                }
+            }
             // The basics primer, summoned with G. Like the log it reserves the arrows
             // while open, so the two are mutually exclusive.
             if is_key_pressed(KeyCode::G) {
@@ -1104,7 +1177,7 @@ async fn run_game(
                     log_open = false;
                 }
                 if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
-                    log_spread = (log_spread + 1).min(captains_log::NUM_SPREADS - 1);
+                    log_spread = (log_spread + 1).min(captains_log::num_spreads(&gs).saturating_sub(1));
                     log_sel = 0;
                 }
                 if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
@@ -1115,7 +1188,7 @@ async fn run_game(
                 // right turn the page), and Enter presses the focused one — the same
                 // arrows-then-Enter flow as the port board. The Vessel spread's button
                 // caulks the hull with a plank; a no-op without timber or on a sound hull.
-                let buttons = captains_log::button_count(log_spread);
+                let buttons = captains_log::button_count(&gs, log_spread);
                 if buttons > 0 {
                     if is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up) {
                         log_sel = log_sel.saturating_sub(1);
@@ -1757,6 +1830,11 @@ async fn run_game(
                 // captains who'd rather step the cursor than tap precisely.
                 touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h));
             } else {
+                let item_btns: [Option<(&str, bool)>; 3] = std::array::from_fn(|slot| {
+                    SpecialItem::from_active_slot(slot)
+                        .filter(|it| gs.owns(*it))
+                        .map(|it| (it.hud_label(), gs.item_ready(it)))
+                });
                 touch_ui::draw_sail_hud(
                     &hud,
                     helm.turn,
@@ -1764,12 +1842,25 @@ async fn run_game(
                     SAIL_FRACTIONS.len() - 1,
                     harbor.dockable.is_some(),
                     look_back,
+                    item_btns,
                 );
             }
         } else if !pause.open && !log_open && !guide_open && !harbor.is_open() {
             // Keyboard mode at the helm: faint reminders of the sailing keys,
             // bottom-left. (Touch mode has its own on-screen glyphs above.)
-            draw_keybind_hints(harbor.dockable.is_some(), h);
+            // Owned tavern wares add their shortcuts, so they show only once earned.
+            let mut extra: Vec<(&str, &str)> = Vec::new();
+            if gs.owns(SpecialItem::WorldMap) {
+                extra.push(("M", "World map"));
+            }
+            for slot in 0..3 {
+                if let Some(it) = SpecialItem::from_active_slot(slot).filter(|it| gs.owns(*it)) {
+                    if let Some(key) = it.key_hint() {
+                        extra.push((key, it.name()));
+                    }
+                }
+            }
+            draw_keybind_hints(harbor.dockable.is_some(), &extra, h);
         }
 
         // A new day breaks at sunrise (the clock crossing ¼ going forward). The clock

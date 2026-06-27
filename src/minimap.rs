@@ -528,7 +528,12 @@ fn draw_wave(cx: f32, cy: f32, size: f32, s: f32, col: Color) {
 /// each cluster named. Unlike [`render`] this is a *static keepsake map*, not a live
 /// instrument: it frames the entire world (not the ship's local waters) and draws no
 /// wind, no marks, and **no player**, so it reads as a chart pinned in the logbook.
-pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
+///
+/// `wares` is indexed by cluster id (`clusters[i].id == i`): the legendary trinket the
+/// archipelago's shipyard tavern sells (its name + whether it's already in the kit),
+/// or `None` for a cluster with no shipyard. Its name is inked under the cluster's, a
+/// checkmark beside the ones owned — the very thing the World Map unveils.
+pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Option<(&str, bool)>]) {
     if pal.panel.a > 0.0 {
         draw_rectangle(rect.x, rect.y, rect.w, rect.h, pal.panel);
     }
@@ -857,12 +862,22 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
             cmaxy = cmaxy.max(y);
         }
         let mid = (cminx + cmaxx) / 2.0;
+        let ty = (cmaxy + fs as f32 + 3.0 * s).min(rect.y + rect.h - 4.0 * s);
         crate::font::heading(|| {
             let d = measure_text(&c.name, None, fs, 1.0);
             let tx = (mid - d.width / 2.0).clamp(rect.x + 4.0 * s, rect.x + rect.w - d.width - 4.0 * s);
-            let ty = (cmaxy + fs as f32 + 3.0 * s).min(rect.y + rect.h - 4.0 * s);
             draw_text(&c.name, tx, ty, fs as f32, pal.ship);
         });
+        // Below the name, the legendary trinket this archipelago's tavern sells (sans
+        // face, smaller and dimmer than the name), with a checkmark on the ones owned.
+        if let Some(Some((ware, owned))) = wares.get(c.id as usize) {
+            let wfs = ((9.0 * s) as u16).max(8);
+            let text = if *owned { format!("\u{2713} {ware}") } else { ware.to_string() };
+            let d = measure_text(&text, None, wfs, 1.0);
+            let wx = (mid - d.width / 2.0).clamp(rect.x + 4.0 * s, rect.x + rect.w - d.width - 4.0 * s);
+            let wy = (ty + wfs as f32 + 2.0 * s).min(rect.y + rect.h - 3.0 * s);
+            draw_text(&text, wx, wy, wfs as f32, pal.port);
+        }
     }
 
     // The compass rose sits at the hub where the rhumb lines converge, north up: faint
