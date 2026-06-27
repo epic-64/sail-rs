@@ -358,13 +358,16 @@ impl PortScreen {
             Tab::Market => (0..Good::ALL.len()).map(Focus::Good).collect(),
             Tab::Contracts => {
                 let mut v = Vec::new();
+                // Follow the on-screen order so the cursor walks the board top to
+                // bottom: deliveries owed here are drawn first, then the offered
+                // contracts, then the reserved manifest.
+                v.extend(mission::deliverable_at(gs, world).iter().map(|m| Focus::Delivery(m.id)));
                 // A hull too battered to be hired can't take on *new* contracts, so
-                // those rows aren't focusable — but deliveries owed and abandoning
+                // those rows aren't focusable; deliveries owed and abandoning
                 // reserved cargo stay open.
                 if hull::can_take_jobs(gs) {
                     v.extend(mission::offered_at(gs, world).iter().map(|m| Focus::Contract(m.id)));
                 }
-                v.extend(mission::deliverable_at(gs, world).iter().map(|m| Focus::Delivery(m.id)));
                 v.extend(mission::reserved_at(gs, world).iter().map(|m| Focus::Manifest(m.id)));
                 v
             }
