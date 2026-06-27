@@ -16,13 +16,19 @@ use crate::flotsam::FlotsamKind;
 use crate::geometry::{clamp, Vec2};
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
-use crate::projection::{BASE_EYE, MAX_VIEW};
+use crate::projection::BASE_EYE;
 use crate::scene::SceneView;
 
 const TOP_M: f32 = 3.0; // metres from the waterline to the top of the object
 const MAG: f32 = 1.6; // drawn a touch larger than life so it stays spottable
-const MIN_PX: f32 = 11.0; // floor so a distant speck of salvage stays visible
+const MIN_PX: f32 = 5.0; // floor so a distant speck of salvage stays visible
 const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
+// Salvage you can realistically reach sits within a few hundred metres of the bow,
+// so a piece beyond that should read as out of reach: it fades from full opacity at
+// FADE_NEAR to nothing by FADE_FAR (and is not drawn past it), dissolving into the
+// haze instead of hanging on the horizon as a crisp, never-closing speck.
+const FADE_NEAR: f32 = 800.0;
+const FADE_FAR: f32 = 1400.0;
 
 /// Draw one piece of salvage on the water, or nothing if it is out of view.
 /// Called inside the world-camera pass (interleaved with the wave bands) so it
@@ -42,7 +48,7 @@ pub fn draw(pos: Vec2, kind: FlotsamKind, view: &SceneView) {
         ..
     } = *view;
     let d = kin.pos.distance_to(pos);
-    if !(1.0..=MAX_VIEW).contains(&d) {
+    if !(1.0..=FADE_FAR).contains(&d) {
         return;
     }
     let phi = crate::geometry::wrap_angle(kin.pos.bearing_to(pos) - kin.heading_rad);
@@ -62,7 +68,9 @@ pub fn draw(pos: Vec2, kind: FlotsamKind, view: &SceneView) {
     let top_y = horizon + ((BASE_EYE - foot_disp - TOP_M) * cphi / d).atan() * px_per_rad;
     let raw_h = (foot_y - top_y).max(0.0);
     let height = (raw_h * MAG).max(MIN_PX);
-    let alpha = clamp((1.0 - d / MAX_VIEW) * 1.6, 0.2, 1.0);
+    // Fade out with distance so far, unreachable salvage dissolves into the haze
+    // rather than reading as a crisp speck that never grows.
+    let alpha = clamp((FADE_FAR - d) / (FADE_FAR - FADE_NEAR), 0.0, 1.0);
 
     // Heel it with the local swell (sample the sea to each beam and tilt toward the
     // lower side) so it bobs on the waves, by the same gain the mesh uses.
