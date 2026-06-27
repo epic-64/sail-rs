@@ -5,8 +5,9 @@
 //! the **calm** sea bed is the base ambience (ducked as a gale rises), and the
 //! **storm** bed swells with the gale's fury. Over the top sit one-shot cues:
 //! a canvas *flap* when sail is raised or lowered, a transition *whoosh* when the
-//! wind shifts quarter, a coin *chime* on a successful trade, repair or upgrade,
-//! and a brighter *chime* when the hull scoops up floating salvage.
+//! wind shifts quarter, a coin *chime* on a successful repair, upgrade or contract,
+//! a single coin / coin pour on a market Buy-Sell / Fill-Dump, and a brighter
+//! *chime* when the hull scoops up floating salvage.
 //!
 //! macroquad's bundled mixer (quad-snd → audrey) only decodes WAV/OGG, but the
 //! shipped clips are MP3, so each is decoded to PCM with `symphonia` at load and
@@ -52,6 +53,13 @@ const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
 const WIND_SHIFT_MP3: &[u8] = snd!("universfield-transition-02-141076.mp3");
 // The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`).
 const COIN_MP3: &[u8] = snd!("collect-coin.mp3");
+// Market trade cues, distinct from the generic coin chime: a single coin for a
+// per-unit Buy/Sell, a heavier coin pour for a bulk Fill/Dump.
+const ONE_COIN_MP3: &[u8] = snd!("one-coin.mp3");
+const COINS_MP3: &[u8] = snd!("coins.mp3");
+// A confirming stamp for committing to a venture: accepting or abandoning a
+// contract, or booking a race.
+const ACCEPT_MP3: &[u8] = snd!("accept.mp3");
 // The bright chime as the hull scoops floating salvage (`SailingView.collectSound`)
 // — a distinct clip from the trade coin.
 const SALVAGE_MP3: &[u8] = snd!("collect-item.mp3");
@@ -64,17 +72,23 @@ const RACE_LOST_MP3: &[u8] = snd!("lightyeartraxx-kl-peach-game-over-iii-142453.
 const INVALID_MP3: &[u8] = snd!("invalid-input.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
-// ceiling) and the gain of the one-shot cues. These mirror the per-clip volumes
-// the original `SailingView`/`PortView` assigned to each `<audio>` element: the
-// sailing/calm/storm beds at 0.5/0.5/0.6, the flap/wind-shift/coin one-shots at
-// the browser default 1.0, salvage (the `collect-item` clip) at 0.6, and the
-// race stings toned right down to 0.25 since their clips are mastered hot.
-const SAIL_MAX_VOL: f32 = 0.5;
+// ceiling) and the gain of the one-shot cues. These started from the per-clip
+// volumes the original `SailingView`/`PortView` assigned to each `<audio>` element
+// (sailing/calm/storm beds at 0.5/0.5/0.6, the flap/wind-shift/coin one-shots at
+// the browser default 1.0, salvage at 0.6, race stings at 0.25 since their clips
+// are mastered hot), since tuned: the sailing bed lifted 50% (0.5 -> 0.75) so it
+// reads over the sea, and the trade coin dropped 50% (1.0 -> 0.5) as it was too hot.
+const SAIL_MAX_VOL: f32 = 0.75;
 const CALM_MAX_VOL: f32 = 0.5;
 const STORM_MAX_VOL: f32 = 0.6;
 const FLAP_VOL: f32 = 1.0;
 const WIND_SHIFT_VOL: f32 = 1.0;
-const COIN_VOL: f32 = 1.0;
+const COIN_VOL: f32 = 0.5;
+// Market Buy/Sell (one coin) and Fill/Dump (coin pour), both at half voice.
+const ONE_COIN_VOL: f32 = 0.5;
+const COINS_VOL: f32 = 0.5;
+// Accept/abandon contract, book a race.
+const ACCEPT_VOL: f32 = 0.5;
 const SALVAGE_VOL: f32 = 0.6;
 const RACE_WON_VOL: f32 = 0.25;
 const RACE_LOST_VOL: f32 = 0.25;
@@ -95,6 +109,9 @@ pub struct SoundBank {
     flap_down: Sound,
     wind_shift: Sound,
     coin: Sound,
+    one_coin: Sound,
+    coins: Sound,
+    accept: Sound,
     salvage: Sound,
     race_won: Sound,
     race_lost: Sound,
@@ -119,6 +136,9 @@ impl SoundBank {
         let flap_down = load_clip(FLAP_DOWN_MP3).await;
         let wind_shift = load_clip(WIND_SHIFT_MP3).await;
         let coin = load_clip(COIN_MP3).await;
+        let one_coin = load_clip(ONE_COIN_MP3).await;
+        let coins = load_clip(COINS_MP3).await;
+        let accept = load_clip(ACCEPT_MP3).await;
         let salvage = load_clip(SALVAGE_MP3).await;
         let race_won = load_clip(RACE_WON_MP3).await;
         let race_lost = load_clip(RACE_LOST_MP3).await;
@@ -138,6 +158,9 @@ impl SoundBank {
             flap_down,
             wind_shift,
             coin,
+            one_coin,
+            coins,
+            accept,
             salvage,
             race_won,
             race_lost,
@@ -220,6 +243,36 @@ impl SoundBank {
         play_sound(
             &self.coin,
             PlaySoundParams { looped: false, volume: COIN_VOL * self.master },
+        );
+    }
+
+    /// A single coin — a per-unit market Buy or Sell went through. Restarted so a
+    /// rapid run of one-unit trades retriggers cleanly rather than piling up.
+    pub fn trade_one(&self) {
+        stop_sound(&self.one_coin);
+        play_sound(
+            &self.one_coin,
+            PlaySoundParams { looped: false, volume: ONE_COIN_VOL * self.master },
+        );
+    }
+
+    /// A pour of coins — a bulk market Fill or Dump went through. Restarted so a
+    /// rapid run of bulk trades retriggers cleanly rather than piling up.
+    pub fn trade_bulk(&self) {
+        stop_sound(&self.coins);
+        play_sound(
+            &self.coins,
+            PlaySoundParams { looped: false, volume: COINS_VOL * self.master },
+        );
+    }
+
+    /// A confirming stamp — a contract accepted or abandoned, or a race booked.
+    /// Restarted so a rapid run of commits retriggers cleanly rather than piling up.
+    pub fn accept(&self) {
+        stop_sound(&self.accept);
+        play_sound(
+            &self.accept,
+            PlaySoundParams { looped: false, volume: ACCEPT_VOL * self.master },
         );
     }
 
@@ -370,6 +423,9 @@ mod tests {
             ("flap_down", FLAP_DOWN_MP3),
             ("wind_shift", WIND_SHIFT_MP3),
             ("coin", COIN_MP3),
+            ("one_coin", ONE_COIN_MP3),
+            ("coins", COINS_MP3),
+            ("accept", ACCEPT_MP3),
             ("salvage", SALVAGE_MP3),
             ("race_won", RACE_WON_MP3),
             ("race_lost", RACE_LOST_MP3),
