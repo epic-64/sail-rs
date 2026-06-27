@@ -1083,6 +1083,10 @@ async fn run_game(
                     true,
                 );
             }
+            // Top up the purse (O): +10,000 gold, to test pricey wares and upgrades.
+            if dev_mode && is_key_pressed(KeyCode::O) {
+                gs.gold += 10_000;
+            }
             if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
                 log_open = !log_open;
                 // Open the book to its first spread each time (the original rewinds

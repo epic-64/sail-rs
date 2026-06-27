@@ -201,7 +201,7 @@ const FLASH_FREQ: f32 = 7.0; // wobble oscillations per second
 
 /// The tabs every port shows. A shipyard adds [`Tab::Tavern`] after these (see
 /// [`PortScreen::available_tabs`]).
-const TABS: [Tab; 4] = [Tab::Market, Tab::Contracts, Tab::Yard, Tab::Race];
+const TABS: [Tab; 4] = [Tab::Market, Tab::Yard, Tab::Contracts, Tab::Race];
 const LAST_COLUMN: usize = 3;
 
 /// The port overlay's whole visual style in one place — every type size, spacing
@@ -843,8 +843,8 @@ impl PortScreen {
         let tab_y = bar_y + gap();
         let mut tx = left;
         tx = self.tab_button("Market", Tab::Market, tx, tab_y, on_bar);
-        tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
         tx = self.tab_button(yard_label, Tab::Yard, tx, tab_y, on_bar);
+        tx = self.tab_button("Contracts", Tab::Contracts, tx, tab_y, on_bar);
         tx = self.tab_button("Racing", Tab::Race, tx, tab_y, on_bar);
         // Only a shipyard has a tavern to call at.
         if port.is_shipyard {
