@@ -74,11 +74,11 @@ impl SpecialItem {
     pub fn price(self) -> i32 {
         match self {
             WorldMap => 1000,
-            WindWhistle => 600,
-            DolphinsDraught => 700,
-            StormGlass => 800,
-            TradersAlmanac => 900,
-            LuckyFigurehead => 750,
+            WindWhistle => 5000,
+            DolphinsDraught => 5000,
+            StormGlass => 5000,
+            TradersAlmanac => 5000,
+            LuckyFigurehead => 5000,
         }
     }
 
