@@ -503,7 +503,7 @@ impl PortScreen {
                 }
             }
             Focus::Repair => match gs.repair() {
-                Ok(()) => sounds.transaction(),
+                Ok(()) => sounds.trade_bulk(),
                 Err(e) => {
                     sounds.invalid();
                     if e == TradeError::NotEnoughGold {
@@ -512,7 +512,7 @@ impl PortScreen {
                 }
             },
             Focus::Upgrade(kind) => match gs.buy_upgrade(world, kind) {
-                Ok(()) => sounds.transaction(),
+                Ok(()) => sounds.trade_bulk(),
                 Err(e) => {
                     sounds.invalid();
                     if e == TradeError::NotEnoughGold {
@@ -535,9 +535,9 @@ impl PortScreen {
                 match done {
                     Ok(()) => {
                         // Accepting/abandoning a contract stamps; a delivery pays
-                        // out, so it keeps the coin chime.
+                        // out a purse, so it rings the coin pour.
                         match here {
-                            Focus::Delivery(_) => sounds.transaction(),
+                            Focus::Delivery(_) => sounds.trade_bulk(),
                             _ => sounds.accept(),
                         }
                         let after = self.rows_of(gs, world, self.tab);
