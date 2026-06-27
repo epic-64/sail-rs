@@ -5,8 +5,9 @@
 //! the **calm** sea bed is the base ambience (ducked as a gale rises), and the
 //! **storm** bed swells with the gale's fury. Over the top sit one-shot cues:
 //! a canvas *flap* when sail is raised or lowered, a transition *whoosh* when the
-//! wind shifts quarter, a coin *chime* on a successful repair, upgrade or contract,
-//! a single coin / coin pour on a market Buy-Sell / Fill-Dump, and a brighter
+//! wind shifts quarter, a single coin / coin pour on a market Buy-Sell /
+//! Fill-Dump (the pour reused for repairs, upgrades and contract payouts), a
+//! confirming stamp on accepting a contract or booking a race, and a brighter
 //! *chime* when the hull scoops up floating salvage.
 //!
 //! macroquad's bundled mixer (quad-snd → audrey) only decodes WAV/OGG, but the
@@ -51,10 +52,8 @@ const STORM_MP3: &[u8] = snd!("thunderstorm-cut.mp3");
 const FLAP_UP_MP3: &[u8] = snd!("flap1.mp3");
 const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
 const WIND_SHIFT_MP3: &[u8] = snd!("universfield-transition-02-141076.mp3");
-// The coin clink on a successful trade/repair/upgrade (`PortView.coinSound`).
-const COIN_MP3: &[u8] = snd!("collect-coin.mp3");
-// Market trade cues, distinct from the generic coin chime: a single coin for a
-// per-unit Buy/Sell, a heavier coin pour for a bulk Fill/Dump.
+// Market trade cues: a single coin for a per-unit Buy/Sell, a heavier coin pour
+// for a bulk Fill/Dump (and reused for repairs, upgrades and contract payouts).
 const ONE_COIN_MP3: &[u8] = snd!("one-coin.mp3");
 const COINS_MP3: &[u8] = snd!("coins.mp3");
 // A confirming stamp for committing to a venture: accepting or abandoning a
@@ -83,7 +82,6 @@ const CALM_MAX_VOL: f32 = 0.5;
 const STORM_MAX_VOL: f32 = 0.6;
 const FLAP_VOL: f32 = 1.0;
 const WIND_SHIFT_VOL: f32 = 1.0;
-const COIN_VOL: f32 = 0.5;
 // Market Buy/Sell (one coin) and Fill/Dump (coin pour), both at half voice.
 const ONE_COIN_VOL: f32 = 0.5;
 const COINS_VOL: f32 = 0.5;
@@ -108,7 +106,6 @@ pub struct SoundBank {
     flap_up: Sound,
     flap_down: Sound,
     wind_shift: Sound,
-    coin: Sound,
     one_coin: Sound,
     coins: Sound,
     accept: Sound,
@@ -135,7 +132,6 @@ impl SoundBank {
         let flap_up = load_clip(FLAP_UP_MP3).await;
         let flap_down = load_clip(FLAP_DOWN_MP3).await;
         let wind_shift = load_clip(WIND_SHIFT_MP3).await;
-        let coin = load_clip(COIN_MP3).await;
         let one_coin = load_clip(ONE_COIN_MP3).await;
         let coins = load_clip(COINS_MP3).await;
         let accept = load_clip(ACCEPT_MP3).await;
@@ -157,7 +153,6 @@ impl SoundBank {
             flap_up,
             flap_down,
             wind_shift,
-            coin,
             one_coin,
             coins,
             accept,
@@ -233,16 +228,6 @@ impl SoundBank {
         play_sound(
             &self.wind_shift,
             PlaySoundParams { looped: false, volume: WIND_SHIFT_VOL * self.master },
-        );
-    }
-
-    /// A coin *chime* — a trade, repair or upgrade went through.
-    pub fn transaction(&self) {
-        // Restart rather than layer on rapid commits (`coinSound.currentTime = 0`).
-        stop_sound(&self.coin);
-        play_sound(
-            &self.coin,
-            PlaySoundParams { looped: false, volume: COIN_VOL * self.master },
         );
     }
 
@@ -422,7 +407,6 @@ mod tests {
             ("flap_up", FLAP_UP_MP3),
             ("flap_down", FLAP_DOWN_MP3),
             ("wind_shift", WIND_SHIFT_MP3),
-            ("coin", COIN_MP3),
             ("one_coin", ONE_COIN_MP3),
             ("coins", COINS_MP3),
             ("accept", ACCEPT_MP3),

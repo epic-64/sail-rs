@@ -27,7 +27,6 @@ const CLIPS: &[(&str, u8, &str)] = &[
     ("universfield-transition-02-141076.mp3", 1, "80k"),
     ("flap1.mp3", 1, "80k"),
     ("flap2.mp3", 1, "80k"),
-    ("collect-coin.mp3", 1, "80k"),
     ("one-coin.mp3", 1, "80k"),
     ("coins.mp3", 1, "80k"),
     ("accept.mp3", 1, "80k"),
