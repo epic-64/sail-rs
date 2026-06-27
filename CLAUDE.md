@@ -34,6 +34,24 @@ debug runs but is choppier). Tests: `cargo test`.
   heading by wrapping `draw_text`/`measure_text` in `font::heading(|| …)`. Table column
   labels, row labels, item titles, tabs, buttons and hints stay sans.
 
+## Sound (`sound.rs`, `build.rs`)
+
+Clips are baked into the binary with `include_bytes!` via the `snd!` macro. **Adding a
+new sound is a two-place change, and forgetting the second place breaks only the web
+build:**
+
+- **Native** reads straight from `assets/sounds/<file>`.
+- **Web (wasm)** reads from `OUT_DIR/sounds-web/<file>`, where `build.rs` stages a
+  re-encoded (smaller) copy. **`build.rs` only stages files listed in its `CLIPS`
+  table** — so every clip referenced by `snd!` *must* also be added to `CLIPS` (with its
+  channel count + bitrate), or the wasm `include_bytes!` fails to resolve and the web
+  build won't compile. Native builds don't touch `OUT_DIR`, so a missing `CLIPS` entry
+  is invisible until you build for web.
+
+When you add a clip: drop the mp3 in `assets/sounds/`, add a `snd!(...)` const + field +
+`load_clip` + a play method in `sound.rs`, add it to the decode test array, **and add it
+to `CLIPS` in `build.rs`.**
+
 ## UI scale (`ui.rs`)
 
 Every parchment UI (port board, captain's log, pause menu) and the sailing HUD size

@@ -463,6 +463,9 @@ impl PortScreen {
                 // (which only reports `NonPositive`) apart from being out of coin.
                 let hold_full = gs.hold_free() <= 0;
                 let buying = self.column <= 1; // Buy / Fill
+                // Fill/Dump move the hold in bulk (coin pour); Buy/Sell are
+                // per-unit (a single coin).
+                let bulk = self.column == 1 || self.column == 2;
                 let done = match self.column {
                     0 => gs.buy(market, good, 1),
                     1 => gs.fill(market, good),
@@ -470,7 +473,13 @@ impl PortScreen {
                     _ => gs.sell(market, good, 1),
                 };
                 match done {
-                    Ok(()) => sounds.transaction(),
+                    Ok(()) => {
+                        if bulk {
+                            sounds.trade_bulk();
+                        } else {
+                            sounds.trade_one();
+                        }
+                    }
                     Err(e) => {
                         sounds.invalid();
                         if buying {
@@ -525,7 +534,12 @@ impl PortScreen {
                 };
                 match done {
                     Ok(()) => {
-                        sounds.transaction();
+                        // Accepting/abandoning a contract stamps; a delivery pays
+                        // out, so it keeps the coin chime.
+                        match here {
+                            Focus::Delivery(_) => sounds.transaction(),
+                            _ => sounds.accept(),
+                        }
                         let after = self.rows_of(gs, world, self.tab);
                         self.focus = if after.is_empty() {
                             Focus::TabBar
@@ -556,7 +570,7 @@ impl PortScreen {
             // picker rows then vanish, so land on the new abandon row.
             Focus::RaceTarget(id) => match gs.accept_race(world, id) {
                 Ok(()) => {
-                    sounds.transaction();
+                    sounds.accept();
                     self.focus = Focus::RaceWithdraw;
                 }
                 Err(e) => {
