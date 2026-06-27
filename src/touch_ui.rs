@@ -2,8 +2,8 @@
 //! hit-tests, and their drawing. Two surfaces:
 //!
 //! - the **sailing HUD** ([`sail_hud`] / [`draw_sail_hud`]): a steering wheel
-//!   (lower-left), sail up/down (lower-right), dock (centre), and a stack of
-//!   pause / log / look-astern on the right;
+//!   (lower-left), sail up/down (lower-right), dock (centre), and a left-edge rail
+//!   of pause / log / look-astern (under the top-left status strip);
 //! - the **menu nav cluster** ([`nav_cluster`] / [`draw_nav_cluster`]): a d-pad
 //!   plus confirm / back, which emit the same arrow / Enter / Esc verbs the
 //!   keyboard-driven pause menu, captain's log and port board already consume.
@@ -102,8 +102,8 @@ pub struct SailHud {
 }
 
 /// Lay out the sailing HUD for a `w`×`h` screen (landscape). The wheel sits under
-/// the left thumb, the sail buttons under the right; pause / log / astern stack on
-/// the right edge below the minimap; dock is centred along the bottom.
+/// the left thumb, the sail buttons under the right; pause / log / astern form a
+/// left-edge rail under the status strip; dock is centred along the bottom.
 pub fn sail_hud(w: f32, h: f32) -> SailHud {
     let mg = margin(h);
     let b = btn(h);
@@ -121,14 +121,17 @@ pub fn sail_hud(w: f32, h: f32) -> SailHud {
     // Dock, centred along the bottom (thumb-reachable when a port comes up).
     let dock = Rect::new(w * 0.5 - b * 0.5, h - b - mg, b, b);
 
-    // Right-edge stack below the corner minimap (which is `~(h*0.24)` tall at the
-    // top-right; keep clear of it). Mirrors the minimap's scaled cap in `main.rs`.
-    let map_h = (h * 0.24).clamp(crate::ui::px(140.0), crate::ui::px(200.0));
-    let rx = w - b - mg;
-    let y0 = mg + map_h + gap;
-    let pause = Rect::new(rx, y0, b, b);
-    let log = Rect::new(rx, y0 + b + gap, b, b);
-    let astern = Rect::new(rx, y0 + 2.0 * (b + gap), b, b);
+    // Pause / log / astern: a left-edge column dropping from just under the HUD's
+    // top-left status strip (the speed/wind line and any debuff badges `main.rs`
+    // draws there). Kept off the right edge on purpose: a right-edge stack below the
+    // corner minimap and the lower-right sail buttons grow toward each other, and on a
+    // tall, narrow phone (around 20:9) the short height left them overlapping. The left
+    // rail clears the status strip above and the bottom-left wheel below it.
+    let lx = mg;
+    let top = mg + crate::ui::px(56.0); // clear the status line + badges above
+    let pause = Rect::new(lx, top, b, b);
+    let log = Rect::new(lx, top + b + gap, b, b);
+    let astern = Rect::new(lx, top + 2.0 * (b + gap), b, b);
 
     SailHud { wheel, sail_up, sail_down, dock, log, astern, pause }
 }
