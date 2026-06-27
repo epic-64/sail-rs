@@ -1540,7 +1540,9 @@ async fn run_game(
         // The docking call-to-action (while sailing), then the port board (docked).
         // Suppress it at a race's finish line so a novice doesn't strike sail short.
         let race_target = gs.race.map(|r| r.target_id);
-        port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
+        if !log_open {
+            port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
+        }
         if harbor.is_open() {
             if let Some(id) = gs.docked_island_id() {
                 let market = Market::for_island(&world.islands[id as usize], world.seed);
