@@ -355,7 +355,7 @@ impl PauseMenu {
     fn apply_seed(&mut self, sounds: &mut SoundBank) -> PauseAction {
         match self.seed_text.parse::<i64>() {
             Ok(seed) => {
-                sounds.transaction(); // the coin chime confirms the new chart
+                sounds.accept(); // the confirming stamp acknowledges the new chart
                 self.open = false;
                 PauseAction::NewWorld(seed)
             }
