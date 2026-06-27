@@ -7,6 +7,7 @@
 mod bloom;
 mod captains_log;
 mod celestial;
+mod clouds;
 mod flotsam;
 mod flotsam_render;
 mod font;
@@ -50,6 +51,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipRenderer};
+use clouds::StormSky;
 use rain::{Rain, RainInput};
 use spray::{Spray, SprayInput};
 use ui::{format_dist, px};
@@ -446,8 +448,10 @@ async fn run_game(
     // frame rates that read as a frontal / side wave impact (`SLAM_REF` = m/s of
     // bow drop that counts as a full frontal slam).
     let mut spray = Spray::new();
-    // Storm rain: streaks raking the whole viewport, thickening with the gale's fury.
+    // Storm rain: streaks, sea rings and deck splashes, thickening with the gale's fury.
     let mut rain = Rain::new();
+    // Storm sky: big dark layered clouds, lit from within by sweeping lightning.
+    let mut storm_sky = StormSky::new();
     let mut prev_bow_lift: f32 = 0.0;
     let mut prev_lean: f32 = 0.0;
     const SLAM_REF: f32 = 7.0;
@@ -1058,6 +1062,10 @@ async fn run_game(
         draw_sky(&sky_view, sky_grad, storm, overscan, sky.sun_az, sky.sun_alt);
         // Stars, then the moon and sun arcing over on the clock.
         celestial::draw(&sky, &stars, t, &sky_view, h, storm);
+        // Storm clouds over the stars: big dark layered masses that gather with the
+        // fury, lit from within by lightning sweeping across one mass at a time. Drawn
+        // before the sea, so anything dipping below the sea line is painted over.
+        storm_sky.render(&sky_view, dt, storm, day_lit, h);
 
         // Distant-water backdrop behind the wave mesh, over-scanned so a rolled view
         // still finds deep sea in the corners.
@@ -1224,11 +1232,16 @@ async fn run_game(
         // Rain rakes the whole viewport (drawn even while glancing astern, since it
         // falls all around), slanted by the apparent wind across the view and fading
         // in and out with the same fury that swells the thunder and darkens the sky.
+        // The sea rings sit below the live, rolled sea line; the deck splashes ride
+        // the foreground deck, so they hide with it while glancing astern.
         rain.render(
             &RainInput {
                 storm,
                 slant: wind_rel.sin(),
                 day_lit,
+                water_line: horizon + cam_vert,
+                roll_deg: cam_roll_deg,
+                deck: !look_back,
             },
             dt,
             w,
