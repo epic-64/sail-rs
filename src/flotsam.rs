@@ -12,9 +12,9 @@
 //! As in the original, the *pure* generation and collection live here; `main`
 //! drives them each frame and the billboards are drawn by [`crate::flotsam_render`].
 
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_PI_2, PI};
 
-use crate::geometry::Vec2;
+use crate::geometry::{wrap_angle, Vec2};
 use crate::rng::Rng;
 use crate::world::World;
 
@@ -92,15 +92,26 @@ pub struct Haul {
 
 /// How many pieces of salvage drift within reach of the ship at once.
 pub const TARGET: usize = 3;
-/// Nearest a fresh piece spawns (m) — outside the pickup reach and clear of the
-/// bow, so nothing winks into existence right on top of the player.
-pub const MIN_SPAWN: f32 = 180.0;
-/// Farthest a fresh piece spawns (m) — just inside the range at which salvage
-/// becomes visible, so a fresh piece appears ready to steer toward.
-pub const MAX_SPAWN: f32 = 480.0;
+/// Nearest a fresh piece spawns (m) — well clear of the bow so a replacement
+/// never winks into existence right on top of the player, and far enough that a
+/// new piece reads as something to steer toward rather than a freebie underfoot.
+pub const MIN_SPAWN: f32 = 400.0;
+/// Farthest a fresh piece spawns (m) — kept inside the renderer's full-opacity
+/// range (`flotsam_render::FADE_NEAR`) so a fresh piece appears crisp and ready to
+/// chase rather than already dissolving into the haze.
+pub const MAX_SPAWN: f32 = 800.0;
 /// Items farther than this from the ship are forgotten as it sails on, so the
 /// field never accumulates a wake of stale crates across the whole chart.
 pub const CULL_DIST: f32 = 3200.0;
+/// Once a piece has fallen abaft the beam (the ship has sailed past it) and is at
+/// least this far clear, its slot is recycled into fresh salvage ahead of the bow
+/// rather than left dragging astern for the whole [`CULL_DIST`] run: a passed-by
+/// crate sits outside the forward view, never closes the distance, and would
+/// otherwise hog one of the [`TARGET`] slots so no new salvage spawns ahead. (New:
+/// the original kept every piece until `CULL_DIST`, which let passed salvage starve
+/// the field of anything reachable.) Set generously so a piece is only forgotten
+/// once it has genuinely fallen behind, not the moment it slips out of view.
+pub const ASTERN_CULL: f32 = 500.0;
 /// Metres of open water kept around an island when strewing salvage, so crates
 /// float offshore rather than on the beach.
 pub const SHORE_CLEARANCE: f32 = 120.0;
@@ -152,14 +163,26 @@ impl FlotsamField {
     /// Top the field back up to [`TARGET`] items drifting within sight of the
     /// ship, so there is always fresh salvage on the horizon to chase.
     ///
-    /// Items fallen far astern (beyond [`CULL_DIST`]) are dropped first, then new
-    /// ones appear in a ring around the ship — far enough out not to pop in
-    /// underfoot, close enough to spot — and never atop an island. Fresh salvage
-    /// is biased to lie *ahead* of the bow (`heading`), so it drifts into the
-    /// player's course rather than scattering evenly behind. Threads the field's
-    /// own RNG. (`FlotsamField.replenish`.)
+    /// Items fallen far astern (beyond [`CULL_DIST`]) are dropped first, along with
+    /// any the ship has already sailed past (abaft the beam and clear by
+    /// [`ASTERN_CULL`]), so passed-by salvage frees its slot instead of receding out
+    /// of reach forever. New ones then appear in a ring around the ship — far enough
+    /// out not to pop in underfoot, close enough to spot — and never atop an island.
+    /// Fresh salvage is biased to lie *ahead* of the bow (`heading`), so it drifts
+    /// into the player's course rather than scattering evenly behind. Threads the
+    /// field's own RNG. (`FlotsamField.replenish`.)
     pub fn replenish(&mut self, center: Vec2, heading: f32, world: &World) {
-        self.items.retain(|f| f.pos.distance_to(center) <= CULL_DIST);
+        self.items.retain(|f| {
+            let d = f.pos.distance_to(center);
+            if d > CULL_DIST {
+                return false;
+            }
+            // Abaft the beam means the ship has passed it; recycle it once clear so
+            // a fresh piece can spawn ahead. (Abaft pieces are outside the forward
+            // view, so this never blinks a visible crate out of existence.)
+            let abaft = wrap_angle(center.bearing_to(f.pos) - heading).abs() > FRAC_PI_2;
+            !(abaft && d > ASTERN_CULL)
+        });
         let need = TARGET.saturating_sub(self.items.len());
         for _ in 0..need {
             if let Some(item) = draw_item(center, heading, world, self.next_id, &mut self.rng) {
@@ -307,6 +330,36 @@ mod tests {
         };
         field.replenish(Vec2::ZERO, 0.0, &world);
         assert!(!field.items.iter().any(|f| f.id == 0));
+    }
+
+    #[test]
+    fn replenish_recycles_salvage_the_ship_has_sailed_past() {
+        // A piece dead astern (heading due north, piece to the south) and well clear
+        // of pickup reach should be recycled rather than left receding out of reach.
+        let world = world();
+        let mut field = FlotsamField {
+            items: vec![Flotsam {
+                id: 0,
+                pos: Vec2::new(0.0, -(ASTERN_CULL + 200.0)),
+                kind: FlotsamKind::Crate,
+            }],
+            next_id: 1,
+            rng: Rng::from_seed(5),
+        };
+        field.replenish(Vec2::ZERO, 0.0, &world);
+        assert!(!field.items.iter().any(|f| f.id == 0));
+        // ...but a piece the same distance ahead is kept (it is still reachable).
+        let mut field = FlotsamField {
+            items: vec![Flotsam {
+                id: 0,
+                pos: Vec2::new(0.0, ASTERN_CULL + 200.0),
+                kind: FlotsamKind::Crate,
+            }],
+            next_id: 1,
+            rng: Rng::from_seed(5),
+        };
+        field.replenish(Vec2::ZERO, 0.0, &world);
+        assert!(field.items.iter().any(|f| f.id == 0));
     }
 
     #[test]
