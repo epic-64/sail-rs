@@ -32,6 +32,10 @@ const KEY: &str = "sailrs_save";
 /// change of world and don't ride the per-seed save). Currently just the scenery
 /// density level (the pause-menu performance slider).
 const SETTINGS_KEY: &str = "sailrs_settings";
+/// Marks that the captain has seen the guide at least once, so it only pops up by
+/// itself on a first voyage (see `crate::guide`). A global flag, not voyage state:
+/// it must outlive any one chart and not ride the per-seed save.
+const GUIDE_KEY: &str = "sailrs_guide_seen";
 /// First line of a save; bumped if the format changes so old saves are rejected.
 const MAGIC: &str = "sailrs-save-v1";
 
@@ -280,6 +284,16 @@ pub fn store_feat_density(level: usize) {
 /// Read the saved scenery-density level, if one was stored and parses.
 pub fn load_feat_density() -> Option<usize> {
     backend::read(SETTINGS_KEY).and_then(|s| s.trim().parse().ok())
+}
+
+/// Whether the captain has already been shown the guide on a previous launch.
+pub fn guide_seen() -> bool {
+    backend::read(GUIDE_KEY).map(|s| s.trim() == "1").unwrap_or(false)
+}
+
+/// Remember that the guide has been shown, so it won't open itself again.
+pub fn store_guide_seen() {
+    backend::write(GUIDE_KEY, "1");
 }
 
 // --- Serialisation helpers ---------------------------------------------------
