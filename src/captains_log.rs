@@ -117,6 +117,9 @@ pub fn render(
     spread: usize,
     sel: usize,
     frame_dt: f32,
+    // Whether the dev controls are unlocked (the "banana" cheat, see `main`): the
+    // opening page flags it so the captain can see the cheat is live.
+    dev_mode: bool,
     w: f32,
     h: f32,
 ) {
@@ -159,7 +162,7 @@ pub fn render(
     // The pages of each spread, in reading order.
     match spread {
         0 => {
-            page_course(&left, kin, wind, sail_name, day, weather_label);
+            page_course(&left, kin, wind, sail_name, day, weather_label, dev_mode);
             page_chart(&right, world, kin, wind, chart_marks, race_marks, y0, ph, pad);
         }
         1 => {
@@ -202,8 +205,10 @@ pub fn render(
     draw_text(close, x0 + pw - pad - cd.width, foot_y, fs_small() as f32, dim_ink());
 }
 
-/// **Course & Conditions** — the live readouts (the opening left page, unchanged).
-fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Daytime, weather_label: &str) {
+/// **Course & Conditions** — the live readouts (the opening left page). Carries a
+/// "dev mode active" flag at its foot when the dev controls are unlocked (see the
+/// "banana" cheat in `main`); the line is absent while dev mode is off.
+fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Daytime, weather_label: &str, dev_mode: bool) {
     heading(p, "Course & Conditions");
 
     let knots = kin.speed() / KNOT;
@@ -231,6 +236,15 @@ fn page_course(p: &Page, kin: &Kinematics, wind: Wind, sail_name: &str, day: Day
     row("Weather", weather_label, p.x, y, p.col_w, fs);
     y += lh;
     row("Time", day.label(), p.x, y, p.col_w, fs);
+
+    // The cheat tell: only inked while the dev controls are unlocked. Set off below a
+    // rule and in the amber warning ink so it reads as out-of-the-ordinary.
+    if dev_mode {
+        y += lh * 0.6;
+        draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+        y += lh * 0.8;
+        draw_text("Dev mode active", p.x, y, fs as f32, warn_ink());
+    }
 }
 
 /// **The Chart** — the parchment minimap of the local waters (the opening right

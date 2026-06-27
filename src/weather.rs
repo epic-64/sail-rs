@@ -216,6 +216,37 @@ mod tests {
     }
 
     #[test]
+    fn probe_time_to_first_storm() {
+        // Drive the real WeatherState exactly as the game does (fixed 1/60 s steps,
+        // the in-game seed derivation) and report the simulated time the first Storm
+        // arrives, for a spread of world seeds. Also confirms it's deterministic: the
+        // same seed yields the identical time twice.
+        fn time_to_storm(world_seed: i64) -> Option<f32> {
+            let mut ws = WeatherState::new(Weather::Clear, world_seed ^ 0x57e4_c107);
+            let dt = 1.0 / 60.0;
+            let mut t = 0.0f32;
+            // Cap the walk at ~8 in-game hours so a storm-shy seed can't loop forever.
+            while t < 8.0 * 3600.0 {
+                ws.update(dt);
+                t += dt;
+                if ws.weather == Weather::Storm {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        for seed in [1i64, 2, 7, 42, 1234] {
+            let a = time_to_storm(seed);
+            let b = time_to_storm(seed);
+            assert_eq!(a, b, "seed {seed} must be deterministic");
+            match a {
+                Some(t) => println!("seed {seed}: first Storm at {:.0} s ({:.1} min)", t, t / 60.0),
+                None => println!("seed {seed}: no Storm within 8 h"),
+            }
+        }
+    }
+
+    #[test]
     fn calm_states_dominate_the_long_run() {
         // Walk a long chain and count time spent fair (Calm/Clear/Breezy) vs. foul
         // (Squall/Storm). The calm bias should make fair far the more common.
