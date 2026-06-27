@@ -372,6 +372,44 @@ async fn main() {
     }
 }
 
+/// Announce a wind shift to a fresh random quarter and restart the period timer so
+/// the next automatic shift is a full `WIND_PERIOD` off. Both callers route here:
+/// the timer that fires every period and the dev "force shift" key.
+///
+/// With `cue` set it plays the wind-shift whoosh and raises the "winds are changing"
+/// toast *now*, but the wind itself only turns after a short lead-in (parked in
+/// `pending_wind`, applied once `wind_change_delay` elapses) so the shift lands with
+/// the whoosh rather than ahead of it. Callers pass `cue = false` while time-warping
+/// (the cues would otherwise machine-gun); with nothing to sync to, the wind turns
+/// at once.
+fn change_wind(
+    wind: &mut Wind,
+    pending_wind: &mut Option<Wind>,
+    wind_change_delay: &mut f32,
+    wind_rng: &mut Rng,
+    last_wind_shift: &mut f32,
+    clock: f32,
+    sounds: &sound::SoundBank,
+    wind_flash: &mut f32,
+    cue: bool,
+) {
+    // Seconds the toast holds before fading, and the beat the wind waits so it turns
+    // in time with the whoosh rather than before it.
+    const WIND_FLASH_TIME: f32 = 5.0;
+    const WIND_CHANGE_DELAY: f32 = 2.0;
+    *last_wind_shift = clock;
+    // Draw the new wind now either way, so the RNG sequence is unchanged.
+    let next = Wind::random(wind_rng);
+    if cue {
+        sounds.wind_shift();
+        *wind_flash = WIND_FLASH_TIME;
+        *pending_wind = Some(next);
+        *wind_change_delay = WIND_CHANGE_DELAY;
+    } else {
+        *wind = next;
+    }
+}
+
 /// Run one voyage on `seed` until the captain quits or enters a new world seed.
 /// `sounds`/`pause`/`bloom` are owned by `main` and persist across worlds.
 async fn run_game(
@@ -480,6 +518,10 @@ async fn run_game(
     // backs/veers to a fresh random quarter every WIND_PERIOD seconds.
     let mut wind_rng = Rng::from_seed(world.seed);
     let mut wind = Wind::favorable(kin.heading_rad, &mut wind_rng);
+    // A shift announced but not yet applied: the new wind waits out a short lead-in
+    // (set in `change_wind`) so it turns in time with the whoosh, not before it.
+    let mut pending_wind: Option<Wind> = None;
+    let mut wind_change_delay: f32 = 0.0;
     const WIND_PERIOD: f32 = 300.0; // seconds between auto wind shifts
     let mut clock: f32 = 0.0; // elapsed seconds, for the wind drift
     let mut last_wind_shift: f32 = 0.0; // the opening breeze holds one full period
@@ -599,6 +641,9 @@ async fn run_game(
     let mut salvage_flash: f32 = 0.0;
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
+    // A fading toast announcing that the wind has backed/veered to a fresh quarter,
+    // shown in step with the wind-shift whoosh (see `change_wind`).
+    let mut wind_flash: f32 = 0.0;
     // A race outcome banner: when the player or the rival reaches the mark, this
     // holds a win/loss message that flashes centre-screen and fades, so the result
     // is announced on screen as well as by the win/loss sting.
@@ -716,12 +761,18 @@ async fn run_game(
             for _ in 0..time_steps {
                 clock += dt;
                 if clock - last_wind_shift >= WIND_PERIOD {
-                    wind = Wind::random(&mut wind_rng);
-                    last_wind_shift = clock;
-                    // Quiet the wind-shift chime while warping; it would machine-gun.
-                    if time_steps == 1 {
-                        sounds.wind_shift();
-                    }
+                    // Quiet the whoosh + toast while warping (cue = false); they'd machine-gun.
+                    change_wind(
+                        &mut wind,
+                        &mut pending_wind,
+                        &mut wind_change_delay,
+                        &mut wind_rng,
+                        &mut last_wind_shift,
+                        clock,
+                        sounds,
+                        &mut wind_flash,
+                        time_steps == 1,
+                    );
                 }
                 // Drift the weather and ease the sea-state and sky gloom it drives, so
                 // the waves build/lay down and the sky greys/clears smoothly across a
@@ -733,6 +784,16 @@ async fn run_game(
         }
         sea = weather.sea;
         storm = weather.fury();
+
+        // Apply a pending wind shift once its lead-in elapses, so the wind turns a
+        // beat after the whoosh and toast announce it (see `change_wind`). Ticks on
+        // real dt so it stays locked to the sound, not the sim time-warp.
+        if pending_wind.is_some() {
+            wind_change_delay -= dt;
+            if wind_change_delay <= 0.0 {
+                wind = pending_wind.take().expect("pending checked just above");
+            }
+        }
 
         // Sail the local traders along their circuits (whether the player is at sea
         // or docked), re-spawning the fleet if the ship has crossed into new waters.
@@ -825,16 +886,6 @@ async fn run_game(
                 turn,
                 throttle: SAIL_FRACTIONS[sail_mode],
             };
-
-            // Dev aid (not in the original; needs dev mode, see the "banana" cheat):
-            // nudge the wind with [ and ] to feel the points of sail and tacking on
-            // demand.
-            if dev_mode && is_key_down(KeyCode::RightBracket) {
-                wind.toward_rad = wrap_angle(wind.toward_rad + dt * 0.8);
-            }
-            if dev_mode && is_key_down(KeyCode::LeftBracket) {
-                wind.toward_rad = wrap_angle(wind.toward_rad - dt * 0.8);
-            }
 
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
@@ -979,6 +1030,22 @@ async fn run_game(
             }
             if dev_mode && is_key_pressed(KeyCode::Y) {
                 tod = (tod - 0.02).rem_euclid(1.0);
+            }
+            // Force a wind shift on demand (U): the same backing/veering to a fresh
+            // quarter the WIND_PERIOD timer drives, with its whoosh and toast, to feel
+            // a new point of sail without waiting out the period.
+            if dev_mode && is_key_pressed(KeyCode::U) {
+                change_wind(
+                    &mut wind,
+                    &mut pending_wind,
+                    &mut wind_change_delay,
+                    &mut wind_rng,
+                    &mut last_wind_shift,
+                    clock,
+                    sounds,
+                    &mut wind_flash,
+                    true,
+                );
             }
             if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
                 log_open = !log_open;
@@ -1478,6 +1545,27 @@ async fn run_game(
                 Color::new(0.0, 0.0, 0.0, 0.5 * p),
             );
             draw_text(&salvage_msg, tx, ty, fs as f32, Color::new(1.0, 0.9, 0.5, p));
+        }
+
+        // Wind-shift toast: a cool note announcing the breeze has turned, held then
+        // faded over the last second so it reads without lingering on the helm.
+        wind_flash = (wind_flash - dt).max(0.0);
+        if wind_flash > 0.0 && !harbor.is_open() && !log_open {
+            let a = (wind_flash / 1.0).min(1.0); // full opacity, fading the last second
+            let text = "The winds are changing";
+            let fs = px(26.0) as u16;
+            let dims = measure_text(text, None, fs, 1.0);
+            let bx = w * 0.5 - dims.width / 2.0;
+            let by = h * 0.22;
+            draw_rectangle(
+                bx - px(18.0),
+                by - px(28.0),
+                dims.width + px(36.0),
+                px(42.0),
+                Color::new(0.05, 0.08, 0.12, 0.6 * a),
+            );
+            draw_text(text, bx + px(1.0), by + px(1.0), fs as f32, Color::new(0.0, 0.0, 0.0, 0.5 * a));
+            draw_text(text, bx, by, fs as f32, Color::new(0.78, 0.90, 1.0, a));
         }
 
         // The destinations marked on the charts: every accepted contract (yellow

@@ -51,7 +51,7 @@ const STORM_MP3: &[u8] = snd!("thunderstorm-cut.mp3");
 // Canvas-flap one-shots: raising sail (more canvas catching wind) vs lowering.
 const FLAP_UP_MP3: &[u8] = snd!("flap1.mp3");
 const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
-const WIND_SHIFT_MP3: &[u8] = snd!("universfield-transition-02-141076.mp3");
+const WIND_SHIFT_MP3: &[u8] = snd!("elemental-woosh.mp3");
 // Market trade cues: a single coin for a per-unit Buy/Sell, a heavier coin pour
 // for a bulk Fill/Dump (and reused for repairs, upgrades and contract payouts).
 const ONE_COIN_MP3: &[u8] = snd!("one-coin.mp3");
