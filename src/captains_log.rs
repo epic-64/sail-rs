@@ -303,12 +303,19 @@ fn page_world(world: &World, x0: f32, y0: f32, pw: f32, ph: f32, pad: f32, head_
     let und_half = pw * 0.16;
     draw_line(x0 + pw / 2.0 - und_half, under_y, x0 + pw / 2.0 + und_half, under_y, px(1.5), dim_ink());
 
-    // A square chart centred on the spread (the world is roughly square), leaving room
-    // for a caption and the footer below.
+    // A 16:9 chart centred on the spread (matching the world's own 16:9 layout, and the
+    // whole two-page spread it spans), leaving room for a caption and the footer below.
+    // Sized off the spread width, then shrunk to the available height if that's tighter.
     let map_top = head_y + px(26.0);
     let map_bottom = y0 + ph - pad - px(30.0);
-    let side = (pw - 2.0 * pad).min(map_bottom - map_top).max(px(60.0));
-    let map_rect = Rect::new(x0 + (pw - side) / 2.0, map_top, side, side);
+    let avail_h = (map_bottom - map_top).max(px(60.0));
+    let mut mw = pw - 2.0 * pad;
+    let mut mh = mw * 9.0 / 16.0;
+    if mh > avail_h {
+        mh = avail_h;
+        mw = mh * 16.0 / 9.0;
+    }
+    let map_rect = Rect::new(x0 + (pw - mw) / 2.0, map_top, mw, mh);
     // Draw straight onto the logbook leaf (transparent panel) so it reads as inked into
     // the page rather than pasted over it.
     let mut pal = MinimapPalette::parchment();

@@ -595,13 +595,90 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
     let pad = 18.0 * s;
     let avail_w = (rect.w - 2.0 * pad).max(1.0);
     let avail_h = (rect.h - 2.0 * pad).max(1.0);
-    // 1.12 keeps a little open sea around the outermost isles.
-    let scale = (avail_w / (span_x * 1.12)).min(avail_h / (span_y * 1.12));
+    // Fit each axis independently so the chart fills the (16:9) frame instead of being
+    // letterboxed. A single uniform scale would fit the world's bounding box without
+    // clipping, but that box is a touch narrower than 16:9 once each cluster's own girth
+    // is added to both axes, so it would become height-bound and leave wide gaps of open
+    // sea east and west with the isles bunched in the middle. The small horizontal
+    // stretch this introduces is invisible on a stylised chart (the blobs are drawn at a
+    // fixed screen radius, so only their spacing shifts). 1.12 keeps a little open sea
+    // around the outermost isles.
+    let scale_x = avail_w / (span_x * 1.12);
+    let scale_y = avail_h / (span_y * 1.12);
     let cx = rect.x + rect.w / 2.0;
     let cy = rect.y + rect.h / 2.0;
     // World x (east) right, world y (north) up, so flip the screen y axis.
-    let sx = |p: Vec2| cx + (p.x - world_cx) * scale;
-    let sy = |p: Vec2| cy - (p.y - world_cy) * scale;
+    let sx = |p: Vec2| cx + (p.x - world_cx) * scale_x;
+    let sy = |p: Vec2| cy - (p.y - world_cy) * scale_y;
+
+    // Port and shipyard screen positions, gathered up front so the nautic lines below
+    // can be laid under the isles. Only ports are charted; one shipyard per cluster.
+    let mut ports_xy: Vec<(f32, f32)> = Vec::new();
+    let mut shipyards_xy: Vec<(f32, f32)> = Vec::new();
+    for (idx, isle) in world.islands.iter().enumerate() {
+        if !isle.is_port {
+            continue;
+        }
+        let p = (sx(disp_pos[idx]), sy(disp_pos[idx]));
+        ports_xy.push(p);
+        if isle.is_shipyard {
+            shipyards_xy.push(p);
+        }
+    }
+
+    // Nautic (rhumb) lines: a hub in open water near the chart's middle, with a straight
+    // navigation line out to every shipyard. Drawn first and faint, so the isles and the
+    // beasts sit on top like ink over a ruled chart.
+    let hub = {
+        // Search a central box for the spot farthest from any port, so the hub sits in
+        // free water rather than atop the central archipelago.
+        let (bx, by) = (rect.x + rect.w * 0.30, rect.y + rect.h * 0.30);
+        let (bw, bh) = (rect.w * 0.40, rect.h * 0.40);
+        let mut best = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+        let mut best_clear = -1.0f32;
+        const G: i32 = 10;
+        for gy in 0..=G {
+            for gx in 0..=G {
+                let px = bx + bw * gx as f32 / G as f32;
+                let py = by + bh * gy as f32 / G as f32;
+                let mut clear = f32::MAX;
+                for &(ox, oy) in &ports_xy {
+                    clear = clear.min((px - ox).hypot(py - oy));
+                }
+                if clear > best_clear {
+                    best_clear = clear;
+                    best = (px, py);
+                }
+            }
+        }
+        best
+    };
+    let rhumb = Color::new(pal.border.r, pal.border.g, pal.border.b, pal.border.a * 0.45);
+    // Where a ray from `o` along `d` leaves the rect: the smallest positive crossing of
+    // the four edges. Lets each rhumb line run on past its shipyard to the frame edge.
+    let ray_to_edge = |o: (f32, f32), d: (f32, f32), r: Rect| -> (f32, f32) {
+        let mut t = f32::INFINITY;
+        if d.0 > 1e-4 {
+            t = t.min((r.x + r.w - o.0) / d.0);
+        } else if d.0 < -1e-4 {
+            t = t.min((r.x - o.0) / d.0);
+        }
+        if d.1 > 1e-4 {
+            t = t.min((r.y + r.h - o.1) / d.1);
+        } else if d.1 < -1e-4 {
+            t = t.min((r.y - o.1) / d.1);
+        }
+        if !t.is_finite() {
+            return o;
+        }
+        (o.0 + d.0 * t, o.1 + d.1 * t)
+    };
+    // Each line of bearing runs from the compass hub through a shipyard and on to the
+    // frame edge, the way a chart's rhumb lines cross the whole sheet.
+    for &(spx, spy) in &shipyards_xy {
+        let (ex, ey) = ray_to_edge(hub, (spx - hub.0, spy - hub.1), rect);
+        draw_line(hub.0, hub.1, ex, ey, (1.0 * s).max(1.0), rhumb);
+    }
 
     // Each isle: an irregular hand-inked blob (a triangle fan with a wobbled rim, the
     // wobble seeded off the isle id) for the landmass body.
@@ -663,9 +740,7 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         }
     };
     // Only the ports are charted (the trading isles the captain actually visits): a
-    // hand-inked blob plus its terrain glyph. Their screen positions are kept so the
-    // kraken below can be tucked into the open water away from them.
-    let mut ports_xy: Vec<(f32, f32)> = Vec::new();
+    // hand-inked blob plus its terrain glyph (positions gathered in the pre-pass above).
     for (idx, isle) in world.islands.iter().enumerate() {
         if !isle.is_port {
             continue;
@@ -675,18 +750,22 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         let r = 2.7 * s;
         blob(x, y, r, isle.id as u32 + 1);
         feature(x, y, r, isle.terrain);
-        ports_xy.push((x, y));
+    }
+
+    // Nautic-line nodes, over the isles: a ring round each shipyard the rhumb lines pass
+    // through (the compass rose marks the hub where they converge).
+    for &(spx, spy) in &shipyards_xy {
+        draw_circle_lines(spx, spy, 4.0 * s, (1.2 * s).max(1.0), col);
     }
 
     // Sea-monsters to fill the open water, the way old charts crammed a kraken or a
     // whale into their empty quarters. `find` returns the roomiest spot (farthest from
-    // every port, the compass corner, the frame, and any beast already placed) by
-    // sampling a grid; we put the kraken in the best gap, then the whale in the next.
+    // every port, the compass hub, the frame, and any beast already placed) by sampling
+    // a grid; we put the kraken in the best gap, then the whale in the next.
     {
         let m = pad + 8.0 * s;
         let (ix, iy) = (rect.x + m, rect.y + m);
         let (iw, ih) = ((rect.w - 2.0 * m).max(1.0), (rect.h - 2.0 * m).max(1.0));
-        let comp = (rect.x + pad + 12.0 * s, rect.y + pad + 18.0 * s);
         // `extra` holds (centre, radius) of beasts already drawn, so the clearance keeps
         // its distance from their whole footprint, not just their centre point.
         let find = |extra: &[((f32, f32), f32)]| -> ((f32, f32), f32) {
@@ -698,7 +777,6 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
                     let px = ix + iw * gx as f32 / G as f32;
                     let py = iy + ih * gy as f32 / G as f32;
                     let mut clear = (px - ix).min(ix + iw - px).min(py - iy).min(iy + ih - py);
-                    clear = clear.min((px - comp.0).hypot(py - comp.1));
                     for &(ox, oy) in &ports_xy {
                         clear = clear.min((px - ox).hypot(py - oy));
                     }
@@ -713,20 +791,20 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
             }
             (best, best_clear)
         };
-        // The kraken, in the roomiest quarter.
-        let (kspot, kclear) = find(&[]);
+        // The kraken, in the roomiest quarter (the compass hub is treated as occupied too).
+        let (kspot, kclear) = find(&[(hub, 16.0 * s)]);
         let ksize = (kclear * 0.78).min(46.0 * s);
         if kclear > 22.0 * s {
             draw_kraken(kspot.0, kspot.1, ksize, s, pal.ship);
         }
         // The whale, in the next roomiest, kept clear of the kraken's footprint.
-        let (wspot, wclear) = find(&[(kspot, ksize)]);
+        let (wspot, wclear) = find(&[(hub, 16.0 * s), (kspot, ksize)]);
         let wsize = (wclear * 0.8).min(40.0 * s);
         if wclear > 20.0 * s {
             draw_whale(wspot.0, wspot.1, wsize, s, pal.ship);
         }
         // A breaking wave, in the third roomiest gap, clear of both beasts.
-        let (vspot, vclear) = find(&[(kspot, ksize), (wspot, wsize)]);
+        let (vspot, vclear) = find(&[(hub, 16.0 * s), (kspot, ksize), (wspot, wsize)]);
         if vclear > 18.0 * s {
             draw_wave(vspot.0, vspot.1, (vclear * 0.8).min(34.0 * s), s, pal.ship);
         }
@@ -760,12 +838,10 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         });
     }
 
-    // A small hand-drawn compass rose in the top-left corner, north up: faint cross
-    // and saltire with a filled north spike, the flourish of an old chart. Nudged down
-    // a touch so the "N" clears the frame.
-    let rr = 12.0 * s;
-    let ox = rect.x + pad + rr;
-    let oy = rect.y + pad + rr + 6.0 * s;
+    // The compass rose sits at the hub where the rhumb lines converge, north up: faint
+    // cross and saltire with a filled north spike, the flourish of an old chart.
+    let rr = 13.0 * s;
+    let (ox, oy) = hub;
     draw_line(ox - rr, oy, ox + rr, oy, 1.0, pal.wind_streak);
     draw_line(ox, oy - rr, ox, oy + rr, 1.0, pal.wind_streak);
     let d = rr * 0.42;
