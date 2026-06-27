@@ -347,6 +347,10 @@ async fn run_game(
     // ¼ sunrise, ½ noon, ¾ sunset), wrapping every `DAY_LENGTH` seconds. The sky,
     // sea, sun, moon and stars are all derived from it.
     const DAY_LENGTH: f32 = 540.0;
+    // Dev aid: how many real-dt sub-steps the ambient clock takes per frame while the
+    // fast-forward key (F) is held. 120 turns a real second into two simulated minutes,
+    // so a storm that is ~40 min off arrives in ~20 s of watching (see the F handler).
+    const TIME_WARP: u32 = 120;
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
@@ -421,6 +425,15 @@ async fn run_game(
     // Which button on the open spread the cursor is on (Up/Down move it, Enter
     // presses it); reset whenever the book opens or a page is turned.
     let mut log_sel: usize = 0;
+    // The dev controls (nudge weather Q/E, fast-forward F, nudge clock T/Y, stave in
+    // the hull X, nudge wind [ ]) are off until unlocked by a cheat: type "banana"
+    // while the captain's log is open. Toggles, so typing it again locks them back.
+    // A session flag (not saved), so every voyage starts honest.
+    let mut dev_mode = false;
+    // Rolling buffer of characters typed while the log is open, scanned for the cheat
+    // word. Cleared whenever the book is shut so stale keystrokes never match.
+    let mut cheat_buf = String::new();
+    const CHEAT_CODE: &str = "banana";
     // The always-on corner chart's ink scheme.
     let minimap_pal = minimap::MinimapPalette::hud();
 
@@ -573,6 +586,36 @@ async fn run_game(
         touch.update(dt);
         let hud = touch_ui::sail_hud(w, h);
 
+        // Cheat entry: while the captain's log is open, watch the typed letters for the
+        // word that toggles the dev controls. The character queue is always drained so
+        // keystrokes never pile up between opens, and the buffer is cleared whenever the
+        // book is shut so a half-typed word can't carry over to the next reading.
+        if log_open {
+            while let Some(c) = get_char_pressed() {
+                if !c.is_ascii_alphabetic() {
+                    continue;
+                }
+                cheat_buf.push(c.to_ascii_lowercase());
+                // Keep only the last few letters: just enough to spot the cheat word.
+                if cheat_buf.len() > CHEAT_CODE.len() {
+                    let cut = cheat_buf.len() - CHEAT_CODE.len();
+                    cheat_buf.drain(..cut);
+                }
+                if cheat_buf == CHEAT_CODE {
+                    dev_mode = !dev_mode;
+                    cheat_buf.clear();
+                }
+            }
+        } else {
+            cheat_buf.clear();
+            // Discard stray keystrokes so they can't backlog into the next log open,
+            // but leave the queue untouched while the pause menu is up: its seed field
+            // reads these same characters (see `pause_menu::handle_input`).
+            if !pause.open {
+                while get_char_pressed().is_some() {}
+            }
+        }
+
         // Default every surface to the sans face each frame; the captain's log and the
         // port boards re-skin themselves to serif as they draw (see `font.rs`). Reset
         // here so last frame's serif board doesn't leak into this frame's HUD.
@@ -618,20 +661,37 @@ async fn run_game(
             save::store_feat_density(feat_density_level);
         }
 
-        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds
-        // whether sailing or docked, so the chart's breeze keeps drifting.
-        if !paused {
-            clock += dt;
-            if clock - last_wind_shift >= WIND_PERIOD {
-                wind = Wind::random(&mut wind_rng);
-                last_wind_shift = clock;
-                sounds.wind_shift();
-            }
+        // Dev aid (needs dev mode, see the "banana" cheat): hold F to fast-forward the
+        // ambient clock (weather, wind, day/night) for debugging slow events like a
+        // storm building. It sub-steps the dt-driven
+        // advances at the *real* dt rather than scaling dt up: the weather drift is then
+        // bit-for-bit identical to a real-time voyage (same RNG draw order, same drift-
+        // timer overshoot), so a storm still lands at its fixed, deterministic simulated
+        // time, just sooner on the wall clock. Multiplying dt instead would discard more
+        // overshoot per step and desync the result.
+        let time_steps: u32 = if dev_mode && !paused && is_key_down(KeyCode::F) { TIME_WARP } else { 1 };
 
-            // Drift the weather (whether sailing or docked) and ease the sea-state and
-            // sky gloom it drives, so the waves build/lay down and the sky greys/clears
-            // smoothly across a scenario change rather than snapping.
-            weather.update(dt);
+        // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds, the
+        // weather drifts between scenarios, and the day/night clock turns: all whether
+        // sailing or docked, so the chart's breeze, the sky and the sea keep moving.
+        if !paused {
+            for _ in 0..time_steps {
+                clock += dt;
+                if clock - last_wind_shift >= WIND_PERIOD {
+                    wind = Wind::random(&mut wind_rng);
+                    last_wind_shift = clock;
+                    // Quiet the wind-shift chime while warping; it would machine-gun.
+                    if time_steps == 1 {
+                        sounds.wind_shift();
+                    }
+                }
+                // Drift the weather and ease the sea-state and sky gloom it drives, so
+                // the waves build/lay down and the sky greys/clears smoothly across a
+                // scenario change rather than snapping.
+                weather.update(dt);
+                // Turn the day/night clock (wraps at 1) in step with the rest of time.
+                tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
+            }
         }
         sea = weather.sea;
         storm = weather.fury();
@@ -642,12 +702,9 @@ async fn run_game(
             traders.update(&world, kin.pos, wind, dt);
         }
 
-        // Advance the day/night clock (wraps at 1), then resolve the sky it implies:
-        // the moving sun/moon and light, the blended sea palette and sky gradient,
-        // a nearest discrete phase for the HUD/log, and how lit the deck is.
-        if !paused {
-            tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
-        }
+        // Resolve the sky the (already-advanced) day/night clock implies: the moving
+        // sun/moon and light, the blended sea palette and sky gradient, a nearest
+        // discrete phase for the HUD/log, and how lit the deck is.
         let sky = celestial::sky_state(tod);
         let sea_pal = palette::sea_palette(tod);
         let sky_grad = palette::sky_gradient(tod);
@@ -731,12 +788,13 @@ async fn run_game(
                 throttle: SAIL_FRACTIONS[sail_mode],
             };
 
-            // Dev aid (not in the original): nudge the wind with [ and ] to feel the
-            // points of sail and tacking on demand.
-            if is_key_down(KeyCode::RightBracket) {
+            // Dev aid (not in the original; needs dev mode, see the "banana" cheat):
+            // nudge the wind with [ and ] to feel the points of sail and tacking on
+            // demand.
+            if dev_mode && is_key_down(KeyCode::RightBracket) {
                 wind.toward_rad = wrap_angle(wind.toward_rad + dt * 0.8);
             }
-            if is_key_down(KeyCode::LeftBracket) {
+            if dev_mode && is_key_down(KeyCode::LeftBracket) {
                 wind.toward_rad = wrap_angle(wind.toward_rad - dt * 0.8);
             }
 
@@ -854,26 +912,27 @@ async fn run_game(
                 log_open = false;
             }
 
-            // Dev aid: nudge the weather a step calmer (Q) / stormier (E); it keeps
-            // auto-drifting from there. The sea/sky then ease to the new scenario.
-            if is_key_pressed(KeyCode::Q) {
+            // Dev aids (all need dev mode, unlocked by typing "banana" in the log):
+            // nudge the weather a step calmer (Q) / stormier (E); it keeps auto-drifting
+            // from there, and the sea/sky then ease to the new scenario.
+            if dev_mode && is_key_pressed(KeyCode::Q) {
                 weather.nudge_calmer();
             }
-            if is_key_pressed(KeyCode::E) {
+            if dev_mode && is_key_pressed(KeyCode::E) {
                 weather.nudge_stormier();
             }
-            // Dev aid: stave in 10% of a full hull, to feel the damage debuffs
-            // (no-go zone / turn / top speed) and the drydock without sailing it off.
-            if is_key_pressed(KeyCode::X) {
+            // Stave in 10% of a full hull, to feel the damage debuffs (no-go zone /
+            // turn / top speed) and the drydock without sailing it off.
+            if dev_mode && is_key_pressed(KeyCode::X) {
                 let blow = (gs.max_hull() as f64 * 0.10).ceil() as i32;
                 gs.hull = (gs.hull - blow).max(0);
                 gs.hull_wear = 0.0;
             }
             // Nudge the clock forward (T) / back (Y) ~30 min, to ease through the cycle.
-            if is_key_pressed(KeyCode::T) {
+            if dev_mode && is_key_pressed(KeyCode::T) {
                 tod = (tod + 0.02).rem_euclid(1.0);
             }
-            if is_key_pressed(KeyCode::Y) {
+            if dev_mode && is_key_pressed(KeyCode::Y) {
                 tod = (tod - 0.02).rem_euclid(1.0);
             }
             if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
@@ -1472,6 +1531,7 @@ async fn run_game(
                 log_spread,
                 log_sel,
                 dt,
+                dev_mode,
                 w,
                 h,
             );
