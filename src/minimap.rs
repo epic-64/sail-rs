@@ -16,7 +16,7 @@ use macroquad::prelude::*;
 
 use crate::geometry::Vec2;
 use crate::sailing::{Kinematics, Wind};
-use crate::world::World;
+use crate::world::{IsleKind, World};
 
 /// Make a colour from 0–255 channels plus an alpha in [0,1].
 fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
@@ -377,6 +377,148 @@ fn hash01(n: u32) -> f32 {
     (x & 0xffff) as f32 / 65535.0
 }
 
+/// Ink a small hand-drawn kraken (a mantle, two eyes, and curling tentacles) centred
+/// at (`cx`,`cy`) and sized to `size`, for the empty-quarter flourish on the world map.
+/// `s` is the map's glyph scale (for stroke width); `col` the chart ink.
+fn draw_kraken(cx: f32, cy: f32, size: f32, s: f32, col: Color) {
+    let th = (1.3 * s).max(1.0);
+    let hr = size * 0.42; // mantle radius
+
+    // The mantle: a wobbled blob outline, taller than wide with a slight crown.
+    const N: usize = 12;
+    let mut px = [0.0f32; N];
+    let mut py = [0.0f32; N];
+    for k in 0..N {
+        let ang = k as f32 / N as f32 * std::f32::consts::TAU;
+        let rr = hr * (1.0 + 0.12 * hash01(k as u32 * 41 + 7));
+        px[k] = cx + ang.sin() * rr;
+        py[k] = cy - ang.cos() * rr * 1.15;
+    }
+    for k in 0..N {
+        let n = (k + 1) % N;
+        draw_line(px[k], py[k], px[n], py[n], th, col);
+    }
+
+    // Two eyes on the upper mantle.
+    let er = (hr * 0.16).max(1.0);
+    draw_circle(cx - hr * 0.36, cy - hr * 0.22, er, col);
+    draw_circle(cx + hr * 0.36, cy - hr * 0.22, er, col);
+
+    // Tentacles fanning across the lower half, each a curling, tapering polyline.
+    let base = (cx, cy + hr * 0.55);
+    const N_TENT: usize = 8;
+    let tl = size;
+    for i in 0..N_TENT {
+        let frac = i as f32 / (N_TENT - 1) as f32;
+        let ang = std::f32::consts::PI * (0.10 + 0.80 * frac);
+        let (dx, dy) = (ang.cos(), ang.sin()); // dy > 0 → downward (screen y down)
+        let (perpx, perpy) = (-dy, dx);
+        let curl = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let mut prev = base;
+        const SEG: i32 = 7;
+        for j in 1..=SEG {
+            let t = j as f32 / SEG as f32;
+            let along = tl * t;
+            let wob = (t * std::f32::consts::PI * 1.5).sin() * size * 0.18 * curl;
+            let nx = base.0 + dx * along + perpx * wob;
+            let ny = base.1 + dy * along + perpy * wob;
+            let w = (th * (1.05 - 0.6 * t)).max(0.8); // taper toward the tip
+            draw_line(prev.0, prev.1, nx, ny, w, col);
+            prev = (nx, ny);
+        }
+    }
+}
+
+/// Ink a small hand-drawn whale (a humpbacked body facing left, with eye, flipper,
+/// tail flukes, and a spout) centred at (`cx`,`cy`) and sized to `size`, the companion
+/// flourish to the kraken on the world map. `s` is the glyph scale; `col` the ink.
+fn draw_whale(cx: f32, cy: f32, size: f32, s: f32, col: Color) {
+    let th = (1.2 * s).max(1.0);
+    let l = size * 1.5; // body length
+    let h = size * 0.78; // body height
+
+    // The body: a tapered, humped oval outline (head left, narrowing to the tail right).
+    const N: usize = 16;
+    let mut bx = [0.0f32; N];
+    let mut by = [0.0f32; N];
+    for k in 0..N {
+        let ang = k as f32 / N as f32 * std::f32::consts::TAU;
+        let ex = ang.cos();
+        let ey = ang.sin();
+        let taper = 1.0 - 0.6 * ex.max(0.0); // narrow toward the tail
+        let hump = if ey < 0.0 { -0.12 * h * (ex * 0.5 + 0.5) } else { 0.0 };
+        bx[k] = cx + ex * l * 0.5;
+        by[k] = cy + ey * h * 0.5 * taper + hump;
+    }
+    for k in 0..N {
+        let n = (k + 1) % N;
+        draw_line(bx[k], by[k], bx[n], by[n], th, col);
+    }
+
+    // Tail flukes at the right tip.
+    let tx = cx + l * 0.5;
+    let f = size * 0.5;
+    draw_line(tx, cy, tx + f, cy - f * 0.8, th, col);
+    draw_line(tx + f, cy - f * 0.8, tx + f * 0.35, cy, th, col);
+    draw_line(tx, cy, tx + f, cy + f * 0.8, th, col);
+    draw_line(tx + f, cy + f * 0.8, tx + f * 0.35, cy, th, col);
+
+    // Eye near the head, a small flipper under the belly, and a spout above the head.
+    draw_circle(cx - l * 0.34, cy - h * 0.08, (size * 0.05).max(1.0), col);
+    draw_line(cx - l * 0.1, cy + h * 0.32, cx + l * 0.05, cy + h * 0.55, th, col);
+    draw_line(cx + l * 0.05, cy + h * 0.55, cx + l * 0.12, cy + h * 0.3, th, col);
+    let (spx, spy) = (cx - l * 0.3, cy - h * 0.5);
+    for &dxs in &[-0.18f32, 0.0, 0.18] {
+        draw_line(spx, spy, spx + dxs * size, spy - size * 0.55, th * 0.9, col);
+    }
+}
+
+/// Ink a small hand-drawn breaking wave (a swell curling into a foam-tipped lip over a
+/// gently rippled surface) centred at (`cx`,`cy`) and sized to `size`, the third of the
+/// world map's empty-quarter flourishes. `s` is the glyph scale; `col` the ink.
+fn draw_wave(cx: f32, cy: f32, size: f32, s: f32, col: Color) {
+    let th = (1.2 * s).max(1.0);
+    // A quadratic bezier, laid down as short segments (macroquad draws only straight
+    // lines) so the swell and lip read as smooth hand-drawn curves.
+    let bez = |p0: (f32, f32), p1: (f32, f32), p2: (f32, f32)| {
+        const ST: i32 = 14;
+        let mut prev = p0;
+        for i in 1..=ST {
+            let t = i as f32 / ST as f32;
+            let u = 1.0 - t;
+            let x = u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0;
+            let y = u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1;
+            draw_line(prev.0, prev.1, x, y, th, col);
+            prev = (x, y);
+        }
+    };
+
+    // Back swell rising from the trough to the crest, the curling lip, and the inner curl.
+    let crest = (cx + 0.15 * size, cy - 0.6 * size);
+    let lip = (cx + 0.7 * size, cy - 0.05 * size);
+    bez((cx - size, cy + 0.45 * size), (cx - 0.5 * size, cy - 0.55 * size), crest);
+    bez(crest, (cx + 0.75 * size, cy - 0.75 * size), lip);
+    bez(lip, (cx + 0.55 * size, cy + 0.2 * size), (cx + 0.2 * size, cy + 0.05 * size));
+    bez(crest, (cx + 0.45 * size, cy - 0.4 * size), (cx + 0.35 * size, cy - 0.05 * size));
+
+    // Foam droplets flung off the lip.
+    for &(fx, fy, fr) in &[(0.4f32, -0.7f32, 0.06f32), (0.6, -0.55, 0.05), (0.25, -0.78, 0.045)] {
+        draw_circle(cx + fx * size, cy + fy * size, (size * fr).max(1.0), col);
+    }
+
+    // The water surface: a gentle ripple beneath the swell.
+    let base_y = cy + 0.5 * size;
+    const STEPS: i32 = 24;
+    let mut prev = (cx - size, base_y);
+    for i in 1..=STEPS {
+        let t = i as f32 / STEPS as f32;
+        let x = cx - size + t * 2.0 * size;
+        let y = base_y + (t * std::f32::consts::PI * 3.0).sin() * size * 0.07;
+        draw_line(prev.0, prev.1, x, y, th * 0.9, col);
+        prev = (x, y);
+    }
+}
+
 /// A fully zoomed-out, hand-drawn chart of the whole world for the captain's log:
 /// every archipelago at once, inked as little knots of irregular isles on parchment,
 /// each cluster named. Unlike [`render`] this is a *static keepsake map*, not a live
@@ -462,7 +604,7 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
     let sy = |p: Vec2| cy - (p.y - world_cy) * scale;
 
     // Each isle: an irregular hand-inked blob (a triangle fan with a wobbled rim, the
-    // wobble seeded off the isle id), with a darker settlement dot on ports.
+    // wobble seeded off the isle id) for the landmass body.
     let blob = |x: f32, y: f32, r: f32, seed: u32| {
         const N: usize = 9;
         let mut vx = [0.0f32; N];
@@ -482,15 +624,112 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
             draw_line(vx[k], vy[k], vx[n], vy[n], 1.2, pal.border);
         }
     };
-    // Only the ports are charted (the trading isles the captain actually visits), each
-    // a plain hand-inked blob with no settlement dot.
+    // A small sepia glyph drawn over the blob, telling the isle's terrain apart at a
+    // glance: a grass tuft (green), a jagged ridge (rocky), a palm (jungle), or a
+    // crater cone (volcanic).
+    let col = pal.ship;
+    let feature = |x: f32, y: f32, r: f32, kind: IsleKind| match kind {
+        IsleKind::Green => {
+            for &dx in &[-0.32f32, 0.0, 0.32] {
+                let h = if dx == 0.0 { 0.7 } else { 0.5 };
+                draw_line(x + dx * r, y + 0.25 * r, x + dx * r, y - h * r, 1.0, col);
+            }
+        }
+        IsleKind::Rocky => {
+            let pts = [
+                (x - 0.95 * r, y + 0.4 * r),
+                (x - 0.45 * r, y - 0.5 * r),
+                (x - 0.05 * r, y - 0.05 * r),
+                (x + 0.4 * r, y - 0.85 * r),
+                (x + 0.95 * r, y + 0.4 * r),
+            ];
+            for w in pts.windows(2) {
+                draw_line(w[0].0, w[0].1, w[1].0, w[1].1, 1.1, col);
+            }
+        }
+        IsleKind::Jungle => {
+            let (tx, ty) = (x, y - 0.5 * r);
+            draw_line(x, y + 0.6 * r, tx, ty, 1.1, col); // trunk
+            for &(fx, fy) in &[(-0.8f32, -0.15f32), (0.8, -0.15), (-0.5, 0.35), (0.5, 0.35)] {
+                draw_line(tx, ty, tx + fx * r, ty + fy * r, 1.0, col); // fronds
+            }
+        }
+        IsleKind::Volcanic => {
+            let base_y = y + 0.5 * r;
+            let rim_y = y - 0.7 * r;
+            draw_line(x - 0.9 * r, base_y, x - 0.35 * r, rim_y, 1.1, col);
+            draw_line(x + 0.9 * r, base_y, x + 0.35 * r, rim_y, 1.1, col);
+            draw_line(x - 0.35 * r, rim_y, x + 0.35 * r, rim_y, 1.1, col); // crater rim
+        }
+    };
+    // Only the ports are charted (the trading isles the captain actually visits): a
+    // hand-inked blob plus its terrain glyph. Their screen positions are kept so the
+    // kraken below can be tucked into the open water away from them.
+    let mut ports_xy: Vec<(f32, f32)> = Vec::new();
     for (idx, isle) in world.islands.iter().enumerate() {
         if !isle.is_port {
             continue;
         }
         let x = sx(disp_pos[idx]);
         let y = sy(disp_pos[idx]);
-        blob(x, y, 2.7 * s, isle.id as u32 + 1);
+        let r = 2.7 * s;
+        blob(x, y, r, isle.id as u32 + 1);
+        feature(x, y, r, isle.terrain);
+        ports_xy.push((x, y));
+    }
+
+    // Sea-monsters to fill the open water, the way old charts crammed a kraken or a
+    // whale into their empty quarters. `find` returns the roomiest spot (farthest from
+    // every port, the compass corner, the frame, and any beast already placed) by
+    // sampling a grid; we put the kraken in the best gap, then the whale in the next.
+    {
+        let m = pad + 8.0 * s;
+        let (ix, iy) = (rect.x + m, rect.y + m);
+        let (iw, ih) = ((rect.w - 2.0 * m).max(1.0), (rect.h - 2.0 * m).max(1.0));
+        let comp = (rect.x + pad + 12.0 * s, rect.y + pad + 18.0 * s);
+        // `extra` holds (centre, radius) of beasts already drawn, so the clearance keeps
+        // its distance from their whole footprint, not just their centre point.
+        let find = |extra: &[((f32, f32), f32)]| -> ((f32, f32), f32) {
+            let mut best = (ix + iw / 2.0, iy + ih / 2.0);
+            let mut best_clear = -1.0f32;
+            const G: i32 = 12;
+            for gy in 0..=G {
+                for gx in 0..=G {
+                    let px = ix + iw * gx as f32 / G as f32;
+                    let py = iy + ih * gy as f32 / G as f32;
+                    let mut clear = (px - ix).min(ix + iw - px).min(py - iy).min(iy + ih - py);
+                    clear = clear.min((px - comp.0).hypot(py - comp.1));
+                    for &(ox, oy) in &ports_xy {
+                        clear = clear.min((px - ox).hypot(py - oy));
+                    }
+                    for &((ox, oy), rad) in extra {
+                        clear = clear.min((px - ox).hypot(py - oy) - rad);
+                    }
+                    if clear > best_clear {
+                        best_clear = clear;
+                        best = (px, py);
+                    }
+                }
+            }
+            (best, best_clear)
+        };
+        // The kraken, in the roomiest quarter.
+        let (kspot, kclear) = find(&[]);
+        let ksize = (kclear * 0.78).min(46.0 * s);
+        if kclear > 22.0 * s {
+            draw_kraken(kspot.0, kspot.1, ksize, s, pal.ship);
+        }
+        // The whale, in the next roomiest, kept clear of the kraken's footprint.
+        let (wspot, wclear) = find(&[(kspot, ksize)]);
+        let wsize = (wclear * 0.8).min(40.0 * s);
+        if wclear > 20.0 * s {
+            draw_whale(wspot.0, wspot.1, wsize, s, pal.ship);
+        }
+        // A breaking wave, in the third roomiest gap, clear of both beasts.
+        let (vspot, vclear) = find(&[(kspot, ksize), (wspot, wsize)]);
+        if vclear > 18.0 * s {
+            draw_wave(vspot.0, vspot.1, (vclear * 0.8).min(34.0 * s), s, pal.ship);
+        }
     }
 
     // Name each archipelago beneath its knot of isles, in the heading face so the map
