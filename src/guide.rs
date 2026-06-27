@@ -87,6 +87,22 @@ const PAGES: &[GuidePage] = &[
              before you can take them on against the rivals.",
         ],
     },
+    GuidePage {
+        title: "The Tavern",
+        body: &[
+            "Every shipyard keeps a tavern, and each one sells a single special ware, \
+             bought but once. Your home port's tavern stocks a World Map: buy it and \
+             you can open a chart of every archipelago from the captain's log, or jump \
+             straight to it with the M key.",
+            "Other taverns sell other curios. Some are kept for good: a figurehead that \
+             draws more coin from salvage, or an almanac that lays every port's prices \
+             out in your log. Others are abilities you call on at the helm with the \
+             number keys, each good once a day: a whistle to summon a fresh wind, a \
+             draught for a burst of speed, a glass to calm a gale.",
+            "Sail back any time for a ware you passed up; each tavern always keeps the \
+             same stock.",
+        ],
+    },
 ];
 
 /// How many pages the guide holds; `main` clamps the page cursor to this.

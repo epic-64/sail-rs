@@ -99,12 +99,16 @@ pub struct SailHud {
     pub log: Rect,
     pub astern: Rect,
     pub pause: Rect,
+    /// Active tavern-ware buttons, one rung per owned active ware (keyed by helm
+    /// slot 0..3, see [`crate::tavern`]). Packed up the right edge above the sail
+    /// buttons; an unowned slot's rect is empty (never drawn or hit).
+    pub items: [Rect; 3],
 }
 
 /// Lay out the sailing HUD for a `w`×`h` screen (landscape). The wheel sits under
 /// the left thumb, the sail buttons under the right; pause / log / astern form a
 /// left-edge rail under the status strip; dock is centred along the bottom.
-pub fn sail_hud(w: f32, h: f32) -> SailHud {
+pub fn sail_hud(w: f32, h: f32, item_owned: [bool; 3]) -> SailHud {
     let mg = margin(h);
     let b = btn(h);
     let gap = b * 0.28;
@@ -133,7 +137,21 @@ pub fn sail_hud(w: f32, h: f32) -> SailHud {
     let log = Rect::new(lx, top + b + gap, b, b);
     let astern = Rect::new(lx, top + 2.0 * (b + gap), b, b);
 
-    SailHud { wheel, sail_up, sail_down, dock, log, astern, pause }
+    // Active-ware buttons: a stack of smaller buttons climbing the right edge from
+    // just above the sail buttons, one rung per *owned* active ware (packed, so an
+    // unowned ware leaves no gap). Each owned slot keeps its index → button mapping.
+    let ib = b * 0.78;
+    let igap = gap * 0.55;
+    let mut items = [Rect::new(0.0, 0.0, 0.0, 0.0); 3];
+    let mut next_top = sail_up.y - igap - ib;
+    for slot in 0..3 {
+        if item_owned[slot] {
+            items[slot] = Rect::new(w - ib - mg, next_top, ib, ib);
+            next_top -= ib + igap;
+        }
+    }
+
+    SailHud { wheel, sail_up, sail_down, dock, log, astern, pause, items }
 }
 
 /// Draw the sailing HUD. `turn` (−1..1) tilts the wheel's spoke for feedback,
@@ -147,6 +165,9 @@ pub fn draw_sail_hud(
     sail_max: usize,
     dockable: bool,
     astern_held: bool,
+    // Active tavern wares, by helm slot: `Some((label, ready))` for an owned ware
+    // (lit when its daily use is recharged, dimmed when spent), `None` if unowned.
+    items: [Option<(&str, bool)>; 3],
 ) {
     // --- Steering wheel: a ring with a spoke that swings with the rudder ---
     let c = center(hud.wheel);
@@ -180,6 +201,15 @@ pub fn draw_sail_hud(
     label(hud.log, "LOG", glyph());
     panel(hud.astern, astern_held);
     label(hud.astern, "AFT", glyph());
+
+    // --- Active tavern wares: one button per owned ware, lit when recharged ---
+    for slot in 0..3 {
+        if let Some((lab, ready)) = items[slot] {
+            let r = hud.items[slot];
+            panel(r, ready);
+            label(r, lab, if ready { glyph() } else { glyph_dim() });
+        }
+    }
 
     // --- Dock, only when a port is in range ---
     if dockable {
