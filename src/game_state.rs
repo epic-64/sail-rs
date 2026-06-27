@@ -447,6 +447,18 @@ pub struct Stats {
     /// Whole days elapsed, ticked over at each sunrise (the day/night clock crossing
     /// ¼). Starts at 0 and counts up for the life of the voyage.
     pub days_passed: u32,
+    /// Times the captain has tied up at a port (see [`crate::port_view::Harbor::try_dock`]).
+    /// Drives the beginner checklist's "dock at a port" step (see [`crate::checklist`]).
+    pub times_docked: u32,
+    /// Times the hull has been mended at a drydock (see [`GameState::repair`]). Drives
+    /// the checklist's "repair the hull" step.
+    pub hull_repairs: u32,
+    /// Ship fittings bought at a shipyard (see [`GameState::buy_upgrade`]). Drives the
+    /// checklist's "buy an upgrade" step.
+    pub upgrades_bought: u32,
+    /// Times the captain has flipped open the log (toggled with L in `main`). Drives
+    /// the checklist's "inspect the captain's log" step.
+    pub log_opened: u32,
 }
 
 impl GameState {
@@ -594,6 +606,7 @@ impl GameState {
             return Err(TradeError::NotEnoughGold);
         }
         self.gold -= cost;
+        self.stats.upgrades_bought += 1;
         match kind {
             UpgradeKind::Hull => self.hull_level += 1,
             UpgradeKind::Sail => self.sail_level += 1,
@@ -621,6 +634,7 @@ impl GameState {
         }
         self.gold -= points * REPAIR_COST_PER_HULL;
         self.hull += points;
+        self.stats.hull_repairs += 1;
         Ok(())
     }
 

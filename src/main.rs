@@ -7,6 +7,7 @@
 mod bloom;
 mod captains_log;
 mod celestial;
+mod checklist;
 mod clouds;
 mod flotsam;
 mod flotsam_render;
@@ -882,6 +883,7 @@ async fn run_game(
                 if log_open {
                     log_spread = 0;
                     log_sel = 0;
+                    gs.stats.log_opened += 1;
                 }
             }
             // Page the open log with the left/right arrows (no mouse to click the
@@ -1383,6 +1385,10 @@ async fn run_game(
             &traders.positions(),
             rival.map(|r| (r.pos, r.heading_rad)),
         );
+
+        // A beginner's checklist tucked under the chart (until its five steps are all
+        // struck, then it retires itself), so a fresh captain learns the ropes.
+        checklist::render(&gs.stats, map_rect);
 
         // Race standings strip: the mark and how far the player and rival each have
         // still to sail (or the instructions to get the race under way), shown top-

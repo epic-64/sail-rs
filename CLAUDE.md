@@ -9,6 +9,13 @@ debug runs but is choppier). Tests: `cargo test`.
   a colon (`A: B`), parentheses (`A (B)`), a semicolon (`A; B`), or just two sentences
   (`A. B.`). Existing em dashes in the codebase are legacy; do not add new ones, and
   prefer removing one when you touch a line that has it.
+- **Comments shouldn't restate facts the code already pins down.** Don't bake a count,
+  a list length, an exhaustive enumeration of cases, or a specific value into prose
+  when the code right beside it is the real source of truth: "the five steps" rots the
+  moment a sixth is added, where "the steps (see `steps`)" stays true forever. Describe
+  *what a thing is for* and *why*, and point at the code for the *how many* / *which
+  ones*. When you touch a comment that has hard-coded such a detail, fix it to refer to
+  the code rather than duplicating it (the same housekeeping the em-dash rule asks for).
 
 ## Engine conventions / gotchas
 
