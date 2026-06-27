@@ -113,10 +113,13 @@ const EXTENT: f64 = 10400.0;
 const GRID_COLS: usize = 5;
 const GRID_ROWS: usize = 5;
 const ISLES_PER_CLUSTER: i32 = (GRID_COLS * GRID_ROWS) as i32;
-const CLUSTER_SPACING: f64 = 42000.0;
-const CLUSTER_COLS: usize = 5;
-const CLUSTER_ROWS: usize = 5;
-const CLUSTER_FILL: f64 = 0.48;
+const CLUSTER_SPACING: f64 = 21000.0;
+const CLUSTER_COLS: usize = 3;
+const CLUSTER_ROWS: usize = 3;
+/// Exactly how many archipelagos the world holds: the centre cell plus the
+/// highest-rolling others on the cluster grid (so the world stays small and the
+/// count is fixed rather than a fill probability).
+const NUM_CLUSTERS: usize = 7;
 const CLUSTER_RADIUS: f64 = EXTENT * 0.7;
 const MIN_CLUSTER_GAP: f64 = CLUSTER_RADIUS * 2.2;
 
@@ -165,15 +168,29 @@ pub fn generate(seed: i64) -> World {
     let origin_x = -((CLUSTER_COLS - 1) as f64) * CLUSTER_SPACING / 2.0;
     let origin_y = -((CLUSTER_ROWS - 1) as f64) * CLUSTER_SPACING / 2.0;
 
-    // Leave a scattering of cells empty, but always keep the centre cell.
-    let mut grid: Vec<(usize, usize)> = Vec::new();
-    for cell in &full_grid {
-        let roll = rng0.next_f64();
-        let keep = *cell == centre_cell || roll < CLUSTER_FILL;
-        if keep {
-            grid.push(*cell);
-        }
+    // Roll one key per cell (keeping the per-cell draw so the RNG sequence stays put),
+    // then keep exactly NUM_CLUSTERS archipelagos: always the centre cell, plus the
+    // highest-rolling others. Kept cells stay in grid (r-major) order so island ids run
+    // in reading order.
+    let rolls: Vec<f64> = full_grid.iter().map(|_| rng0.next_f64()).collect();
+    let want = NUM_CLUSTERS.min(full_grid.len());
+    let mut others: Vec<usize> = (0..full_grid.len())
+        .filter(|&i| full_grid[i] != centre_cell)
+        .collect();
+    others.sort_by(|&a, &b| rolls[b].partial_cmp(&rolls[a]).unwrap());
+    let mut keep_set = vec![false; full_grid.len()];
+    if let Some(ci) = full_grid.iter().position(|c| *c == centre_cell) {
+        keep_set[ci] = true;
     }
+    for &i in others.iter().take(want.saturating_sub(1)) {
+        keep_set[i] = true;
+    }
+    let grid: Vec<(usize, usize)> = full_grid
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| keep_set[*i])
+        .map(|(_, c)| *c)
+        .collect();
 
     let mut clusters: Vec<Cluster> = Vec::new();
     let mut islands: Vec<Island> = Vec::new();

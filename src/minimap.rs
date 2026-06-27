@@ -365,3 +365,175 @@ pub fn render(
     // The player's ship, on top.
     arrow(kin.pos, kin.heading_rad, pal.ship);
 }
+
+/// A cheap, deterministic hash in [0,1] keyed off an integer, used to wobble the
+/// hand-drawn coastlines on the world map. Deterministic so the chart looks the same
+/// every time the captain flips to it (no RNG draws, so world generation is untouched).
+fn hash01(n: u32) -> f32 {
+    let mut x = n.wrapping_mul(0x9e3779b1);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb352d);
+    x ^= x >> 15;
+    (x & 0xffff) as f32 / 65535.0
+}
+
+/// A fully zoomed-out, hand-drawn chart of the whole world for the captain's log:
+/// every archipelago at once, inked as little knots of irregular isles on parchment,
+/// each cluster named. Unlike [`render`] this is a *static keepsake map*, not a live
+/// instrument: it frames the entire world (not the ship's local waters) and draws no
+/// wind, no marks, and **no player**, so it reads as a chart pinned in the logbook.
+pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
+    if pal.panel.a > 0.0 {
+        draw_rectangle(rect.x, rect.y, rect.w, rect.h, pal.panel);
+    }
+    let s = rect.w.min(rect.h) / 300.0; // scale glyph constants off a 300px baseline
+
+    // A double, slightly inset frame for a sketched cartouche look.
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, pal.border);
+    let inset = 4.0 * s;
+    draw_rectangle_lines(rect.x + inset, rect.y + inset, rect.w - 2.0 * inset, rect.h - 2.0 * inset, 1.0, pal.border);
+
+    if world.islands.is_empty() {
+        return;
+    }
+
+    // Purely a visual breathing-room hack: push each archipelago's *centre* outward
+    // from the world's middle by `CLUSTER_SPREAD` (so the clusters drift apart), and
+    // push each isle outward from its own cluster centre by `ISLE_SPREAD` (so the isles
+    // within a cluster stop overlapping). Both keep the overall layout; the auto-fit
+    // below reframes the result.
+    const CLUSTER_SPREAD: f32 = 1.6;
+    const ISLE_SPREAD: f32 = 1.45;
+
+    // Each isle's cluster centre, indexed by id (islands are in id order, index == id).
+    let mut center_of = vec![Vec2::new(0.0, 0.0); world.islands.len()];
+    for c in &world.clusters {
+        for &id in &c.island_ids {
+            center_of[id as usize] = c.center;
+        }
+    }
+    // The anchor we spread away from: the mean of the cluster centres.
+    let mut ax = 0.0f32;
+    let mut ay = 0.0f32;
+    for c in &world.clusters {
+        ax += c.center.x;
+        ay += c.center.y;
+    }
+    let n = world.clusters.len().max(1) as f32;
+    let (ax, ay) = (ax / n, ay / n);
+    // The display position of every isle, with clusters spread apart.
+    let disp_pos: Vec<Vec2> = world
+        .islands
+        .iter()
+        .map(|isle| {
+            let c = center_of[isle.id as usize];
+            Vec2::new(
+                ax + (c.x - ax) * CLUSTER_SPREAD + (isle.pos.x - c.x) * ISLE_SPREAD,
+                ay + (c.y - ay) * CLUSTER_SPREAD + (isle.pos.y - c.y) * ISLE_SPREAD,
+            )
+        })
+        .collect();
+
+    // Frame the whole (spread-out) world: the bounding box of every isle, centred, with
+    // a margin so the outermost archipelagos don't kiss the frame.
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+    for p in &disp_pos {
+        min_x = min_x.min(p.x);
+        max_x = max_x.max(p.x);
+        min_y = min_y.min(p.y);
+        max_y = max_y.max(p.y);
+    }
+    let span_x = (max_x - min_x).max(1.0);
+    let span_y = (max_y - min_y).max(1.0);
+    let world_cx = (min_x + max_x) / 2.0;
+    let world_cy = (min_y + max_y) / 2.0;
+    let pad = 18.0 * s;
+    let avail_w = (rect.w - 2.0 * pad).max(1.0);
+    let avail_h = (rect.h - 2.0 * pad).max(1.0);
+    // 1.12 keeps a little open sea around the outermost isles.
+    let scale = (avail_w / (span_x * 1.12)).min(avail_h / (span_y * 1.12));
+    let cx = rect.x + rect.w / 2.0;
+    let cy = rect.y + rect.h / 2.0;
+    // World x (east) right, world y (north) up, so flip the screen y axis.
+    let sx = |p: Vec2| cx + (p.x - world_cx) * scale;
+    let sy = |p: Vec2| cy - (p.y - world_cy) * scale;
+
+    // Each isle: an irregular hand-inked blob (a triangle fan with a wobbled rim, the
+    // wobble seeded off the isle id), with a darker settlement dot on ports.
+    let blob = |x: f32, y: f32, r: f32, seed: u32| {
+        const N: usize = 9;
+        let mut vx = [0.0f32; N];
+        let mut vy = [0.0f32; N];
+        for k in 0..N {
+            let ang = k as f32 / N as f32 * std::f32::consts::TAU;
+            let rr = r * (0.72 + 0.55 * hash01(seed.wrapping_mul(977).wrapping_add(k as u32)));
+            vx[k] = x + ang.cos() * rr;
+            vy[k] = y + ang.sin() * rr;
+        }
+        for k in 0..N {
+            let n = (k + 1) % N;
+            draw_triangle(vec2(x, y), vec2(vx[k], vy[k]), vec2(vx[n], vy[n]), pal.land);
+        }
+        for k in 0..N {
+            let n = (k + 1) % N;
+            draw_line(vx[k], vy[k], vx[n], vy[n], 1.2, pal.border);
+        }
+    };
+    // Only the ports are charted (the trading isles the captain actually visits), each
+    // a plain hand-inked blob with no settlement dot.
+    for (idx, isle) in world.islands.iter().enumerate() {
+        if !isle.is_port {
+            continue;
+        }
+        let x = sx(disp_pos[idx]);
+        let y = sy(disp_pos[idx]);
+        blob(x, y, 2.7 * s, isle.id as u32 + 1);
+    }
+
+    // Name each archipelago beneath its knot of isles, in the heading face so the map
+    // reads like a drawn chart. Clamped to stay clear of the frame.
+    let fs = ((11.0 * s) as u16).max(10);
+    for c in &world.clusters {
+        let isles = world.cluster_islands(c);
+        if isles.is_empty() {
+            continue;
+        }
+        let mut cminx = f32::MAX;
+        let mut cmaxx = f32::MIN;
+        let mut cmaxy = f32::MIN;
+        for i in &isles {
+            let p = disp_pos[i.id as usize];
+            let x = sx(p);
+            let y = sy(p);
+            cminx = cminx.min(x);
+            cmaxx = cmaxx.max(x);
+            cmaxy = cmaxy.max(y);
+        }
+        let mid = (cminx + cmaxx) / 2.0;
+        crate::font::heading(|| {
+            let d = measure_text(&c.name, None, fs, 1.0);
+            let tx = (mid - d.width / 2.0).clamp(rect.x + 4.0 * s, rect.x + rect.w - d.width - 4.0 * s);
+            let ty = (cmaxy + fs as f32 + 3.0 * s).min(rect.y + rect.h - 4.0 * s);
+            draw_text(&c.name, tx, ty, fs as f32, pal.ship);
+        });
+    }
+
+    // A small hand-drawn compass rose in the top-left corner, north up: faint cross
+    // and saltire with a filled north spike, the flourish of an old chart. Nudged down
+    // a touch so the "N" clears the frame.
+    let rr = 12.0 * s;
+    let ox = rect.x + pad + rr;
+    let oy = rect.y + pad + rr + 6.0 * s;
+    draw_line(ox - rr, oy, ox + rr, oy, 1.0, pal.wind_streak);
+    draw_line(ox, oy - rr, ox, oy + rr, 1.0, pal.wind_streak);
+    let d = rr * 0.42;
+    draw_line(ox - d, oy - d, ox + d, oy + d, 1.0, pal.wind_streak);
+    draw_line(ox - d, oy + d, ox + d, oy - d, 1.0, pal.wind_streak);
+    draw_triangle(vec2(ox, oy - rr), vec2(ox - 2.4 * s, oy), vec2(ox + 2.4 * s, oy), pal.border);
+    let nfs = ((10.0 * s) as u16).max(9);
+    let nd = measure_text("N", None, nfs, 1.0);
+    draw_text("N", ox - nd.width / 2.0, oy - rr - 2.0 * s, nfs as f32, pal.ship);
+}
