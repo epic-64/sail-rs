@@ -584,7 +584,7 @@ impl PortScreen {
             },
             Focus::RaceWithdraw => match gs.withdraw_race(world) {
                 Ok(()) => {
-                    sounds.transaction();
+                    sounds.accept();
                     self.focus = self
                         .rows_of(gs, world, self.tab)
                         .first()

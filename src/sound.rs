@@ -93,7 +93,7 @@ const SALVAGE_VOL: f32 = 0.6;
 const RACE_WON_VOL: f32 = 0.25;
 const RACE_LOST_VOL: f32 = 0.25;
 // The invalid-action buzzer — present enough to register without nagging.
-const INVALID_VOL: f32 = 0.6;
+const INVALID_VOL: f32 = 0.4;
 // The boat speed (knots) at which the sailing bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
