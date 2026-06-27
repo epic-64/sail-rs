@@ -396,7 +396,7 @@ fn change_wind(
     // Seconds the toast holds before fading, and the beat the wind waits so it turns
     // in time with the whoosh rather than before it.
     const WIND_FLASH_TIME: f32 = 5.0;
-    const WIND_CHANGE_DELAY: f32 = 2.0;
+    const WIND_CHANGE_DELAY: f32 = 1.92;
     *last_wind_shift = clock;
     // Draw the new wind now either way, so the RNG sequence is unchanged.
     let next = Wind::random(wind_rng);
