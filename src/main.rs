@@ -657,11 +657,18 @@ async fn run_game(
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
     // A Dolphin's Draught speed burst running down (seconds left): while it lasts the
-    // ship makes a flat `DOLPHIN_BURST_KNOTS` extra over the ground, on top of the
-    // sail's drive and regardless of wind or load (see `crate::tavern`).
+    // ship is driven up to its top speed plus `DOLPHIN_BURST_KNOTS`, regardless of wind
+    // or load (so even a bad point of sail reaches it), scaled by how much sail is set
+    // (full at full sail, half at half, nil with sails struck). See `crate::tavern`.
     let mut speed_burst: f32 = 0.0;
-    const DOLPHIN_BURST_SECS: f32 = 5.0;
+    // The quaff winds up before it bites: quaffing starts this charge timer (seconds
+    // left) running, ticking down alongside the burst, and the burst lands only once it
+    // reaches zero. The `charged_laser` whine plays for the wind-up.
+    let mut dolphin_charge: f32 = 0.0;
+    const DOLPHIN_BURST_SECS: f32 = 20.0;
+    // Knots over the hull's own top speed the burst drives her to.
     const DOLPHIN_BURST_KNOTS: f32 = 10.0;
+    const DOLPHIN_DELAY_SECS: f32 = 4.5;
     // A fading toast announcing that the wind has backed/veered to a fresh quarter,
     // shown in step with the wind-shift whoosh (see `change_wind`).
     let mut wind_flash: f32 = 0.0;
@@ -838,6 +845,10 @@ async fn run_game(
         // While docked the trading board owns input and the ship lies parked;
         // otherwise the helm and sail are live and we may dock a port in range.
         let mut helm = Helm::IDLE;
+        // The Dolphin's Draught burst's contribution to ground speed this frame (knots),
+        // set by the sailing physics below and read by the HUD readout. Nil unless a
+        // burst is running.
+        let mut burst_kn: f32 = 0.0;
         if paused {
             // Frozen: no input, no physics. Keep the rig trimmed to the current
             // sail so the static scene still reads as a boat under way.
@@ -917,13 +928,29 @@ async fn run_game(
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
             // whole hold (ordinary cargo *and* reserved mission goods riding along).
             speed_burst = (speed_burst - dt).max(0.0);
+            // Run down a quaffed Dolphin's Draught's wind-up; the burst lands the instant
+            // the charge reaches zero (see the activation handler below).
+            if dolphin_charge > 0.0 {
+                dolphin_charge = (dolphin_charge - dt).max(0.0);
+                if dolphin_charge == 0.0 {
+                    speed_burst = DOLPHIN_BURST_SECS;
+                }
+            }
             let top_speed = upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used());
-            // A Dolphin's Draught adds a flat burst of way over the ground while it runs
-            // down: `DOLPHIN_BURST_KNOTS` on top of whatever the sails are making, so it
-            // pays on any point of sail (even in irons or a dead calm) rather than just
-            // lifting the wind-limited ceiling. In m/s, applied as forward displacement
-            // in the step loop below.
-            let burst = if speed_burst > 0.0 { DOLPHIN_BURST_KNOTS * sailing::KNOT } else { 0.0 };
+            // A Dolphin's Draught drives the hull up to its top speed plus a margin while
+            // it runs down, regardless of point of sail: the target is `top_speed +
+            // DOLPHIN_BURST_KNOTS`, scaled by the sail set (full at full sail, nil with
+            // sails struck). `burst` is the extra way over the ground (m/s) needed to make
+            // that target this frame, applied as forward displacement in the step loop, so
+            // even a hull stalled in irons is hauled up to it. Nil once she's already there.
+            let burst = if speed_burst > 0.0 {
+                let target = (top_speed + DOLPHIN_BURST_KNOTS * sailing::KNOT) * helm.throttle;
+                let fwd = Vec2::from_heading(kin.heading_rad);
+                (target - fwd.dot(kin.vel)).max(0.0)
+            } else {
+                0.0
+            };
+            burst_kn = burst / sailing::KNOT;
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             // Sail the ship in step with the (dev) warped clock: each sub-step is a
             // real-dt tick, so the hull covers `time_steps` ticks' worth of water per
@@ -1152,7 +1179,12 @@ async fn run_game(
                             &mut wind_flash,
                             true,
                         ),
-                        SpecialItem::DolphinsDraught => speed_burst = DOLPHIN_BURST_SECS,
+                        SpecialItem::DolphinsDraught => {
+                            // Quaff now: the charge whine winds up and the burst lands
+                            // once the timer runs out (see the charge tick above).
+                            dolphin_charge = DOLPHIN_DELAY_SECS;
+                            sounds.dolphin_dash();
+                        }
                         SpecialItem::StormGlass => weather.calm(),
                         _ => {}
                     }
@@ -1600,9 +1632,8 @@ async fn run_game(
         // Pared back to the essentials: the purse, the speed, the wind's quarter
         // and the point of sail — plus a warning badge for any handling debuff.
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
-        // The Dolphin's Draught burst rides on top of the hull's way (see the step
-        // loop), so add it to the readout while it runs.
-        let burst_kn = if speed_burst > 0.0 { DOLPHIN_BURST_KNOTS } else { 0.0 };
+        // The Dolphin's Draught burst's extra way over the ground (`burst_kn`, set by the
+        // sailing physics) rides on top of the hull's own speed in the readout.
         let knots = kin.speed() / sailing::KNOT + burst_kn;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
@@ -1882,6 +1913,12 @@ async fn run_game(
             }
             for slot in 0..3 {
                 if let Some(it) = SpecialItem::from_active_slot(slot).filter(|it| gs.owns(*it)) {
+                    // Drop the shortcut while the ware is spent for the day: its keybind
+                    // reappears once it recharges at sunrise, so the hint only shows a key
+                    // that would actually fire.
+                    if !gs.item_ready(it) {
+                        continue;
+                    }
                     if let Some(key) = it.key_hint() {
                         extra.push((key, it.name()));
                     }
