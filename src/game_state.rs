@@ -176,7 +176,11 @@ const HAUL_BASE: i32 = 12;
 /// cargo upgrade adds, so haulers must over-invest in sails to keep a growing hold
 /// at full speed; a racer (light hold) barely needs them.
 const HAUL_PER_SAIL_LEVEL: i32 = 4;
-const MAX_PENALTY: f64 = 0.45;
+const MAX_PENALTY: f64 = 0.50;
+/// Multiple of the rig's haul tolerance at which the overload penalty tops out: the
+/// debuff ramps from nothing at tolerance up to [`MAX_PENALTY`] only once the hold is
+/// this badly overladen.
+const OVERLOAD_CAP_HAULS: f64 = 4.0;
 
 /// Top tier (0-indexed) for the sails and the hold — six steps each.
 pub const MAX_LEVEL: i32 = 6;
@@ -215,7 +219,8 @@ pub mod upgrades {
     /// Fraction of peak speed lost to an overladen hold, in [0, MAX_PENALTY].
     pub fn overload_penalty(sail_level: i32, load: i32) -> f64 {
         let haul = max_haul(sail_level);
-        let over_ratio = (((load - haul) as f64) / haul as f64).clamp(0.0, 1.0);
+        let span = (OVERLOAD_CAP_HAULS - 1.0) * haul as f64;
+        let over_ratio = ((load - haul) as f64 / span).clamp(0.0, 1.0);
         MAX_PENALTY * over_ratio
     }
 

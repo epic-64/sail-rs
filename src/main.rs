@@ -1355,6 +1355,7 @@ async fn run_game(
         let knots = kin.speed() / sailing::KNOT;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
+        let hull_pct = (hull::fraction(&gs) * 100.0).round() as i32;
         // Everything in one row, at one font size, dot-separated: a coin icon and
         // the purse, then speed · wind quarter · point of sail.
         let fs = px(16.0);
@@ -1372,26 +1373,36 @@ async fn run_game(
         draw_circle(cx - r * 0.3, cy - r * 0.3, r * 0.2, shine);
         // The rest of the row, starting just right of the coin.
         let line = format!(
-            "{}  ·  {:.1} kn  ·  Wind {}  ({})",
-            gs.gold, knots, wind_from, point
+            "{}  ·  {:.1} kn  ·  Wind {}  ({})  ·  Hull {}%",
+            gs.gold, knots, wind_from, point, hull_pct
         );
         draw_text(&line, px(16.0) + 2.0 * r + px(8.0), baseline, fs, WHITE);
 
         // Active-debuff badges: a warning triangle (and a word) for a battered
         // hull and/or an overladen hold — the handling penalties in force.
         {
-            let mut badges: Vec<&str> = Vec::new();
+            let mut badges: Vec<String> = Vec::new();
             if hull::fraction(&gs) <= 0.90 {
-                badges.push("Hull");
+                badges.push("Hull".to_string());
             }
-            if upgrades::overload_penalty(gs.sail_level, gs.hold_used()) > 0.0 {
-                badges.push("Overladen");
+            // Overladen: show the load against the rig's haul tolerance (e.g. 17/16)
+            // and the speed penalty it costs, so the cause and the cost are both legible.
+            let load = gs.hold_used();
+            let haul = upgrades::max_haul(gs.sail_level);
+            let pen = upgrades::overload_penalty(gs.sail_level, load);
+            if pen > 0.0 {
+                badges.push(format!(
+                    "Overladen {}/{}  (-{}% speed)",
+                    load,
+                    haul,
+                    (pen * 100.0).round() as i32
+                ));
             }
             let warn = Color::new(1.0, 0.78, 0.2, 1.0);
             let mut x = px(16.0);
             let y = px(56.0);
             let s = px(13.0); // triangle size
-            for label in badges {
+            for label in &badges {
                 draw_triangle(
                     vec2(x + s * 0.5, y - s),
                     vec2(x, y),

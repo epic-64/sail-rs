@@ -145,6 +145,8 @@ enum FlashTarget {
     Units(i32),    // a contract's haulage units (won't fit the hold)
     Stake(i32),    // a rival port's race stake (can't cover the wager)
     Tier(i32),     // a rival port's hull requirement (hull not sturdy enough)
+    UpgradeCost(UpgradeKind), // a fitting's price (can't cover the refit)
+    RepairCost,    // the drydock repair price (can't cover any mending)
 }
 
 /// A live red-jiggle on one constraint, started at `start` (seconds, `get_time`).
@@ -508,6 +510,8 @@ impl PortScreen {
                 Err(e) => {
                     sounds.invalid();
                     if e == TradeError::NotEnoughGold {
+                        // Price and purse are the two ends of the same shortfall: jiggle both.
+                        self.flash(FlashTarget::RepairCost);
                         self.flash(FlashTarget::Gold);
                     }
                 }
@@ -517,6 +521,8 @@ impl PortScreen {
                 Err(e) => {
                     sounds.invalid();
                     if e == TradeError::NotEnoughGold {
+                        // Price and purse are the two ends of the same shortfall: jiggle both.
+                        self.flash(FlashTarget::UpgradeCost(kind));
                         self.flash(FlashTarget::Gold);
                     }
                 }
@@ -931,11 +937,22 @@ impl PortScreen {
         let step = line_h(fs_body());
 
         // A cost right-aligned left of the action chip, both centred in a block of
-        // height `bh` whose top is `ry`.
-        let cost_chip = |ry: f32, bh: f32, cost: &str, label: &str, focused: bool| {
+        // height `bh` whose top is `ry`. The chip is the *only* commit hitbox (the row
+        // body just selects, like every other board row); a rejected buy jiggles the
+        // price red, so the constraint the captain bumped is the thing that flashes.
+        let cost_chip = |ry: f32, bh: f32, cost: &str, label: &str, focus: Focus, focused: bool, activatable: bool| {
             let chip_top = ry + (bh - chip_h()) / 2.0;
-            button(chip_x, chip_top, chip_w(), chip_h(), label, focused);
-            right_text(cost, cost_r, chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO, fs_body());
+            let chip_rect = Rect::new(chip_x, chip_top, chip_w(), chip_h());
+            button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, label, focused);
+            let flash = match focus {
+                Focus::Repair => self.flash_of(FlashTarget::RepairCost),
+                Focus::Upgrade(k) => self.flash_of(FlashTarget::UpgradeCost(k)),
+                _ => None,
+            };
+            right_text_flash(cost, cost_r, chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO, fs_body(), flash);
+            if activatable {
+                self.record_hit(chip_rect, HitEffect::Select { focus, column: None, activate: true });
+            }
         };
         let highlight = |ry: f32, bh: f32| {
             draw_rectangle(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh, row_highlight());
@@ -953,7 +970,7 @@ impl PortScreen {
             }
             self.record_hit(
                 Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
-                HitEffect::Select { focus: Focus::Repair, column: None, activate: true },
+                HitEffect::Select { focus: Focus::Repair, column: None, activate: false },
             );
             let base = ry + step;
             let cond = format!(
@@ -967,7 +984,7 @@ impl PortScreen {
             // Only a damaged hull shows a price and a Repair chip; a sound hull
             // (100%) has nothing to mend, so we drop both.
             if hull::damage(gs) > 0 {
-                cost_chip(ry, bh, &hull::repair_cost(gs).to_string(), "Repair", active);
+                cost_chip(ry, bh, &hull::repair_cost(gs).to_string(), "Repair", Focus::Repair, active, true);
             }
             // Extra breathing room before the next section heading.
             ry += bh + gap() * 2.0;
@@ -1034,7 +1051,7 @@ impl PortScreen {
                 }
                 self.record_hit(
                     Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
-                    HitEffect::Select { focus: Focus::Upgrade(kind), column: None, activate: true },
+                    HitEffect::Select { focus: Focus::Upgrade(kind), column: None, activate: false },
                 );
                 draw_text(&title, x, ry + step, fs_body() as f32, ink());
                 for (i, (label, value)) in lines.iter().enumerate() {
@@ -1045,7 +1062,7 @@ impl PortScreen {
                     None => ("MAX".to_string(), "Maxed"),
                     Some(c) => (c.to_string(), "Fit"),
                 };
-                cost_chip(ry, bh, &cost, label, active);
+                cost_chip(ry, bh, &cost, label, Focus::Upgrade(kind), active, !maxed);
                 // `bh` already carries a trailing `gap()`; don't double it between rows.
                 ry += bh;
             }
