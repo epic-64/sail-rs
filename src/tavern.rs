@@ -28,10 +28,10 @@ pub enum SpecialItem {
     /// Pipe up a fresh wind on command, once a day: the prevailing breeze backs or
     /// veers to a new random quarter (the same shift the weather rolls on its own).
     WindWhistle,
-    /// A swig that drives the ship on: a burst of extra top speed for a few seconds,
-    /// once a day.
+    /// A swig that drives the ship on: a flat burst of extra speed over the ground for
+    /// a few seconds, on any point of sail. Once a day.
     DolphinsDraught,
-    /// Read the glass and calm the seas: the weather eases straight back to clear,
+    /// Read the glass and calm the seas: the weather eases back to a flat calm,
     /// once a day.
     StormGlass,
     /// A trader's price book: the captain's log gains an Almanac spread comparing
@@ -90,7 +90,7 @@ impl SpecialItem {
                          legendary trinket can be bought.",
             WindWhistle => "Pipe up a fresh wind from a new quarter. Once a day.",
             DolphinsDraught => "A swig for a burst of speed when you need it. Once a day.",
-            StormGlass => "Read the glass and calm the seas to clear. Once a day.",
+            StormGlass => "Read the glass and calm the seas to a flat calm. Once a day.",
             TradersAlmanac => "Compare every port's prices in these waters, from your log.",
             LuckyFigurehead => "Draws coin from the sea: salvage is worth half again as much.",
         }

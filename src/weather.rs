@@ -192,11 +192,11 @@ impl WeatherState {
         self.since_change = 0.0;
     }
 
-    /// Calm the seas back to clear (the Storm Glass tavern ware): jump the scenario to
-    /// `Clear` and reset the drift timer. The eased `sea`/`gloom` lay down to it over
+    /// Calm the seas (the Storm Glass tavern ware): jump the scenario to the flattest
+    /// `Calm` and reset the drift timer. The eased `sea`/`gloom` lay down to it over
     /// the next few seconds rather than snapping, so the gale visibly subsides.
     pub fn calm(&mut self) {
-        self.weather = Weather::Clear;
+        self.weather = Weather::Calm;
         self.since_change = 0.0;
     }
 }
