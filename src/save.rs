@@ -97,7 +97,7 @@ impl Save {
             &mut o,
             "stats",
             &format!(
-                "{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 s.contracts_fulfilled,
                 s.contract_earnings,
                 s.races_won,
@@ -106,7 +106,11 @@ impl Save {
                 s.meters_traveled,
                 s.flotsam_collected,
                 s.flotsam_gold,
-                s.days_passed
+                s.days_passed,
+                s.times_docked,
+                s.hull_repairs,
+                s.upgrades_bought,
+                s.log_opened
             ),
         );
         // A rival on the water: its position and the race phase, so a running race
@@ -350,6 +354,10 @@ fn parse_stats(v: &str) -> Stats {
         flotsam_collected: field(6).parse().unwrap_or(0),
         flotsam_gold: field(7).parse().unwrap_or(0),
         days_passed: field(8).parse().unwrap_or(0),
+        times_docked: field(9).parse().unwrap_or(0),
+        hull_repairs: field(10).parse().unwrap_or(0),
+        upgrades_bought: field(11).parse().unwrap_or(0),
+        log_opened: field(12).parse().unwrap_or(0),
     }
 }
 
@@ -487,6 +495,10 @@ mod tests {
             flotsam_collected: 31,
             flotsam_gold: 1_870,
             days_passed: 12,
+            times_docked: 23,
+            hull_repairs: 6,
+            upgrades_bought: 5,
+            log_opened: 9,
         };
         Save {
             seed: 42,

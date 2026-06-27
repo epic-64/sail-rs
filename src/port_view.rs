@@ -84,6 +84,7 @@ impl Harbor {
     pub fn try_dock(&mut self, gs: &mut GameState) -> bool {
         if let Some(id) = self.dockable {
             gs.location = Location::Docked(id);
+            gs.stats.times_docked += 1;
             self.dockable = None;
             self.screen = Some(PortScreen::new(id));
             true
