@@ -69,6 +69,9 @@ const RACE_LOST_MP3: &[u8] = snd!("lightyeartraxx-kl-peach-game-over-iii-142453.
 // A short buzzer when the captain tries something the rules won't allow (no gold
 // for a wager, no room in the hold, nothing to sell, …).
 const INVALID_MP3: &[u8] = snd!("invalid-input.mp3");
+// The charging whine as a Dolphin's Draught is quaffed: it builds for a beat before
+// the burst of speed lands (see `main`'s dolphin charge timer).
+const CHARGED_LASER_MP3: &[u8] = snd!("charged_laser.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues. These started from the per-clip
@@ -92,6 +95,8 @@ const RACE_WON_VOL: f32 = 0.25;
 const RACE_LOST_VOL: f32 = 0.25;
 // The invalid-action buzzer — present enough to register without nagging.
 const INVALID_VOL: f32 = 0.4;
+// The Dolphin's Draught charge whine.
+const CHARGED_LASER_VOL: f32 = 0.6;
 // The boat speed (knots) at which the sailing bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
@@ -113,6 +118,7 @@ pub struct SoundBank {
     race_won: Sound,
     race_lost: Sound,
     invalid: Sound,
+    charged_laser: Sound,
     sailing_vol: f32,
     calm_vol: f32,
     storm_vol: f32,
@@ -139,6 +145,7 @@ impl SoundBank {
         let race_won = load_clip(RACE_WON_MP3).await;
         let race_lost = load_clip(RACE_LOST_MP3).await;
         let invalid = load_clip(INVALID_MP3).await;
+        let charged_laser = load_clip(CHARGED_LASER_MP3).await;
 
         // Kick off the beds at zero volume so they're already running and in sync;
         // the per-frame update simply opens them up.
@@ -160,6 +167,7 @@ impl SoundBank {
             race_won,
             race_lost,
             invalid,
+            charged_laser,
             sailing_vol: 0.0,
             calm_vol: 0.0,
             storm_vol: 0.0,
@@ -301,6 +309,16 @@ impl SoundBank {
             PlaySoundParams { looped: false, volume: INVALID_VOL * self.master },
         );
     }
+
+    /// The charging whine of a Dolphin's Draught being quaffed — it winds up for a
+    /// beat before the speed burst lands. Restarted so a re-quaff retriggers cleanly.
+    pub fn dolphin_dash(&self) {
+        stop_sound(&self.charged_laser);
+        play_sound(
+            &self.charged_laser,
+            PlaySoundParams { looped: false, volume: CHARGED_LASER_VOL * self.master },
+        );
+    }
 }
 
 /// Decode an embedded MP3 to an in-memory WAV and hand it to macroquad's mixer.
@@ -414,6 +432,7 @@ mod tests {
             ("race_won", RACE_WON_MP3),
             ("race_lost", RACE_LOST_MP3),
             ("invalid", INVALID_MP3),
+            ("charged_laser", CHARGED_LASER_MP3),
         ] {
             let wav = decode_mp3_to_wav(mp3);
             assert!(wav.len() > 44, "{name}: no audio decoded");

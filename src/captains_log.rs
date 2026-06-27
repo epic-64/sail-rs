@@ -600,6 +600,20 @@ fn page_trinket_detail(p: &Page, gs: &GameState, sel: usize) {
         (format!("Sold at a shipyard tavern for {} gold.", item.price()), dim_ink())
     };
     draw_text(&txt, p.x, y, fs_small() as f32, col);
+
+    // For an owned *active* ware (the ones invoked at the helm), note whether its daily
+    // charge is ready or spent. The charge comes back at sunrise (the day/night clock
+    // rolling into a new day, see `main`'s days-passed tally), so a spent ware is good
+    // again at first light. Passive keepsakes have no charge, so they get no line.
+    if gs.owns(item) && item.is_active() {
+        y += line_h(fs_small());
+        let (status, scol) = if gs.item_ready(item) {
+            ("Charged: ready to use.".to_string(), ink())
+        } else {
+            ("Spent: recharges at sunrise.".to_string(), dim_ink())
+        };
+        draw_text(&status, p.x, y, fs_small() as f32, scol);
+    }
 }
 
 /// Ink a small hand-drawn emblem for `item`, centred at (`cx`,`cy`) and sized so the
