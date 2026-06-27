@@ -179,9 +179,13 @@ pub fn render(
     // clusters and slide the centre (and frame size) toward the midpoint as the second
     // draws level. At the midline the framing is the same whichever one counts as
     // "nearest", so the swap is seamless.
-    const SHIP_FILL: f32 = 0.82; // keep the ship within this fraction of the half-frame
+    const SHIP_FILL: f32 = 0.92; // keep the ship within this fraction of the half-frame
     const MAX_ZOOM_OUT: f32 = 3.0; // widest frame, as a multiple of the cluster's own
     const PULL_MAX: f32 = 0.65; // how far the centre slides from archipelago toward ship
+    // Breathing room around the cluster's own span when it frames the chart. Kept tight
+    // (just clear of the isles) so a captain sitting in an archipelago sees it fill the
+    // chart; the pixel `pad` below still leaves room for the mark rings at the edge.
+    const CLUSTER_MARGIN: f32 = 1.0;
 
     let a = world.cluster_at(kin.pos); // nearest archipelago
     let da = a.center.distance_to(kin.pos);
@@ -223,10 +227,10 @@ pub fn render(
     // Wide enough to keep both the ship and the (now off-centre) archipelago on the
     // chart, floored at the cluster's own span and capped so it never zooms out too far.
     let ship_off = (kin.pos.x - view_x).hypot(kin.pos.y - view_y);
-    let cluster_reach = (ca.x - view_x).hypot(ca.y - view_y) + half * 1.06;
+    let cluster_reach = (ca.x - view_x).hypot(ca.y - view_y) + half * CLUSTER_MARGIN;
     let frame = (ship_off / SHIP_FILL)
         .max(cluster_reach)
-        .min(half * 1.06 * MAX_ZOOM_OUT);
+        .min(half * CLUSTER_MARGIN * MAX_ZOOM_OUT);
     let scale = (size / 2.0 - pad) / frame;
     // World x (east) right, world y (north) up, so flip the screen y axis.
     let sx = |p: Vec2| cx + (p.x - view_x) * scale;
