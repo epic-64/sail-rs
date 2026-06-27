@@ -626,36 +626,56 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         }
     }
 
-    // Nautic (rhumb) lines: a hub in open water near the chart's middle, with a straight
-    // navigation line out to every shipyard. Drawn first and faint, so the isles and the
-    // beasts sit on top like ink over a ruled chart.
-    let hub = {
-        // Search a central box for the spot farthest from any port, so the hub sits in
-        // free water rather than atop the central archipelago.
-        let (bx, by) = (rect.x + rect.w * 0.30, rect.y + rect.h * 0.30);
-        let (bw, bh) = (rect.w * 0.40, rect.h * 0.40);
-        let mut best = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-        let mut best_clear = -1.0f32;
-        const G: i32 = 10;
-        for gy in 0..=G {
-            for gx in 0..=G {
-                let px = bx + bw * gx as f32 / G as f32;
-                let py = by + bh * gy as f32 / G as f32;
-                let mut clear = f32::MAX;
-                for &(ox, oy) in &ports_xy {
-                    clear = clear.min((px - ox).hypot(py - oy));
-                }
-                if clear > best_clear {
-                    best_clear = clear;
-                    best = (px, py);
-                }
+    let rhumb = Color::new(pal.border.r, pal.border.g, pal.border.b, pal.border.a * 0.45);
+    let grid_col = Color::new(pal.border.r, pal.border.g, pal.border.b, pal.border.a * 0.22);
+
+    // A faint rectangular grid (graticule) over the chart: evenly spaced lines making
+    // roughly square cells. The interior line positions are kept so the compass can be
+    // pinned to a grid crossing.
+    let cell = rect.h / 6.0;
+    let mut xs: Vec<f32> = Vec::new();
+    let mut x = rect.x + cell;
+    while x < rect.x + rect.w - 1.0 {
+        xs.push(x);
+        x += cell;
+    }
+    let mut ys: Vec<f32> = Vec::new();
+    let mut y = rect.y + cell;
+    while y < rect.y + rect.h - 1.0 {
+        ys.push(y);
+        y += cell;
+    }
+    for &gx in &xs {
+        draw_line(gx, rect.y, gx, rect.y + rect.h, 1.0, grid_col);
+    }
+    for &gy in &ys {
+        draw_line(rect.x, gy, rect.x + rect.w, gy, 1.0, grid_col);
+    }
+
+    // The compass hub, pinned to whichever grid crossing near the chart's middle sits
+    // farthest from any port, so the rose lands on an intersection and in free water
+    // rather than atop the central archipelago.
+    let (mx, my) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let mut hub = (mx, my);
+    let mut best_clear = -1.0f32;
+    for &hx in &xs {
+        for &hy in &ys {
+            if (hx - mx).abs() > rect.w * 0.28 || (hy - my).abs() > rect.h * 0.32 {
+                continue;
+            }
+            let mut clear = f32::MAX;
+            for &(ox, oy) in &ports_xy {
+                clear = clear.min((hx - ox).hypot(hy - oy));
+            }
+            if clear > best_clear {
+                best_clear = clear;
+                hub = (hx, hy);
             }
         }
-        best
-    };
-    let rhumb = Color::new(pal.border.r, pal.border.g, pal.border.b, pal.border.a * 0.45);
+    }
+
     // Where a ray from `o` along `d` leaves the rect: the smallest positive crossing of
-    // the four edges. Lets each rhumb line run on past its shipyard to the frame edge.
+    // the four edges, so each line of bearing reaches the frame.
     let ray_to_edge = |o: (f32, f32), d: (f32, f32), r: Rect| -> (f32, f32) {
         let mut t = f32::INFINITY;
         if d.0 > 1e-4 {
@@ -673,10 +693,13 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         }
         (o.0 + d.0 * t, o.1 + d.1 * t)
     };
-    // Each line of bearing runs from the compass hub through a shipyard and on to the
-    // frame edge, the way a chart's rhumb lines cross the whole sheet.
-    for &(spx, spy) in &shipyards_xy {
-        let (ex, ey) = ray_to_edge(hub, (spx - hub.0, spy - hub.1), rect);
+    // Lines of bearing fanning from the compass hub out to the frame edge along the 16
+    // points of the compass (every 22.5 degrees, north up), the way a chart's rhumb lines
+    // radiate from the rose across the whole sheet.
+    for i in 0..16 {
+        let theta = i as f32 / 16.0 * std::f32::consts::TAU; // clockwise from north
+        let d = (theta.sin(), -theta.cos()); // north up (screen y points down)
+        let (ex, ey) = ray_to_edge(hub, d, rect);
         draw_line(hub.0, hub.1, ex, ey, (1.0 * s).max(1.0), rhumb);
     }
 
@@ -752,8 +775,8 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette) {
         feature(x, y, r, isle.terrain);
     }
 
-    // Nautic-line nodes, over the isles: a ring round each shipyard the rhumb lines pass
-    // through (the compass rose marks the hub where they converge).
+    // A ring round each shipyard, over the isles (the bearing lines no longer run through
+    // them, but the harbours stay marked).
     for &(spx, spy) in &shipyards_xy {
         draw_circle_lines(spx, spy, 4.0 * s, (1.2 * s).max(1.0), col);
     }
