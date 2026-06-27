@@ -1234,6 +1234,43 @@ async fn run_game(
         // in and out with the same fury that swells the thunder and darkens the sky.
         // The sea rings sit below the live, rolled sea line; the deck splashes ride
         // the foreground deck, so they hide with it while glancing astern.
+        // Sea rings ride the live wave surface: invert the wave renderer's
+        // projection (screen y -> sea distance, x -> bearing), sample the swell
+        // there, and reproject so a ring on a crest sits higher than one in a
+        // trough. Mirrors `OceanRenderer::render`'s projection (same `view_kin`,
+        // heave, sea and constants), working in the rain's unrolled screen space
+        // (the roll is applied afterwards), so the rings sit on the same water the
+        // mesh draws.
+        let horizon_w = h * 0.54;
+        let ppr = h * 0.85;
+        let half_fov = projection::MAX_HALF_FOV_H.min((w * 0.5) / ppr);
+        let ppr_h = (w * 0.5) / half_fov;
+        let fwd = Vec2::from_heading(view_kin.heading_rad);
+        let right = Vec2::new(view_kin.heading_rad.cos(), -view_kin.heading_rad.sin());
+        let sea_pos = view_kin.pos;
+        let sea_heave = motion.heave;
+        let wave_lift = |bx: f32, by: f32| -> f32 {
+            let dep = (by - (horizon_w + cam_vert)) / ppr;
+            if dep <= 1e-3 {
+                return by;
+            }
+            let phi = (bx - w * 0.5) / ppr_h;
+            let cphi = phi.cos();
+            let f = projection::BASE_EYE * cphi / dep.tan();
+            if !f.is_finite() || f <= 0.0 {
+                return by;
+            }
+            let s = f * phi.tan();
+            let wp = sea_pos + fwd * f + right * s;
+            let z = ocean::height(wp, t, sea);
+            horizon_w
+                + ((projection::BASE_EYE - (z - sea_heave) * ocean_renderer::WAVE_GAIN) * cphi / f)
+                    .atan()
+                    * ppr
+                + cam_vert
+        };
+        // The deck only occludes when it's actually on screen (not while astern).
+        let deck_covers = |x: f32, y: f32| !look_back && ship.deck_covers(x, y);
         rain.render(
             &RainInput {
                 storm,
@@ -1243,6 +1280,8 @@ async fn run_game(
                 roll_deg: cam_roll_deg,
                 deck: !look_back,
             },
+            wave_lift,
+            deck_covers,
             dt,
             w,
             h,
