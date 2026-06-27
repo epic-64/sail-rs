@@ -1321,12 +1321,16 @@ impl PortScreen {
         let owned = gs.owns(item);
         let active = self.focus == Focus::TavernItem;
         let blurb = wrap(item.blurb(), fs_small());
-        // A closing line: how to use an owned active ware (its helm key + recharge),
-        // else nothing.
+        // A closing line for an owned active ware: while it's charged, its helm key; while
+        // it's spent, the keybind is hidden (it would do nothing) and only the recharge is
+        // noted. The daily charge comes back at sunrise.
         let status: Option<String> = if owned && item.is_active() {
-            let key = item.key_hint().unwrap_or("");
-            let ready = if gs.item_ready(item) { "ready" } else { "used today" };
-            Some(format!("Press {key} at the helm to use ({ready}). Recharges each day."))
+            Some(if gs.item_ready(item) {
+                let key = item.key_hint().unwrap_or("");
+                format!("Press {key} at the helm to use. Recharges at sunrise.")
+            } else {
+                "Spent for the day. Recharges at sunrise.".to_string()
+            })
         } else {
             None
         };
