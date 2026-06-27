@@ -233,41 +233,63 @@ impl ShipRenderer {
 
         // Open railing: stanchions standing along each topside, joined by a cap
         // rail above the bulwark, so the deck reads as guarded rather than a bare
-        // wall. Drawn far → near so nearer posts overlap the ones behind.
-        let posts = 7;
-        let post_h = rail_h * 0.55;
+        // wall. The sheer runs the whole side, from the stemhead forward along the
+        // foredeck and aft to the helm. Posts and cap grow with nearness, so the
+        // rail towers over the viewer at the helm and shrinks to the bow (true
+        // perspective). Built far → near so nearer posts overlap those behind.
+        let posts = 8; // along the main deck side (far corner → helm)
+        let fore_posts = 4; // up the foredeck (stem → far corner)
         let post_hw = w * 0.006;
+        let cap_far = far_y - rail_h * 0.5;
+        let cap_near = near_y - rail_h;
+        let stem_cap_y = stem_y - rail_h * 0.55;
+        // Depth of a deck y in the far(0)→near(1) span; negative past the bow.
+        let depth = |y: f32| (y - far_y) / (near_y - far_y);
+        // Stanchion height and half-width scale with depth, so the rail grows
+        // toward the viewer and pinches to nothing at the bow.
+        let post_h_at = |y: f32| rail_h * (0.35 + 0.7 * depth(y)).max(0.12);
+        let post_hw_at = |y: f32| post_hw * (0.7 + 1.3 * depth(y)).max(0.4);
         for side in [-1.0f32, 1.0] {
-            // Sheer line along the bulwark cap, far (0) → near (1).
-            let cap_far = far_y - rail_h * 0.5;
-            let cap_near = near_y - rail_h;
-            let rail_pt = |t: f32| -> (f32, f32) {
-                let hw = far_hw + (near_hw - far_hw) * t;
-                let cap = cap_far + (cap_near - cap_far) * t;
-                (cx + side * hw, cap)
-            };
-            // Cap rail: a thin board riding the tops of the stanchions.
-            let (x0, y0) = rail_pt(0.0);
-            let (x1, y1) = rail_pt(1.0);
-            let band = rail_h * 0.12;
-            quad(
-                sway(x0, y0 - post_h),
-                sway(x1, y1 - post_h),
-                sway(x1, y1 - post_h + band),
-                sway(x0, y0 - post_h + band),
-                rgba(RAIL_DK, lit, 1.0),
-            );
-            // Stanchions: short vertical posts from the cap up to the rail,
-            // fattening a touch as they near the helm (perspective).
+            // The full sheer line, ordered bow → helm so the draw goes far → near.
+            let mut pts: Vec<(f32, f32)> = Vec::new();
+            // Foredeck: stem (converged on centreline) out to the far corner.
+            for i in 0..fore_posts {
+                let a = i as f32 / fore_posts as f32;
+                let x = cx + side * far_hw * a;
+                let y = stem_cap_y + (cap_far - stem_cap_y) * a;
+                pts.push((x, y));
+            }
+            // Main deck: far corner aft to the helm, inclusive of both ends.
             for i in 0..=posts {
                 let t = i as f32 / posts as f32;
-                let (px, py) = rail_pt(t);
-                let pw = post_hw * (1.0 + t);
+                let hw = far_hw + (near_hw - far_hw) * t;
+                let cap = cap_far + (cap_near - cap_far) * t;
+                pts.push((cx + side * hw, cap));
+            }
+            // Cap rail: a thin board riding the tops of the stanchions, its
+            // thickness tracking the post height so it foreshortens too.
+            for w2 in pts.windows(2) {
+                let (x0, y0) = w2[0];
+                let (x1, y1) = w2[1];
+                let (t0, t1) = (y0 - post_h_at(y0), y1 - post_h_at(y1));
+                let (b0, b1) = (post_h_at(y0) * 0.22, post_h_at(y1) * 0.22);
+                quad(
+                    sway(x0, t0),
+                    sway(x1, t1),
+                    sway(x1, t1 + b1),
+                    sway(x0, t0 + b0),
+                    rgba(RAIL_DK, lit, 1.0),
+                );
+            }
+            // Stanchions: vertical posts from the cap up to the rail.
+            for &(px, py) in &pts {
+                let ph = post_h_at(py);
+                let pw = post_hw_at(py);
                 quad(
                     sway(px - pw, py),
                     sway(px + pw, py),
-                    sway(px + pw, py - post_h),
-                    sway(px - pw, py - post_h),
+                    sway(px + pw, py - ph),
+                    sway(px - pw, py - ph),
                     rgba(RAIL, lit, 1.0),
                 );
             }
