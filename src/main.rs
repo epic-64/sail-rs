@@ -14,6 +14,7 @@ mod flotsam_render;
 mod font;
 mod game_state;
 mod geometry;
+mod guide;
 mod isle_features;
 mod islands_render;
 mod minimap;
@@ -300,6 +301,7 @@ fn draw_keybind_hints(dockable: bool, h: f32) {
     // (key, action) top to bottom; the log sits first as the headline hint.
     let mut hints: Vec<(&str, &str)> = vec![
         ("L", "Captain's Log"),
+        ("G", "Guide"),
         ("Esc", "Pause"),
         ("\u{2191}\u{2193}", "Sail"),
         ("\u{2190}\u{2192}", "Steer"),
@@ -501,6 +503,14 @@ async fn run_game(
     // Which button on the open spread the cursor is on (Up/Down move it, Enter
     // presses it); reset whenever the book opens or a page is turned.
     let mut log_sel: usize = 0;
+    // The basics primer (`guide`), raised over the scene with G and paged with the
+    // arrows. It opens by itself on a captain's first ever voyage and not again
+    // (a global flag, see `save::guide_seen`), and can be summoned any time after.
+    let mut guide_open = !save::guide_seen();
+    let mut guide_page: usize = 0;
+    if guide_open {
+        save::store_guide_seen();
+    }
     // The dev controls (nudge weather Q/E, fast-forward F, nudge clock T/Y, stave in
     // the hull X, nudge wind [ ]) are off until unlocked by a cheat: type "banana"
     // while the captain's log is open. Toggles, so typing it again locks them back.
@@ -857,13 +867,14 @@ async fn run_game(
             // The on-screen sail buttons are hidden while the log is open (the nav
             // cluster takes that corner), so their taps are gated on `!log_open`,
             // just like the arrow keys.
+            let overlay_open = log_open || guide_open;
             if is_key_pressed(KeyCode::W)
-                || (!log_open && (is_key_pressed(KeyCode::Up) || touch.tapped_in(hud.sail_up)))
+                || (!overlay_open && (is_key_pressed(KeyCode::Up) || touch.tapped_in(hud.sail_up)))
             {
                 sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
             }
             if is_key_pressed(KeyCode::S)
-                || (!log_open && (is_key_pressed(KeyCode::Down) || touch.tapped_in(hud.sail_down)))
+                || (!overlay_open && (is_key_pressed(KeyCode::Down) || touch.tapped_in(hud.sail_down)))
             {
                 sail_mode = sail_mode.saturating_sub(1);
             }
@@ -876,8 +887,8 @@ async fn run_game(
             }
             // Steer with the keys, or with the touch wheel when a finger has it (the
             // wheel is hidden — and so ignored — while the log is open).
-            let mut turn = read_turn(log_open);
-            if !log_open {
+            let mut turn = read_turn(overlay_open);
+            if !overlay_open {
                 if let Some(v) = touch.steering(hud.wheel) {
                     turn = v;
                 }
@@ -1006,6 +1017,7 @@ async fn run_game(
                 && harbor.try_dock(&mut gs)
             {
                 log_open = false;
+                guide_open = false;
             }
 
             // Dev aids (all need dev mode, unlocked by typing "banana" in the log):
@@ -1055,6 +1067,31 @@ async fn run_game(
                     log_spread = 0;
                     log_sel = 0;
                     gs.stats.log_opened += 1;
+                    // The log and guide share the arrow keys; only one is open at once.
+                    guide_open = false;
+                }
+            }
+            // The basics primer, summoned with G. Like the log it reserves the arrows
+            // while open, so the two are mutually exclusive.
+            if is_key_pressed(KeyCode::G) {
+                guide_open = !guide_open;
+                if guide_open {
+                    guide_page = 0;
+                    log_open = false;
+                }
+            }
+            // Page the open guide with the left/right arrows, or the on-screen nav
+            // cluster on touch; clamped at the covers, no wrap-around.
+            if guide_open {
+                let n = touch_ui::nav_cluster(w, h);
+                if touch.tapped_in(n.back) {
+                    guide_open = false;
+                }
+                if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
+                    guide_page = (guide_page + 1).min(guide::NUM_PAGES - 1);
+                }
+                if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
+                    guide_page = guide_page.saturating_sub(1);
                 }
             }
             // Page the open log with the left/right arrows (no mouse to click the
@@ -1095,10 +1132,12 @@ async fn run_game(
                 }
             }
             // The pause button raises the menu while sailing; it's hidden while the
-            // log is open (the book is closed with Esc / the cluster's back instead).
-            let pause_tap = !log_open && touch.tapped_in(hud.pause);
+            // log or guide is open (those close with Esc / the cluster's back instead).
+            let pause_tap = !log_open && !guide_open && touch.tapped_in(hud.pause);
             if is_key_pressed(KeyCode::Escape) || pause_tap {
-                if log_open {
+                if guide_open {
+                    guide_open = false;
+                } else if log_open {
                     log_open = false;
                 } else {
                     // No other menu up: heave to and raise the pause menu.
@@ -1660,6 +1699,11 @@ async fn run_game(
             draw_text(&race_result_msg, bx, by, fs as f32, accent);
         }
 
+        // The basics primer, raised over the scene (and shown on a first voyage).
+        if guide_open {
+            guide::render(guide_page, w, h);
+        }
+
         // The captain's log, flipped open over the scene.
         if log_open {
             captains_log::render(
@@ -1684,7 +1728,7 @@ async fn run_game(
         // The docking call-to-action (while sailing), then the port board (docked).
         // Suppress it at a race's finish line so a novice doesn't strike sail short.
         let race_target = gs.race.map(|r| r.target_id);
-        if !log_open {
+        if !log_open && !guide_open {
             port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
         }
         if harbor.is_open() {
@@ -1707,7 +1751,7 @@ async fn run_game(
         // untouched. A menu shows the nav cluster (the board adds a Tab button);
         // open water shows the sailing helm.
         if touch.active() {
-            if pause.open || log_open || harbor.is_open() {
+            if pause.open || log_open || guide_open || harbor.is_open() {
                 // The board can be tapped directly (tabs / rows / chips), but it also
                 // gets the full d-pad + ✓/✕ cluster, like the pause menu and log, for
                 // captains who'd rather step the cursor than tap precisely.
@@ -1722,7 +1766,7 @@ async fn run_game(
                     look_back,
                 );
             }
-        } else if !pause.open && !log_open && !harbor.is_open() {
+        } else if !pause.open && !log_open && !guide_open && !harbor.is_open() {
             // Keyboard mode at the helm: faint reminders of the sailing keys,
             // bottom-left. (Touch mode has its own on-screen glyphs above.)
             draw_keybind_hints(harbor.dockable.is_some(), h);
