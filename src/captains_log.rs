@@ -15,6 +15,8 @@
 //!   honoured and sea-miles logged, then the race record (see `game_state::Stats`).
 //! - **The Almanac** — a full-spread price book across the local archipelago; present
 //!   only once the captain buys the Trader's Almanac (see [[crate::tavern]]).
+//! - **Legendary Trinkets** | **Trinket** — a selectable list of every trinket on the
+//!   left, the chosen one's name, emblem and description on the right.
 //! - **The World** — a full-spread (no spine), fully zoomed-out, hand-drawn chart of
 //!   every archipelago at once, named, with no ship marked: the captain's keepsake
 //!   map (see [[crate::minimap]] `render_world`); present only once the World Map is
@@ -46,6 +48,9 @@ enum Spread {
     LedgerWagers,
     /// A price book across the local archipelago (the Trader's Almanac ware).
     Almanac,
+    /// The captain's collection of legendary trinkets: a selectable list on the left,
+    /// the chosen trinket's name/artwork/description on the right.
+    Trinkets,
     /// The full-spread keepsake world map (the World Map ware): no spine, no second
     /// page, the whole leaf handed to the chart.
     World,
@@ -63,6 +68,9 @@ fn active_spreads(gs: &GameState) -> Vec<Spread> {
     if gs.owns(SpecialItem::TradersAlmanac) {
         v.push(Spread::Almanac);
     }
+    // The trinket collection is always in the book (it lists every trinket, owned or
+    // not), and sits just before the world map.
+    v.push(Spread::Trinkets);
     if gs.owns(SpecialItem::WorldMap) {
         v.push(Spread::World);
     }
@@ -81,14 +89,49 @@ pub fn world_spread_index(gs: &GameState) -> Option<usize> {
     active_spreads(gs).iter().position(|s| *s == Spread::World)
 }
 
-/// How many pressable buttons the spread at `index` carries — `main` uses it to clamp
-/// the Up/Down selection cursor. Only the Vessel spread has one so far: the
-/// **Caulk hull** field repair.
+/// How many Up/Down-navigable items the spread at `index` carries — `main` uses it to
+/// clamp the selection cursor. The Vessel spread has one (the **Caulk hull** button);
+/// the Trinkets spread has one row per trinket (the selectable list).
 pub fn button_count(gs: &GameState, index: usize) -> usize {
     match active_spreads(gs).get(index) {
         Some(Spread::VesselHold) => 1,
+        Some(Spread::Trinkets) => SpecialItem::COUNT,
         _ => 0,
     }
+}
+
+/// Whether the spread at `index` is the Legendary Trinkets spread — so `main` can
+/// hit-test pointer taps on its rows (see [`trinket_row_rect`]).
+pub fn is_trinkets(gs: &GameState, index: usize) -> bool {
+    matches!(active_spreads(gs).get(index), Some(Spread::Trinkets))
+}
+
+/// The book panel's outer rect `(x0, y0, pw, ph)` for a `w`×`h` screen. The one place
+/// the panel size is set, shared by the render and the pointer hit-tests.
+fn book_panel(w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let pw = (w * 0.86).min(px(760.0));
+    let ph = (h * 0.90).min(px(470.0));
+    ((w - pw) / 2.0, (h - ph) / 2.0, pw, ph)
+}
+
+/// Layout of the Legendary Trinkets list on the left page: the row left edge `x`, the
+/// column width, the first row's text baseline, and the per-row step. Shared by the
+/// page's draw and [`trinket_row_rect`] so the highlight and the hit-test never drift.
+fn trinket_list_geom(w: f32, h: f32) -> (f32, f32, f32, f32) {
+    let (x0, y0, pw, _ph) = book_panel(w, h);
+    let pad = px(28.0);
+    let x = x0 + pad;
+    let col_w = pw / 2.0 - pad - px(22.0);
+    let body_y = y0 + px(98.0);
+    (x, col_w, body_y, line_h(fs_body()))
+}
+
+/// The clickable rect of trinket row `i` (0-based) on the Legendary Trinkets spread,
+/// for a `w`×`h` screen — the same band the page highlights when it's selected.
+pub fn trinket_row_rect(i: usize, w: f32, h: f32) -> Rect {
+    let (x, col_w, body_y, lh) = trinket_list_geom(w, h);
+    let baseline = body_y + i as f32 * lh;
+    Rect::new(x - px(6.0), baseline - lh * 0.78, col_w + px(12.0), lh)
 }
 
 /// Warning ink for a battered hull (amber), matching the original's `log-damaged`
@@ -177,10 +220,7 @@ pub fn render(
     draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.45));
 
     // The open book, centred.
-    let pw = (w * 0.86).min(px(760.0));
-    let ph = (h * 0.90).min(px(470.0));
-    let x0 = (w - pw) / 2.0;
-    let y0 = (h - ph) / 2.0;
+    let (x0, y0, pw, ph) = book_panel(w, h);
     draw_rectangle(x0, y0, pw, ph, parchment());
     draw_rectangle_lines(x0, y0, pw, ph, px(3.0), parchment_edge());
 
@@ -242,6 +282,10 @@ pub fn render(
         Spread::Almanac => {
             page_almanac(world, kin, x0, pw, pad, head_y);
         }
+        Spread::Trinkets => {
+            page_trinkets(&left, gs, sel);
+            page_trinket_detail(&right, gs, sel);
+        }
         Spread::World => {
             page_world(world, gs, x0, y0, pw, ph, pad, head_y);
         }
@@ -263,11 +307,11 @@ pub fn render(
         }
         dx += gap;
     }
-    // Left footer: paging, plus the button cursor's keys on spreads that have one.
-    let nav = if matches!(kind, Spread::VesselHold) {
-        "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use"
-    } else {
-        "\u{25C4} \u{25BA} turn the page"
+    // Left footer: paging, plus the cursor's keys on spreads that take one.
+    let nav = match kind {
+        Spread::VesselHold => "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use",
+        Spread::Trinkets => "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} choose a trinket",
+        _ => "\u{25C4} \u{25BA} turn the page",
     };
     draw_text(nav, x0 + pad, foot_y, fs_small() as f32, dim_ink());
     let close = "L  close";
@@ -469,6 +513,211 @@ fn page_almanac(world: &World, kin: &Kinematics, x0: f32, pw: f32, pad: f32, hea
         let (txt, col) = if margin > 0 { (format!("+{margin}"), ink()) } else { ("0".to_string(), dim_ink()) };
         right_at(&txt, margin_r, ry, col);
         ry += lh;
+    }
+}
+
+/// Word-wrap `text` into lines no wider than `max_w` at font size `fs`.
+fn wrap(text: &str, fs: u16, max_w: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let trial = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+        if !cur.is_empty() && measure_text(&trial, None, fs, 1.0).width > max_w {
+            lines.push(std::mem::replace(&mut cur, word.to_string()));
+        } else {
+            cur = trial;
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// **Legendary Trinkets** (left page) — the captain's collection: every trinket, one
+/// per row, by name, with a checkmark on the ones owned. `sel` is the highlighted row
+/// (moved with Up/Down or a pointer tap), driving the detail on the facing page.
+fn page_trinkets(p: &Page, gs: &GameState, sel: usize) {
+    heading(p, "Legendary Trinkets");
+    let fs = fs_body();
+    let lh = line_h(fs);
+    let sel = sel.min(SpecialItem::COUNT - 1);
+    let mut y = p.body_y;
+    for (i, item) in SpecialItem::ALL.iter().enumerate() {
+        if i == sel {
+            // Highlight the selected row (the same sepia band the board uses for a row).
+            draw_rectangle(
+                p.x - px(6.0),
+                y - lh * 0.78,
+                p.col_w + px(12.0),
+                lh,
+                Color::new(150.0 / 255.0, 110.0 / 255.0, 60.0 / 255.0, 0.28),
+            );
+        }
+        let owned = gs.owns(*item);
+        draw_text(item.name(), p.x, y, fs as f32, ink());
+        // A checkmark, right-aligned in the column, on the trinkets already in the kit.
+        if owned {
+            let ck = "\u{2713}";
+            let d = measure_text(ck, None, fs, 1.0);
+            draw_text(ck, p.x + p.col_w - d.width, y, fs as f32, ink());
+        }
+        y += lh;
+    }
+}
+
+/// **Trinket** (right page) — the selected trinket's name, a hand-inked emblem, and its
+/// description, plus a line on whether it's in the kit (else where to buy it).
+fn page_trinket_detail(p: &Page, gs: &GameState, sel: usize) {
+    heading(p, "Trinket");
+    let item = SpecialItem::ALL[sel.min(SpecialItem::COUNT - 1)];
+    let lh = line_h(fs_body());
+    let mut y = p.body_y;
+
+    // The trinket's name as a sub-title in the display face.
+    crate::font::heading(|| draw_text(item.name(), p.x, y, fs_heading() as f32, ink()));
+    y += line_h(fs_heading());
+
+    // A framed cartouche holding the hand-inked emblem, centred in the column.
+    let art = p.col_w.min(px(150.0));
+    let box_x = p.x + (p.col_w - art) / 2.0;
+    let box_y = y;
+    draw_rectangle_lines(box_x, box_y, art, art, px(1.5), parchment_edge());
+    draw_trinket_art(item, box_x + art / 2.0, box_y + art / 2.0, art * 0.34, ink());
+    y = box_y + art + lh * 0.9;
+
+    // The description, word-wrapped to the column.
+    for line in wrap(item.blurb(), fs_small(), p.col_w) {
+        draw_text(&line, p.x, y, fs_small() as f32, dim_ink());
+        y += line_h(fs_small());
+    }
+    y += lh * 0.5;
+
+    // In the kit, or a note on where to acquire it.
+    let (txt, col) = if gs.owns(item) {
+        ("In your kit \u{2713}".to_string(), ink())
+    } else {
+        (format!("Sold at a shipyard tavern for {} gold.", item.price()), dim_ink())
+    };
+    draw_text(&txt, p.x, y, fs_small() as f32, col);
+}
+
+/// Ink a small hand-drawn emblem for `item`, centred at (`cx`,`cy`) and sized so the
+/// art spans roughly `2*size`, in chart ink `col`. Each trinket gets its own little
+/// device, the way an old codex illustrated a curiosity beside its entry.
+fn draw_trinket_art(item: SpecialItem, cx: f32, cy: f32, size: f32, col: Color) {
+    let th = (size * 0.10).max(1.5);
+    // A circular arc as a short polyline (macroquad draws only straight segments), for
+    // the wind gusts and the horseshoe.
+    let arc = |ccx: f32, ccy: f32, rad: f32, a0: f32, a1: f32, thick: f32| {
+        const SEG: i32 = 24;
+        let mut prev = (ccx + rad * a0.cos(), ccy + rad * a0.sin());
+        for i in 1..=SEG {
+            let t = i as f32 / SEG as f32;
+            let a = a0 + (a1 - a0) * t;
+            let cur = (ccx + rad * a.cos(), ccy + rad * a.sin());
+            draw_line(prev.0, prev.1, cur.0, cur.1, thick, col);
+            prev = cur;
+        }
+    };
+
+    match item {
+        SpecialItem::WorldMap => {
+            // A rolled chart: a sheet with thick rolled edges, a dotted route, and an X.
+            let w = size * 1.7;
+            let hh = size * 1.15;
+            let (l, r, t, b) = (cx - w / 2.0, cx + w / 2.0, cy - hh / 2.0, cy + hh / 2.0);
+            draw_rectangle_lines(l, t, w, hh, th, col);
+            draw_line(l, t, l, b, th * 1.8, col); // rolled left edge
+            draw_line(r, t, r, b, th * 1.8, col); // rolled right edge
+            // A dotted route across the sheet.
+            let n = 7;
+            for i in 0..n {
+                let f0 = i as f32 / n as f32;
+                let f1 = f0 + 0.5 / n as f32;
+                let p0 = (l + w * (0.12 + 0.7 * f0), b - hh * (0.2 + 0.55 * f0));
+                let p1 = (l + w * (0.12 + 0.7 * f1), b - hh * (0.2 + 0.55 * f1));
+                draw_line(p0.0, p0.1, p1.0, p1.1, th * 0.8, col);
+            }
+            // The X marking the spot.
+            let (xx, xy, e) = (cx + w * 0.22, cy + hh * 0.12, size * 0.16);
+            draw_line(xx - e, xy - e, xx + e, xy + e, th, col);
+            draw_line(xx - e, xy + e, xx + e, xy - e, th, col);
+        }
+        SpecialItem::WindWhistle => {
+            // Two curling gusts of wind, each a line trailing into a near-full curl.
+            let gust = |gy: f32, curl_r: f32| {
+                let end_x = cx + size * 0.35;
+                draw_line(cx - size, gy, end_x, gy, th, col);
+                arc(end_x, gy - curl_r, curl_r, std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2 + 5.4, th);
+            };
+            gust(cy - size * 0.4, size * 0.24);
+            gust(cy + size * 0.35, size * 0.32);
+        }
+        SpecialItem::DolphinsDraught => {
+            // A bottle: a body, a narrow neck, a cork, and a line for the liquid within.
+            let bw = size * 0.95;
+            let bt = cy - size * 0.15;
+            let bb = cy + size * 1.0;
+            let (l, r) = (cx - bw / 2.0, cx + bw / 2.0);
+            draw_rectangle_lines(l, bt, bw, bb - bt, th, col);
+            let nw = size * 0.34;
+            draw_line(cx - nw / 2.0, bt, cx - nw / 2.0, bt - size * 0.5, th, col);
+            draw_line(cx + nw / 2.0, bt, cx + nw / 2.0, bt - size * 0.5, th, col);
+            draw_rectangle_lines(cx - nw * 0.6, bt - size * 0.75, nw * 1.2, size * 0.26, th, col);
+            draw_line(l + th, cy + size * 0.35, r - th, cy + size * 0.35, th * 0.8, col);
+        }
+        SpecialItem::StormGlass => {
+            // A sealed glass vial with a liquid level and a few settling crystals.
+            let gw = size * 0.62;
+            let gh = size * 1.7;
+            let (l, t) = (cx - gw / 2.0, cy - gh / 2.0);
+            draw_rectangle_lines(l, t, gw, gh, th, col);
+            draw_rectangle_lines(cx - gw * 0.36, t - size * 0.26, gw * 0.72, size * 0.26, th, col); // stopper
+            let lvl = cy + gh * 0.1;
+            draw_line(l + th, lvl, l + gw - th, lvl, th * 0.8, col);
+            // Crystal fronds rising from the floor.
+            for k in 0..3 {
+                let bx = l + gw * (0.28 + 0.22 * k as f32);
+                let by = t + gh - th;
+                draw_line(bx, by, bx - gw * 0.08, by - gh * 0.22, th * 0.8, col);
+                draw_line(bx, by, bx + gw * 0.08, by - gh * 0.18, th * 0.8, col);
+            }
+        }
+        SpecialItem::TradersAlmanac => {
+            // An open book: two pages flaring from a central spine, ruled with lines.
+            let half = size * 1.05;
+            let (st, sb) = (cy - size * 0.55, cy + size * 0.5);
+            let (pt, pb) = (cy - size * 0.35, cy + size * 0.7); // outer page corners
+            // Left and right page outlines.
+            for s in [-1.0f32, 1.0] {
+                let ox = cx + s * half;
+                draw_line(cx, st, ox, pt, th, col);
+                draw_line(ox, pt, ox, pb, th, col);
+                draw_line(ox, pb, cx, sb, th, col);
+                // Ruled text lines.
+                for k in 0..3 {
+                    let ly = cy - size * 0.1 + k as f32 * size * 0.26;
+                    draw_line(cx + s * size * 0.2, ly, cx + s * half * 0.82, ly + s * size * 0.04, th * 0.7, col);
+                }
+            }
+            draw_line(cx, st, cx, sb, th, col); // spine
+        }
+        SpecialItem::LuckyFigurehead => {
+            // A horseshoe, open at the foot, with end caps and three nail holes — luck
+            // drawn the way every sailor knows it.
+            let rad = size * 0.85;
+            let a0 = 120.0f32.to_radians();
+            let a1 = 420.0f32.to_radians(); // up over the top, leaving a gap at the bottom
+            arc(cx, cy, rad, a0, a1, th * 2.0);
+            for &a in &[a0, a1] {
+                draw_circle(cx + rad * a.cos(), cy + rad * a.sin(), th * 1.1, col);
+            }
+            for k in 0..3 {
+                let a = a0 + (a1 - a0) * (0.2 + 0.3 * k as f32);
+                draw_circle_lines(cx + rad * a.cos(), cy + rad * a.sin(), th * 0.6, th * 0.5, col);
+            }
+        }
     }
 }
 
