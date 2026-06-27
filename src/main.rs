@@ -1203,6 +1203,16 @@ async fn run_game(
                         let _ = gs.caulk_with_plank();
                     }
                 }
+                // The Legendary Trinkets list also takes a direct pointer tap: click or
+                // tap a row to select that trinket (the keyboard Up/Down above does the
+                // same), so the facing page shows it.
+                if captains_log::is_trinkets(&gs, log_spread) {
+                    for i in 0..SpecialItem::COUNT {
+                        if touch.tapped_in(captains_log::trinket_row_rect(i, w, h)) {
+                            log_sel = i;
+                        }
+                    }
+                }
             }
             // The pause button raises the menu while sailing; it's hidden while the
             // log or guide is open (those close with Esc / the cluster's back instead).
