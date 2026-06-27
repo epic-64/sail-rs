@@ -657,7 +657,8 @@ async fn run_game(
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
     // A Dolphin's Draught speed burst running down (seconds left): while it lasts the
-    // ship's top speed is lifted by `DOLPHIN_BURST_KNOTS` (see `crate::tavern`).
+    // ship makes a flat `DOLPHIN_BURST_KNOTS` extra over the ground, on top of the
+    // sail's drive and regardless of wind or load (see `crate::tavern`).
     let mut speed_burst: f32 = 0.0;
     const DOLPHIN_BURST_SECS: f32 = 5.0;
     const DOLPHIN_BURST_KNOTS: f32 = 10.0;
@@ -914,12 +915,15 @@ async fn run_game(
 
             // Top speed scales with the rig's upgrades and the weight in the hold:
             // a stronger rig runs faster, an overladen hull crawls. The weight is the
-            // whole hold — ordinary cargo *and* reserved mission goods riding along.
-            // A Dolphin's Draught burst lifts the speed ceiling while it runs down.
+            // whole hold (ordinary cargo *and* reserved mission goods riding along).
             speed_burst = (speed_burst - dt).max(0.0);
+            let top_speed = upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used());
+            // A Dolphin's Draught adds a flat burst of way over the ground while it runs
+            // down: `DOLPHIN_BURST_KNOTS` on top of whatever the sails are making, so it
+            // pays on any point of sail (even in irons or a dead calm) rather than just
+            // lifting the wind-limited ceiling. In m/s, applied as forward displacement
+            // in the step loop below.
             let burst = if speed_burst > 0.0 { DOLPHIN_BURST_KNOTS * sailing::KNOT } else { 0.0 };
-            let top_speed =
-                upgrades::top_speed(gs.hull_level, gs.sail_level, gs.hold_used()) + burst;
             let hull_debuff = hull::debuff(hull::fraction(&gs));
             // Sail the ship in step with the (dev) warped clock: each sub-step is a
             // real-dt tick, so the hull covers `time_steps` ticks' worth of water per
@@ -929,6 +933,12 @@ async fn run_game(
             for _ in 0..time_steps {
                 let prev_pos = kin.pos;
                 kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
+                // A Dolphin's Draught burst is a flat push over the ground, on top of
+                // the sail's drive: nudge the hull forward along its heading before
+                // grounding clamps it, so the surge still won't drive her through a shore.
+                if burst > 0.0 {
+                    kin.pos = kin.pos + Vec2::from_heading(kin.heading_rad) * (burst * dt);
+                }
                 // Keep the hull out of every nearby island.
                 let near = world.islands_near(kin.pos, 400.0);
                 kin = sailing::resolve_grounding(kin, &near);
@@ -1590,7 +1600,10 @@ async fn run_game(
         // Pared back to the essentials: the purse, the speed, the wind's quarter
         // and the point of sail — plus a warning badge for any handling debuff.
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
-        let knots = kin.speed() / sailing::KNOT;
+        // The Dolphin's Draught burst rides on top of the hull's way (see the step
+        // loop), so add it to the readout while it runs.
+        let burst_kn = if speed_burst > 0.0 { DOLPHIN_BURST_KNOTS } else { 0.0 };
+        let knots = kin.speed() / sailing::KNOT + burst_kn;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
         let hull_pct = (hull::fraction(&gs) * 100.0).round() as i32;
