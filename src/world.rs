@@ -113,9 +113,15 @@ const EXTENT: f64 = 10400.0;
 const GRID_COLS: usize = 5;
 const GRID_ROWS: usize = 5;
 const ISLES_PER_CLUSTER: i32 = (GRID_COLS * GRID_ROWS) as i32;
-const CLUSTER_SPACING: f64 = 21000.0;
-const CLUSTER_COLS: usize = 3;
+const CLUSTER_COLS: usize = 4;
 const CLUSTER_ROWS: usize = 3;
+/// The world is laid out 16:9 (wider than tall) to match the captain's-log map, so the
+/// cluster grid steps wider horizontally than vertically: the two spacings are sized so
+/// the grid's whole bounding box ((cols-1) by (rows-1) steps) keeps that ratio.
+const WORLD_ASPECT: f64 = 16.0 / 9.0;
+const CLUSTER_SPACING_X: f64 = 21000.0;
+const CLUSTER_SPACING_Y: f64 =
+    CLUSTER_SPACING_X * (CLUSTER_COLS - 1) as f64 / ((CLUSTER_ROWS - 1) as f64 * WORLD_ASPECT);
 /// Exactly how many archipelagos the world holds: the centre cell plus the
 /// highest-rolling others on the cluster grid (so the world stays small and the
 /// count is fixed rather than a fill probability).
@@ -165,25 +171,47 @@ pub fn generate(seed: i64) -> World {
         }
     }
     let centre_cell = (CLUSTER_ROWS / 2, CLUSTER_COLS / 2);
-    let origin_x = -((CLUSTER_COLS - 1) as f64) * CLUSTER_SPACING / 2.0;
-    let origin_y = -((CLUSTER_ROWS - 1) as f64) * CLUSTER_SPACING / 2.0;
+    let origin_x = -((CLUSTER_COLS - 1) as f64) * CLUSTER_SPACING_X / 2.0;
+    let origin_y = -((CLUSTER_ROWS - 1) as f64) * CLUSTER_SPACING_Y / 2.0;
 
     // Roll one key per cell (keeping the per-cell draw so the RNG sequence stays put),
-    // then keep exactly NUM_CLUSTERS archipelagos: always the centre cell, plus the
-    // highest-rolling others. Kept cells stay in grid (r-major) order so island ids run
-    // in reading order.
+    // then keep exactly NUM_CLUSTERS archipelagos. Three placements are guaranteed so the
+    // world is never lopsided: the centre cell, plus the highest-rolling cell in the
+    // far-left and far-right columns (so an archipelago always sits at each end and the
+    // world spans the grid's full width). The remaining slots go to the highest-rolling
+    // cells left. Kept cells stay in grid (r-major) order so island ids run in reading order.
     let rolls: Vec<f64> = full_grid.iter().map(|_| rng0.next_f64()).collect();
     let want = NUM_CLUSTERS.min(full_grid.len());
-    let mut others: Vec<usize> = (0..full_grid.len())
-        .filter(|&i| full_grid[i] != centre_cell)
-        .collect();
-    others.sort_by(|&a, &b| rolls[b].partial_cmp(&rolls[a]).unwrap());
+    let last_col = CLUSTER_COLS - 1;
+    let best = |pred: &dyn Fn((usize, usize)) -> bool, keep_set: &[bool]| -> Option<usize> {
+        (0..full_grid.len())
+            .filter(|&i| !keep_set[i] && pred(full_grid[i]))
+            .max_by(|&a, &b| rolls[a].partial_cmp(&rolls[b]).unwrap())
+    };
+
     let mut keep_set = vec![false; full_grid.len()];
-    if let Some(ci) = full_grid.iter().position(|c| *c == centre_cell) {
-        keep_set[ci] = true;
+    let mut kept = 0usize;
+    for sel in [
+        best(&|c| c == centre_cell, &keep_set),
+        best(&|c| c.1 == 0, &keep_set),
+        best(&|c| c.1 == last_col, &keep_set),
+    ] {
+        if let Some(i) = sel {
+            if !keep_set[i] {
+                keep_set[i] = true;
+                kept += 1;
+            }
+        }
     }
-    for &i in others.iter().take(want.saturating_sub(1)) {
+    // Fill the remaining slots with the highest-rolling cells left.
+    let mut rest: Vec<usize> = (0..full_grid.len()).filter(|&i| !keep_set[i]).collect();
+    rest.sort_by(|&a, &b| rolls[b].partial_cmp(&rolls[a]).unwrap());
+    for &i in &rest {
+        if kept >= want {
+            break;
+        }
         keep_set[i] = true;
+        kept += 1;
     }
     let grid: Vec<(usize, usize)> = full_grid
         .iter()
@@ -203,8 +231,8 @@ pub fn generate(seed: i64) -> World {
             let jx = rng0.between(-0.35, 0.35);
             let jy = rng0.between(-0.35, 0.35);
             let p = Vec2::new(
-                (origin_x + (*c as f64 + jx) * CLUSTER_SPACING) as f32,
-                (origin_y + (*r as f64 + jy) * CLUSTER_SPACING) as f32,
+                (origin_x + (*c as f64 + jx) * CLUSTER_SPACING_X) as f32,
+                (origin_y + (*r as f64 + jy) * CLUSTER_SPACING_Y) as f32,
             );
             cands.push(p);
         }
