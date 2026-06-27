@@ -292,6 +292,44 @@ fn read_turn(log_open: bool) -> f32 {
     turn
 }
 
+/// Faint keybind reminders in the bottom-left while sailing. Only shown in
+/// keyboard mode (the touch HUD carries its own glyphs), so a captain at the
+/// helm always sees how to reach the log, strike sail, steer and dock. The
+/// dock hint only appears when there's a harbour within reach.
+fn draw_keybind_hints(dockable: bool, h: f32) {
+    // (key, action) top to bottom; the log sits first as the headline hint.
+    let mut hints: Vec<(&str, &str)> = vec![
+        ("L", "Captain's Log"),
+        ("Esc", "Pause"),
+        ("\u{2191}\u{2193}", "Sail"),
+        ("\u{2190}\u{2192}", "Steer"),
+        ("C", "Look astern"),
+    ];
+    if dockable {
+        hints.push(("Space", "Dock"));
+    }
+
+    let fs = ui::fs_small();
+    let step = ui::line_h(fs);
+    let margin = px(14.0);
+    let key_w = px(38.0); // gutter the action text clears, so keys/actions align
+    let key_col = Color::new(0.98, 0.95, 0.86, 0.92);
+    let act_col = Color::new(0.96, 0.92, 0.80, 0.62);
+    let shadow = Color::new(0.0, 0.0, 0.0, 0.5);
+
+    // Stack upward from the bottom edge so the list grows from a fixed baseline.
+    let mut y = h - margin;
+    for (key, action) in hints.iter().rev() {
+        let x = margin;
+        // A faint drop shadow keeps the text legible over bright water or foam.
+        draw_text(key, x + 1.0, y + 1.0, fs as f32, shadow);
+        draw_text(key, x, y, fs as f32, key_col);
+        draw_text(action, x + key_w + 1.0, y + 1.0, fs as f32, shadow);
+        draw_text(action, x + key_w, y, fs as f32, act_col);
+        y -= step;
+    }
+}
+
 /// How a single voyage ended: the captain quit outright, or entered a new world
 /// seed in the options (begin a fresh voyage on that seed).
 enum GameExit {
@@ -1596,6 +1634,10 @@ async fn run_game(
                     look_back,
                 );
             }
+        } else if !pause.open && !log_open && !harbor.is_open() {
+            // Keyboard mode at the helm: faint reminders of the sailing keys,
+            // bottom-left. (Touch mode has its own on-screen glyphs above.)
+            draw_keybind_hints(harbor.dockable.is_some(), h);
         }
 
         // A new day breaks at sunrise (the clock crossing ¼ going forward). The clock
