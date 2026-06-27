@@ -1,12 +1,12 @@
 //! A small top-down chart, ported from `client.MinimapRenderer`.
 //!
-//! The local cluster — the waters the ship is currently in — is drawn zoomed right
-//! out so every island is just a dot (ports a little brighter, shipyards ringed and
-//! lettered "S"),
-//! with the ship a heading arrow at its world position. North is up. Faint wind
-//! streaks (with chevrons) flow across the chart along the wind. When the ship
-//! strays out toward open sea its arrow clamps to the frame edge rather than flying
-//! off the chart.
+//! The ship's local waters are drawn zoomed so every island is just a dot (ports a
+//! little brighter, shipyards ringed and lettered "S"), with the ship a heading
+//! arrow at its world position. North is up. Faint wind streaks (with chevrons) flow
+//! across the chart along the wind. As the ship sails away from the nearest
+//! archipelago the frame widens, zooming out so the cluster recedes and the open sea
+//! (with any neighbouring isles) comes into view; if it strays far its arrow clamps
+//! to the frame edge rather than flying off the chart.
 //!
 //! Drawn straight to the screen (after `set_default_camera`), so the same renderer
 //! serves both the always-on corner HUD map (`MinimapPalette::hud`) and the
@@ -169,23 +169,66 @@ pub fn render(
     let cx = rect.x + size / 2.0;
     let cy = rect.y + size / 2.0;
 
-    // Frame the ship's current local waters so its isles nearly fill the chart.
-    let cluster = world.cluster_at(kin.pos);
-    let (bbox_c, half_span) = world.cluster_bounds(cluster);
-    let frame = half_span * 1.06;
+    // Frame the ship's local waters so the isles nearly fill the chart, then zoom out
+    // as it leaves them: the farther the ship strays from the nearest archipelago the
+    // wider the frame grows (up to a cap), so the cluster recedes and the open sea
+    // (with any neighbouring isles) comes into view.
+    //
+    // To cross the water between two archipelagos without the view snapping the moment
+    // the nearest one changes at the midline, we cross-fade: take the two nearest
+    // clusters and slide the centre (and frame size) toward the midpoint as the second
+    // draws level. At the midline the framing is the same whichever one counts as
+    // "nearest", so the swap is seamless.
+    const SHIP_FILL: f32 = 0.82; // keep the ship within this fraction of the half-frame
+    const MAX_ZOOM_OUT: f32 = 3.0; // widest frame, as a multiple of the cluster's own
+    const PULL_MAX: f32 = 0.65; // how far the centre slides from archipelago toward ship
+
+    let a = world.cluster_at(kin.pos); // nearest archipelago
+    let da = a.center.distance_to(kin.pos);
+    // Second nearest (falls back to the nearest when the world holds a single cluster).
+    let mut b = a;
+    let mut db = f32::INFINITY;
+    for c in &world.clusters {
+        let d = c.center.distance_to(kin.pos);
+        if c.id != a.id && d < db {
+            db = d;
+            b = c;
+        }
+    }
+    let (ca, ha) = world.cluster_bounds(a);
+    let (cb, hb) = world.cluster_bounds(b);
+
+    // Blend weight: 0 deep in the nearest cluster's waters, ramping to 1 at the midline
+    // where the second is just as close. `w` slides the centre at most halfway to the
+    // other cluster, so both orderings meet at the midpoint and the swap is continuous.
+    let ratio = if db.is_finite() { da / db } else { 0.0 };
+    let t = ((ratio - 0.6) / 0.4).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t); // smoothstep
+    let w = t * 0.5;
+    let anchor_x = ca.x * (1.0 - w) + cb.x * w;
+    let anchor_y = ca.y * (1.0 - w) + cb.y * w;
+    let half = ha * (1.0 - w) + hb * w; // blended so the frame size is seamless too
+
+    // As the ship leaves the archipelago's footprint, slide the centre off the isles
+    // and toward the ship, so the chart follows the captain instead of pinning the
+    // isles dead-centre with the ship adrift at the edge. 0 inside the footprint,
+    // easing to PULL_MAX once the ship is well clear of it.
+    let stray = (kin.pos.x - anchor_x).hypot(kin.pos.y - anchor_y);
+    let out = ((stray / half.max(1.0)) - 1.0).clamp(0.0, 1.5) / 1.5;
+    let out = out * out * (3.0 - 2.0 * out); // smoothstep
+    let pull = out * PULL_MAX;
+    let view_x = anchor_x * (1.0 - pull) + kin.pos.x * pull;
+    let view_y = anchor_y * (1.0 - pull) + kin.pos.y * pull;
+
+    // Wide enough to keep both the ship and the (now off-centre) archipelago on the
+    // chart, floored at the cluster's own span and capped so it never zooms out too far.
+    let ship_off = (kin.pos.x - view_x).hypot(kin.pos.y - view_y);
+    let cluster_reach = (ca.x - view_x).hypot(ca.y - view_y) + half * 1.06;
+    let frame = (ship_off / SHIP_FILL)
+        .max(cluster_reach)
+        .min(half * 1.06 * MAX_ZOOM_OUT);
     let scale = (size / 2.0 - pad) / frame;
-    // Centre on the cluster, but slide the view to keep the ship on the chart when
-    // it strays toward (or past) the cluster's edge — never more than a frame-half
-    // from the ship.
-    let view_x = bbox_c
-        .x
-        .min(kin.pos.x + frame)
-        .max(kin.pos.x - frame);
-    let view_y = bbox_c
-        .y
-        .min(kin.pos.y + frame)
-        .max(kin.pos.y - frame);
-    // World x → right, world y (north) → up, so flip the screen y axis.
+    // World x (east) right, world y (north) up, so flip the screen y axis.
     let sx = |p: Vec2| cx + (p.x - view_x) * scale;
     let sy = |p: Vec2| cy - (p.y - view_y) * scale;
 
@@ -232,19 +275,25 @@ pub fn render(
         }
     }
 
-    // The isles of the local cluster: a dot each (ports brighter), shipyards ringed.
-    // A mission destination gets a yellow ring with an "M"; a race mark gets a red
-    // ring with an "R" — both drawn on top of all. A small helper rings the isle and
-    // letters it just above the ring, clear of it.
+    // Every isle in view: a dot each (ports brighter), shipyards ringed. A mission
+    // destination gets a yellow ring with an "M"; a race mark gets a red ring with an
+    // "R" (both drawn on top of all). A small helper rings the isle and letters it
+    // just above the ring, clear of it.
     let mark = |x: f32, y: f32, letter: &str, col: Color, rr: f32| {
         draw_circle_lines(x, y, rr, 2.0, col);
         let fs = (13.0 * s).max(11.0);
         let dims = measure_text(letter, None, fs as u16, 1.0);
         draw_text(letter, x - dims.width / 2.0, y - rr - 3.0 * s, fs, col);
     };
-    for isle in world.cluster_islands(cluster) {
+    for isle in &world.islands {
         let x = sx(isle.pos);
         let y = sy(isle.pos);
+        // Cull isles whose mark falls outside the chart: macroquad has no canvas clip,
+        // so we trim them ourselves rather than let them spill across the screen when
+        // the frame slides as the ship sails far out.
+        if !rect.contains(vec2(x, y)) {
+            continue;
+        }
         let r = if isle.is_port { 3.2 } else { 2.4 } * s;
         draw_circle(x, y, r, if isle.is_port { pal.port } else { pal.land });
         if isle.is_shipyard {
