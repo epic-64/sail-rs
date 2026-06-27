@@ -346,8 +346,8 @@ fn lit_col(base: [f32; 3], m: (f32, f32, f32), alpha: f32) -> Color {
 // these fractions, so the isles take the hour's colour without going as lurid as
 // the water and sky they stand against. Raise them for a more saturated land,
 // lower for a more muted one; 0 returns the old grey-only day/night dimming.
-const KEY_TINT: f32 = 0.7;
-const AMBIENT_TINT: f32 = 0.55;
+const KEY_TINT: f32 = 0.9;
+const AMBIENT_TINT: f32 = 0.8;
 
 /// Normalise an RGB triple to pure chroma (mean channel = 1), then ease it back
 /// toward neutral grey: `sat` scales how strongly the resulting hue reads (0 = grey,
