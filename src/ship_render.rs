@@ -56,6 +56,8 @@ const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
 const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
 const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
+// Tarred standing rigging (shrouds + ratlines).
+const ROPE: [f32; 3] = [74.0, 60.0, 44.0];
 const WHEEL_C: [f32; 3] = [134.0, 98.0, 58.0];
 const WHEEL_DK: [f32; 3] = [96.0, 68.0, 40.0];
 // Deck cargo: lashed crates. Top catches the sky, the side faces fall to shade.
@@ -409,6 +411,10 @@ impl ShipRenderer {
         let cx = w * 0.5;
         let foot_y = h * 0.82; // mast steps into the deck here (lowered with the deck)
         let mast_len = h * 0.82; // tall enough to tower off the top of the screen
+        // The bare pole runs 3 m above the yard/sail rigging (the engine's metre
+        // scale is ocean::HEAVE_GAIN_PX = 27 px/m). The shrouds make for this very
+        // top; the yard and sail stay pinned to `mast_len` below.
+        let mast_top = mast_len + 3.0 * 27.0;
         let yard_y = mast_len * 0.90; // yard crosses near the masthead
         let sail_w = w * 0.38;
         let sail_h = mast_len * 0.42;
@@ -514,15 +520,66 @@ impl ShipRenderer {
             let tw = w * 0.011; // taper to the masthead
             let b0 = project(-bw, 0.0, 0.0);
             let b1 = project(bw, 0.0, 0.0);
-            let t1 = project(tw, mast_len, 0.0);
-            let t0 = project(-tw, mast_len, 0.0);
+            let t1 = project(tw, mast_top, 0.0);
+            let t0 = project(-tw, mast_top, 0.0);
             let mid0 = project(0.0, 0.0, 0.0);
-            let mid1 = project(0.0, mast_len, 0.0);
+            let mid1 = project(0.0, mast_top, 0.0);
             // Left half lit, right half shaded.
             draw_triangle(b0, mid0, mid1, rgba(SPAR, lit, 1.0));
             draw_triangle(b0, mid1, t0, rgba(SPAR, lit, 1.0));
             draw_triangle(mid0, b1, t1, rgba(SPAR_DK, lit, 1.0));
             draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
+        }
+
+        // --- Shrouds: tarred ropes fanning from the hounds (just below the
+        // masthead) down to the railing on each side, braced with ratline rungs
+        // so they read as the ladder the crew climbs. Drawn last, over the sail
+        // and mast: standing rigging stands nearest the viewer. The tops run off
+        // the top of the screen, so mostly only the lower fan is in view.
+        {
+            // Recompute the deck's side geometry (matches draw_deck) so the feet
+            // sit on the railing as the hull nods.
+            let nod = pitch_ang * h * 0.72;
+            let far_y = h * 0.76 - nod;
+            let near_y = h * 1.22 + nod * 0.3;
+            let far_hw = w * 0.12;
+            let near_hw = w * 0.72;
+            let rail_h = h * 0.10;
+            // A point atop the railing cap at fore-aft fraction v (0=bow, 1=helm).
+            let rail_top = |side: f32, v: f32| -> Vec2 {
+                let hw = far_hw + (near_hw - far_hw) * v;
+                let cap_far = far_y - rail_h * 0.5;
+                let cap_near = near_y - rail_h;
+                let cap = cap_far + (cap_near - cap_far) * v;
+                // Sit a touch above the cap, on the stanchion tops.
+                sway(cx + side * hw, cap - rail_h * (0.35 + 0.7 * v) * 0.9)
+            };
+            let thick = (h * 0.0028).max(1.0);
+            // Fore-aft positions the shrouds land on the rail, set well abaft the
+            // mast (which steps in around v ≈ 0.13) so the fan stands nearer the
+            // viewer.
+            let feet_v = [0.16f32, 0.31, 0.46];
+            for side in [-1.0f32, 1.0] {
+                // The masthead: all shrouds on a side gather at the very top.
+                let hounds = project(side * w * 0.011, mast_top, 0.0);
+                let feet: Vec<Vec2> = feet_v.iter().map(|&v| rail_top(side, v)).collect();
+                for &foot in &feet {
+                    draw_line(hounds.x, hounds.y, foot.x, foot.y, thick, rgba(ROPE, lit, 1.0));
+                }
+                // Ratline rungs: short ropes lacing adjacent shrouds at a few
+                // heights, spaced wider toward the deck (perspective). Each rung
+                // meets its neighbouring shroud at the *same* screen height, so it
+                // lies level (facing the horizon) rather than raking up the mast.
+                for &f in &[0.5f32, 0.7, 0.88] {
+                    for pair in feet.windows(2) {
+                        let a = hounds.lerp(pair[0], f);
+                        let span = pair[1].y - hounds.y;
+                        let tb = if span.abs() > 0.01 { (a.y - hounds.y) / span } else { f };
+                        let b = hounds.lerp(pair[1], tb.clamp(0.0, 1.0));
+                        draw_line(a.x, a.y, b.x, b.y, thick * 0.7, rgba(ROPE, lit * 0.92, 1.0));
+                    }
+                }
+            }
         }
     }
 }
