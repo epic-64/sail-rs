@@ -434,6 +434,10 @@ async fn run_game(
     // fast-forward key (F) is held. 120 turns a real second into two simulated minutes,
     // so a storm that is ~40 min off arrives in ~20 s of watching (see the F handler).
     const TIME_WARP: u32 = 120;
+    // How far past the nearest archipelago's isles counts as the open "high sea", where
+    // the weather leans stormier (see `weather`). A notch beyond the isles, inside the
+    // "1 to 2 km out" the design calls for.
+    const HIGH_SEA_MARGIN: f32 = 1500.0;
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
@@ -793,6 +797,10 @@ async fn run_game(
         // The wind backs/veers to a fresh random quarter every WIND_PERIOD seconds, the
         // weather drifts between scenarios, and the day/night clock turns: all whether
         // sailing or docked, so the chart's breeze, the sky and the sea keep moving.
+        // The high sea: well clear of the nearest archipelago, where the weather leans
+        // stormier (see `weather`). The boundary sits a notch past the isles, within
+        // the "1 to 2 km out" the design calls for.
+        let high_sea = world.dist_outside_archipelago(kin.pos) > HIGH_SEA_MARGIN;
         if !paused {
             for _ in 0..time_steps {
                 clock += dt;
@@ -813,7 +821,7 @@ async fn run_game(
                 // Drift the weather and ease the sea-state and sky gloom it drives, so
                 // the waves build/lay down and the sky greys/clears smoothly across a
                 // scenario change rather than snapping.
-                weather.update(dt);
+                weather.update(dt, high_sea);
                 // Turn the day/night clock (wraps at 1) in step with the rest of time.
                 tod = (tod + dt / DAY_LENGTH).rem_euclid(1.0);
             }
@@ -1950,6 +1958,9 @@ async fn run_game(
         // lifetime tally; `prev_tod` trails the clock for the next frame's test.
         if !paused && prev_tod < 0.25 && tod >= 0.25 {
             gs.stats.days_passed += 1;
+            // Bank a storm-free day toward the weather's slow lean back to foul (a
+            // storm clears the tally itself, inside `weather.update`).
+            weather.note_new_day();
         }
         prev_tod = tod;
 
