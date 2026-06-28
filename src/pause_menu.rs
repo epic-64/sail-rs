@@ -44,7 +44,8 @@ struct Nav {
 
 impl Nav {
     fn read(touch: &TouchState) -> Nav {
-        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height());
+        // The pause menu always has a highlighted, actionable row, so the ✓ stands.
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
         Nav {
             up: is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up),
             down: is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down),

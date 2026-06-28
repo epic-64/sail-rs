@@ -668,7 +668,9 @@ impl PortScreen {
         sounds: &SoundBank,
         touch: &TouchState,
     ) -> bool {
-        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height());
+        // The board always has a focused, actionable cell (a tab to drill into, or a
+        // row to trade / commit), so the ✓ stands.
+        let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
 
         // Back out: Esc, or the cluster's ✕. With the cursor down in a tab's rows
         // it first lifts back up to the tab bar; pressed again on the bar it casts
