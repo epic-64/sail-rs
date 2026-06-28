@@ -33,6 +33,12 @@ use crate::world::Island;
 /// the same factor as the sea around it.
 pub const WAVE_GAIN: f32 = 4.6;
 
+/// The cold blue-white a lightning strike throws on the water, matched to the lit
+/// cloud (`clouds::GLOW`), and how hard the flash lifts a facet toward it at full
+/// glare. The flash is shaped per facet so only the sky-facing/grazing quads pop.
+const LIGHTNING_COL: [f32; 3] = [200.0, 216.0, 244.0];
+const LIGHTNING_GAIN: f32 = 0.6;
+
 pub struct OceanRenderer {
     // Grid resolution. Columns span the field of view; rows march out to sea.
     cols: usize,
@@ -59,6 +65,9 @@ pub struct OceanRenderer {
     // sun-warmth) read off this, so the light source's reflection vanishes from the
     // sea along with the disc rather than glittering under a sky with no sun in it.
     light_source_vis: f32,
+    // This frame's lightning glare in [0,1], set from `clouds::StormSky::flash`: the
+    // sky's flash mirrored on the water for the instant a bolt fires.
+    lightning: f32,
     shininess: f32,
     base_saturation: f32,
     // How the facet's own brightness is modelled — the "wave shading" that makes
@@ -176,6 +185,7 @@ impl OceanRenderer {
             depth_far: 850.0,
             light_strength: 1.0,
             light_source_vis: 1.0,
+            lightning: 0.0,
             shininess: 90.0,
             base_saturation: 1.7,
             height_shade: 0.62,
@@ -246,6 +256,9 @@ impl OceanRenderer {
         // How fully night has fallen (0 by day, 1 once the sun is well down). The
         // storm overcast the water mirrors darkens with it, matching the painted sky.
         night: f32,
+        // This frame's lightning glare in [0,1] (see `clouds::StormSky::flash`): a
+        // brief cold flash run across the swell so a strike lights the water it falls on.
+        lightning: f32,
         w: f32,
         h: f32,
         // Visible islands paired with their features, sorted *descending* by near-
@@ -286,15 +299,19 @@ impl OceanRenderer {
         // The sun/moon disc is swallowed by a storm's overcast, so its mirror glitter
         // on the water has to go with it: fade the light-source reflection by the fury.
         self.light_source_vis = light_strength * (1.0 - clamp(storm, 0.0, 1.0));
+        self.lightning = clamp(lightning, 0.0, 1.0);
         let k = clamp(dt * 0.9, 0.0, 1.0);
         let target = *target_sea;
+        // Ease toward the storm sea, night-darkened so a midnight gale is dark and
+        // unsaturated rather than the daytime slate (a lightning strike relights it).
+        let storm_sea = palette::storm_palette(night);
         let storm_blend = clamp(storm, 0.0, 1.0) * 0.9;
         for (((live, shown), &tgt), &storm) in self
             .live
             .iter_mut()
             .zip(self.shown.iter_mut())
             .zip(target.iter())
-            .zip(palette::STORM_PALETTE.iter())
+            .zip(storm_sea.iter())
         {
             *live += (tgt - *live) * k;
             *shown = *live + (storm - *live) * storm_blend;
@@ -747,6 +764,17 @@ impl OceanRenderer {
                 r += (glint_r - r) * sp;
                 g += (glint_g - g) * sp;
                 b += (glint_b - b) * sp;
+            }
+            if self.lightning > 0.0 {
+                // A lightning strike's glare caught on the swell: a brief cold flash,
+                // strongest on the flatter, sky-facing facets and grazing reflections,
+                // so it reads as the sky's flash mirrored on some quads rather than a
+                // flat wash, plus an extra spark off the specular crests it catches.
+                let refl = clamp(0.30 + 0.40 * nz + 0.45 * fres + spec, 0.0, 1.0);
+                let fl = (self.lightning * refl * LIGHTNING_GAIN).min(0.9);
+                r += (LIGHTNING_COL[0] - r) * fl;
+                g += (LIGHTNING_COL[1] - g) * fl;
+                b += (LIGHTNING_COL[2] - b) * fl;
             }
             // Harbour town lights: a warm pool on the swell faces turned toward the
             // port, plus a Blinn-Phong glitter road toward the eye. Independent of the

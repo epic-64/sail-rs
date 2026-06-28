@@ -80,6 +80,9 @@ pub struct StormSky {
     phase: f32, // accumulated drift
     next: f32,  // seconds to the next strike
     arc: Option<Arc>,
+    // This frame's overall lightning glare in [0,1]: the brightest live strike (and
+    // any connecting bolt), so the sea renderer can flash the water as the sky lights.
+    flash: f32,
 }
 
 impl StormSky {
@@ -90,6 +93,7 @@ impl StormSky {
             rng: 0x6d2b79f5,
             phase: 0.0,
             next: GAP_CALM,
+            flash: 0.0,
         };
         for _ in 0..NUM_CLOUDS {
             let cloud = s.gen_cloud();
@@ -176,6 +180,8 @@ impl StormSky {
     pub fn render(&mut self, view: &SkyView, dt: f32, fury: f32, day_lit: f32, h: f32) {
         let fury = clamp(fury, 0.0, 1.0);
         let amount = smoothstep(AMT_LO, AMT_HI, fury);
+        // Reset this frame's glare; the strike loop below raises it. No clouds, no flash.
+        self.flash = 0.0;
         if amount <= 0.0 {
             return;
         }
@@ -219,6 +225,9 @@ impl StormSky {
             1.0,
         );
 
+        // The brightest live strike this frame, fed to the sea renderer so the water
+        // flashes with the sky. Raised in the lit-cloud branch below.
+        let mut flash = 0.0f32;
         for c in &self.clouds {
             let az = wrap_angle(c.az + self.phase * c.parallax);
             let Some((cx, cy)) = project(az, c.alt, view) else {
@@ -256,6 +265,10 @@ impl StormSky {
                 let env = (4.0 * q * (1.0 - q)).max(0.0);
                 let flick = 0.7 + 0.3 * (q * 19.0).sin().abs();
                 let intensity = env * flick;
+                // This mass's contribution to the scene glare (faded with its on-screen
+                // visibility), so a near, bright strike flashes the sea more than a
+                // faint one sliding off the edge of view.
+                flash = flash.max(intensity * vis);
                 let reach = (c.litspan * h * 0.5).max(1.0);
                 let inv2 = 1.0 / (2.0 * reach * reach);
                 for p in c.puffs.iter().filter(|p| p.tier == 2) {
@@ -291,8 +304,18 @@ impl StormSky {
         if let Some(arc) = &self.arc {
             if arc.age >= 0.0 {
                 self.draw_arc(arc, view, amount, h);
+                // The bolt's snap adds to the glare (matching `draw_arc`'s own fade).
+                let q = clamp(arc.age / ARC_LIFE, 0.0, 1.0);
+                flash = flash.max((1.0 - q) * amount);
             }
         }
+        self.flash = flash;
+    }
+
+    /// This frame's overall lightning glare in [0,1] (0 when no strike is live), for
+    /// the sea renderer to flash the water as the sky lights. Valid after [`render`].
+    pub fn flash(&self) -> f32 {
+        self.flash
     }
 
     /// Draw the connecting bolt between two clouds as a jagged, fading line.

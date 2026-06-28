@@ -59,6 +59,20 @@ pub const STORM_PALETTE: Palette = pal(
     (150.0, 166.0, 178.0),
 );
 
+/// How far the storm sea falls toward black at full night ([`storm_palette`]). The
+/// storm sea above is a *daytime* slate; under a night gale there is no light on the
+/// water, so it must go much darker, or a stormy midnight reads as bright as noon.
+pub const STORM_PALETTE_NIGHT_DARKEN: f32 = 0.66;
+
+/// The storm sea palette for the time of night (`night` in [0,1] from [`night_factor`]):
+/// the daytime [`STORM_PALETTE`] in full light, dropping toward black as night falls so
+/// a night gale's water is dark and unsaturated. The renderer eases toward this; a
+/// lightning strike is what briefly lights the swell back up (see `ocean_renderer`).
+pub fn storm_palette(night: f32) -> Palette {
+    let k = 1.0 - STORM_PALETTE_NIGHT_DARKEN * night.clamp(0.0, 1.0);
+    STORM_PALETTE.map(|c| c * k)
+}
+
 /// The target sea palette for a time of day — eased toward in the renderer.
 pub fn palette_for(d: Daytime) -> Palette {
     match d {
