@@ -35,9 +35,12 @@ pub const WAVE_GAIN: f32 = 4.6;
 
 /// The cold blue-white a lightning strike throws on the water, matched to the lit
 /// cloud (`clouds::GLOW`), and how hard the flash lifts a facet toward it at full
-/// glare. The flash is shaped per facet so only the sky-facing/grazing quads pop.
+/// glare. The flash is shaped per facet so only the sky-facing/grazing quads pop, and
+/// confined to a pool of `LIGHTNING_DIR_WIDTH` radians about the strike's bearing so it
+/// lights the water *toward* the bolt rather than the whole sea.
 const LIGHTNING_COL: [f32; 3] = [200.0, 216.0, 244.0];
-const LIGHTNING_GAIN: f32 = 0.6;
+const LIGHTNING_GAIN: f32 = 0.7;
+const LIGHTNING_DIR_WIDTH: f32 = 0.34;
 
 pub struct OceanRenderer {
     // Grid resolution. Columns span the field of view; rows march out to sea.
@@ -66,8 +69,10 @@ pub struct OceanRenderer {
     // sea along with the disc rather than glittering under a sky with no sun in it.
     light_source_vis: f32,
     // This frame's lightning glare in [0,1], set from `clouds::StormSky::flash`: the
-    // sky's flash mirrored on the water for the instant a bolt fires.
+    // sky's flash mirrored on the water for the instant a bolt fires, and that strike's
+    // bearing relative to the view, so the flash falls on the water on its side only.
     lightning: f32,
+    lightning_rel: f32,
     shininess: f32,
     base_saturation: f32,
     // How the facet's own brightness is modelled — the "wave shading" that makes
@@ -186,6 +191,7 @@ impl OceanRenderer {
             light_strength: 1.0,
             light_source_vis: 1.0,
             lightning: 0.0,
+            lightning_rel: 0.0,
             shininess: 90.0,
             base_saturation: 1.7,
             height_shade: 0.62,
@@ -256,9 +262,11 @@ impl OceanRenderer {
         // How fully night has fallen (0 by day, 1 once the sun is well down). The
         // storm overcast the water mirrors darkens with it, matching the painted sky.
         night: f32,
-        // This frame's lightning glare in [0,1] (see `clouds::StormSky::flash`): a
-        // brief cold flash run across the swell so a strike lights the water it falls on.
+        // This frame's lightning glare in [0,1] (see `clouds::StormSky::flash`) and the
+        // world bearing it strikes from: a brief cold flash run across the swell on the
+        // strike's side, so a bolt lights the water in its direction, not everywhere.
         lightning: f32,
+        lightning_az: f32,
         w: f32,
         h: f32,
         // Visible islands paired with their features, sorted *descending* by near-
@@ -300,6 +308,9 @@ impl OceanRenderer {
         // on the water has to go with it: fade the light-source reflection by the fury.
         self.light_source_vis = light_strength * (1.0 - clamp(storm, 0.0, 1.0));
         self.lightning = clamp(lightning, 0.0, 1.0);
+        // The strike's bearing across the view, so the flash below lights only the water
+        // turned toward it (a pool on the strike's side, not a wash over the whole sea).
+        self.lightning_rel = wrap_angle(lightning_az - kin.heading_rad);
         let k = clamp(dt * 0.9, 0.0, 1.0);
         let target = *target_sea;
         // Ease toward the storm sea, night-darkened so a midnight gale is dark and
@@ -770,8 +781,17 @@ impl OceanRenderer {
                 // strongest on the flatter, sky-facing facets and grazing reflections,
                 // so it reads as the sky's flash mirrored on some quads rather than a
                 // flat wash, plus an extra spark off the specular crests it catches.
-                let refl = clamp(0.30 + 0.40 * nz + 0.45 * fres + spec, 0.0, 1.0);
-                let fl = (self.lightning * refl * LIGHTNING_GAIN).min(0.9);
+                // Weighted toward grazing facets and specular crests (where an elevated
+                // bolt actually mirrors), with only a slight flat-water floor, so the lit
+                // patch is a reflection streak rather than a broad pool.
+                let refl = clamp(0.12 + 0.20 * nz + 0.55 * fres + spec, 0.0, 1.0);
+                // Confine it to a narrow pool about the strike's bearing: this facet's
+                // own bearing (its column's tan, undone) against the bolt's, on a soft
+                // bell, so only the water turned toward the strike lights.
+                let phi = ((self.cur_x[c] + self.cur_x[c + 1]) * 0.5).atan();
+                let dsep = wrap_angle(phi - self.lightning_rel);
+                let dir = (-(dsep / LIGHTNING_DIR_WIDTH).powi(2)).exp();
+                let fl = (self.lightning * dir * refl * LIGHTNING_GAIN).min(0.9);
                 r += (LIGHTNING_COL[0] - r) * fl;
                 g += (LIGHTNING_COL[1] - g) * fl;
                 b += (LIGHTNING_COL[2] - b) * fl;
