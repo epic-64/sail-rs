@@ -1217,7 +1217,9 @@ async fn run_game(
             // Page the open guide with the left/right arrows, or the on-screen nav
             // cluster on touch; clamped at the covers, no wrap-around.
             if guide_open {
-                let n = touch_ui::nav_cluster(w, h);
+                // The guide is read-only: pages turn with the d-pad, ✕ closes it, and
+                // there is nothing to confirm, so the cluster shows no ✓.
+                let n = touch_ui::nav_cluster(w, h, false);
                 if touch.tapped_in(n.back) {
                     guide_open = false;
                 }
@@ -1232,7 +1234,10 @@ async fn run_game(
             // original's nav arrows), or the on-screen nav cluster on touch. Clamped
             // at the covers — no wrap-around.
             if log_open {
-                let n = touch_ui::nav_cluster(w, h);
+                // Only the Vessel spread (index 1) carries a confirm action (the Caulk
+                // hull button); every other page is read-only, so the ✓ shows there
+                // alone and the rest of the book offers just the ✕.
+                let n = touch_ui::nav_cluster(w, h, log_spread == 1);
                 // The nav cluster's back button closes the book on touch.
                 if touch.tapped_in(n.back) {
                     log_open = false;
@@ -1904,8 +1909,17 @@ async fn run_game(
             if pause.open || log_open || guide_open || harbor.is_open() {
                 // The board can be tapped directly (tabs / rows / chips), but it also
                 // gets the full d-pad + ✓/✕ cluster, like the pause menu and log, for
-                // captains who'd rather step the cursor than tap precisely.
-                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h));
+                // captains who'd rather step the cursor than tap precisely. The ✓ only
+                // shows where it does something (mirrors the per-menu input handlers):
+                // never on the read-only guide, and only on the log's Vessel spread.
+                let show_confirm = if guide_open {
+                    false
+                } else if log_open {
+                    log_spread == 1
+                } else {
+                    true // pause menu or port board: always a live action
+                };
+                touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, show_confirm));
             } else {
                 let item_btns: [Option<(&str, bool)>; 3] = std::array::from_fn(|slot| {
                     SpecialItem::from_active_slot(slot)
