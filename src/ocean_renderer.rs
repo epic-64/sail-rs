@@ -50,9 +50,15 @@ pub struct OceanRenderer {
     // washing the whole sea into the pale far colour.
     depth_far: f32,
     // How brightly the active light (sun by day, moon by night) burns this frame.
-    // Scales the sun-warmth, specular glint and subsurface glow so the sea dims into
-    // night and lifts again at dawn. Set each frame from the sky clock.
+    // Scales the sun-warmth and subsurface glow so the sea dims into night and lifts
+    // again at dawn. Set each frame from the sky clock.
     light_strength: f32,
+    // The active light's *visibility on the water* this frame: `light_strength` faded
+    // out by the gale's fury, since a storm's overcast hides the sun/moon disc (see
+    // `celestial::draw`). The mirror-bright specular glitter (and the directional
+    // sun-warmth) read off this, so the light source's reflection vanishes from the
+    // sea along with the disc rather than glittering under a sky with no sun in it.
+    light_source_vis: f32,
     shininess: f32,
     base_saturation: f32,
     // How the facet's own brightness is modelled — the "wave shading" that makes
@@ -169,6 +175,7 @@ impl OceanRenderer {
             f_far,
             depth_far: 850.0,
             light_strength: 1.0,
+            light_source_vis: 1.0,
             shininess: 90.0,
             base_saturation: 1.7,
             height_shade: 0.62,
@@ -236,6 +243,9 @@ impl OceanRenderer {
         light_alt: f32,
         light_strength: f32,
         storm: f32,
+        // How fully night has fallen (0 by day, 1 once the sun is well down). The
+        // storm overcast the water mirrors darkens with it, matching the painted sky.
+        night: f32,
         w: f32,
         h: f32,
         // Visible islands paired with their features, sorted *descending* by near-
@@ -273,6 +283,9 @@ impl OceanRenderer {
         };
         self.prev_t = Some(t);
         self.light_strength = light_strength;
+        // The sun/moon disc is swallowed by a storm's overcast, so its mirror glitter
+        // on the water has to go with it: fade the light-source reflection by the fury.
+        self.light_source_vis = light_strength * (1.0 - clamp(storm, 0.0, 1.0));
         let k = clamp(dt * 0.9, 0.0, 1.0);
         let target = *target_sea;
         let storm_blend = clamp(storm, 0.0, 1.0) * 0.9;
@@ -295,9 +308,10 @@ impl OceanRenderer {
         self.p_glint = self.live_col(18);
 
         // The live sky gradient the water reflects: the clock's fair-weather sky,
-        // blended toward the storm overcast — matching `main::draw_sky` so the
-        // mirrored sky and the painted sky are the same colours.
+        // blended toward the storm overcast (night-darkened to match `main::draw_sky`,
+        // so the mirrored sky and the painted sky are the same colours).
         let storm_c = clamp(storm, 0.0, 1.0);
+        let storm_sky = palette::storm_sky(night);
         let fair = sky_grad;
         let blend = |a: (f32, f32, f32), b: (f32, f32, f32)| {
             [
@@ -306,8 +320,8 @@ impl OceanRenderer {
                 a.2 + (b.2 - a.2) * storm_c,
             ]
         };
-        self.sky_zenith = blend(fair[0], palette::STORM_SKY[0]);
-        self.sky_horizon = blend(fair[2], palette::STORM_SKY[2]);
+        self.sky_zenith = blend(fair[0], storm_sky[0]);
+        self.sky_horizon = blend(fair[2], storm_sky[2]);
 
         let horizon = h * 0.54;
         let px_per_rad = h * 0.85;
@@ -708,7 +722,11 @@ impl OceanRenderer {
                 g += (crest_g - g) * tc;
                 b += (crest_b - b) * tc;
             }
-            let t_lit = 0.30 * diff * self.light_strength;
+            // Direct sun-warmth: the light source tinting the faces turned toward it.
+            // Gated on the disc's visibility, so the overcast that hides the sun also
+            // lifts its warm wash off the water (the sky reflection below carries the
+            // grey instead).
+            let t_lit = 0.30 * diff * self.light_source_vis;
             r += (sun_r - r) * t_lit;
             g += (sun_g - g) * t_lit;
             b += (sun_b - b) * t_lit;
@@ -723,7 +741,9 @@ impl OceanRenderer {
                 b += (glow_b - b) * ss;
             }
             if spec > 0.0 {
-                let sp = spec * self.light_strength;
+                // The mirror-bright glitter of the sun/moon on the water: faded with
+                // the disc's visibility so the storm overcast leaves no glitter road.
+                let sp = spec * self.light_source_vis;
                 r += (glint_r - r) * sp;
                 g += (glint_g - g) * sp;
                 b += (glint_b - b) * sp;
