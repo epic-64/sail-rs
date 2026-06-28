@@ -1519,6 +1519,7 @@ async fn run_game(
             storm,
             base_night,
             storm_sky.flash(),
+            storm_sky.flash_az(),
             w,
             h,
             &visible,

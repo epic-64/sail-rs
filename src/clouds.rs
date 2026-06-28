@@ -25,11 +25,20 @@ const AMT_HI: f32 = 0.62;
 // Slow drift of the whole field across the sky (rad/sec), quicker in a hard blow.
 const DRIFT: f32 = 0.012;
 
-// Cloud tone: a cold, dark slate. Overlapping puffs build the core toward black.
+// Cloud tone, lerped by `gale` (how storm-like the fury is): a lighter grey in a
+// squall (less ominous, no lightning) deepening to a cold dark slate in a full storm.
+// Overlapping puffs build the core further toward black.
+const CLOUD_SOFT: [f32; 3] = [80.0, 90.0, 106.0];
 const CLOUD: [f32; 3] = [34.0, 39.0, 49.0];
+// The fury band over which a squall's soft overcast hardens into a storm's dark slate
+// (and, above `FURY_FLOOR`, starts throwing lightning). A squall sits near the low end.
+const GALE_LO: f32 = 0.5;
+const GALE_HI: f32 = 0.9;
 
 // --- Internal lightning -------------------------------------------------------
-const FURY_FLOOR: f32 = 0.4; // only a real gale throws lightning
+// Only a real storm throws lightning, never a squall: the floor sits above the squall
+// fury so the bolts hold off until the weather has built well past it.
+const FURY_FLOOR: f32 = 0.62;
 const GAP_CALM: f32 = 18.0; // seconds between strikes at the floor
 const GAP_PEAK: f32 = 4.0; // at full fury
 const GAP_JITTER: f32 = 0.5; // ± fraction of the gap
@@ -38,10 +47,11 @@ const STRIKE_MAX: f32 = 0.55;
 const GLOW_MAX: f32 = 1.0; // peak lightening of a puff at the charge
 const GLOW: [f32; 3] = [196.0, 214.0, 242.0]; // cold blue-white of the lit cloud
 
-const JUMP_CHANCE: f32 = 0.35; // odds a strike forks to a neighbouring cloud
+const BOLT_CHANCE: f32 = 0.5; // odds any strike draws a visible zig-zag bolt
+const JUMP_CHANCE: f32 = 0.6; // odds a strike forks to a neighbouring cloud
 const JUMP_MAX_AZ: f32 = 0.7; // furthest bearing gap a fork will leap (rad)
-const ARC_SEGS: usize = 7; // segments in the jagged bolt between clouds
-const ARC_LIFE: f32 = 0.16; // how long the connecting bolt lingers (s)
+const ARC_SEGS: usize = 7; // segments in the jagged bolt
+const ARC_LIFE: f32 = 0.16; // how long a bolt lingers (s)
 
 /// One translucent puff of a cloud. Geometry is stored as fractions of screen height
 /// so it scales with the viewport; `a` is its base opacity.
@@ -65,12 +75,16 @@ struct Cloud {
     sweep: f32, // +1 / -1: which way the charge runs across the mass
 }
 
-/// A bolt forking from one cloud to another. Endpoints are re-projected each frame
-/// (the clouds drift), and `offs` jitters the path into a jagged line.
+/// A jagged lightning bolt, either leaping from one cloud to another (`a` != `b`) or
+/// streaking across a single mass along the charge's path (`a` == `b`). Each end is a
+/// cloud centre plus a fractional offset (so it re-projects as the clouds drift), and
+/// `offs` jitters the path into a zig-zag line.
 struct Arc {
     a: usize,
     b: usize,
-    age: f32, // <0 while the fork is still building in the first cloud
+    a_off: (f32, f32),
+    b_off: (f32, f32),
+    age: f32, // <0 while a forked bolt is still building in the first cloud
     offs: [f32; ARC_SEGS],
 }
 
@@ -83,6 +97,9 @@ pub struct StormSky {
     // This frame's overall lightning glare in [0,1]: the brightest live strike (and
     // any connecting bolt), so the sea renderer can flash the water as the sky lights.
     flash: f32,
+    // World bearing of that brightest strike, so the sea flash falls on the water in
+    // its direction rather than washing the whole sea (see `clouds::StormSky::flash_az`).
+    flash_az: f32,
 }
 
 impl StormSky {
@@ -94,6 +111,7 @@ impl StormSky {
             phase: 0.0,
             next: GAP_CALM,
             flash: 0.0,
+            flash_az: 0.0,
         };
         for _ in 0..NUM_CLOUDS {
             let cloud = s.gen_cloud();
@@ -216,18 +234,28 @@ impl StormSky {
             }
         }
 
+        // How storm-like the fury is: a squall keeps the soft, lighter overcast; a full
+        // storm deepens it to dark slate. Drives the cloud tone (and, past `FURY_FLOOR`,
+        // the lightning above).
+        let gale = smoothstep(GALE_LO, GALE_HI, fury);
+        let tone = [
+            CLOUD_SOFT[0] + (CLOUD[0] - CLOUD_SOFT[0]) * gale,
+            CLOUD_SOFT[1] + (CLOUD[1] - CLOUD_SOFT[1]) * gale,
+            CLOUD_SOFT[2] + (CLOUD[2] - CLOUD_SOFT[2]) * gale,
+        ];
         // Ambient light the clouds catch: dark at night, slate by day.
         let ambient = 0.35 + 0.65 * clamp(day_lit, 0.0, 1.0);
         let base = Color::new(
-            CLOUD[0] / 255.0 * ambient,
-            CLOUD[1] / 255.0 * ambient,
-            CLOUD[2] / 255.0 * ambient,
+            tone[0] / 255.0 * ambient,
+            tone[1] / 255.0 * ambient,
+            tone[2] / 255.0 * ambient,
             1.0,
         );
 
-        // The brightest live strike this frame, fed to the sea renderer so the water
-        // flashes with the sky. Raised in the lit-cloud branch below.
+        // The brightest live strike this frame and its bearing, fed to the sea renderer
+        // so the water flashes with the sky, on the strike's side. Raised below.
         let mut flash = 0.0f32;
+        let mut flash_az = 0.0f32;
         for c in &self.clouds {
             let az = wrap_angle(c.az + self.phase * c.parallax);
             let Some((cx, cy)) = project(az, c.alt, view) else {
@@ -267,8 +295,12 @@ impl StormSky {
                 let intensity = env * flick;
                 // This mass's contribution to the scene glare (faded with its on-screen
                 // visibility), so a near, bright strike flashes the sea more than a
-                // faint one sliding off the edge of view.
-                flash = flash.max(intensity * vis);
+                // faint one sliding off the edge of view. The brightest sets the bearing.
+                let contrib = intensity * vis;
+                if contrib > flash {
+                    flash = contrib;
+                    flash_az = az;
+                }
                 let reach = (c.litspan * h * 0.5).max(1.0);
                 let inv2 = 1.0 / (2.0 * reach * reach);
                 for p in c.puffs.iter().filter(|p| p.tier == 2) {
@@ -304,12 +336,19 @@ impl StormSky {
         if let Some(arc) = &self.arc {
             if arc.age >= 0.0 {
                 self.draw_arc(arc, view, amount, h);
-                // The bolt's snap adds to the glare (matching `draw_arc`'s own fade).
+                // The bolt's snap adds to the glare (matching `draw_arc`'s own fade),
+                // its bearing taken from the cloud it leaps from.
                 let q = clamp(arc.age / ARC_LIFE, 0.0, 1.0);
-                flash = flash.max((1.0 - q) * amount);
+                let contrib = (1.0 - q) * amount;
+                if contrib > flash {
+                    flash = contrib;
+                    let ca = &self.clouds[arc.a];
+                    flash_az = wrap_angle(ca.az + self.phase * ca.parallax);
+                }
             }
         }
         self.flash = flash;
+        self.flash_az = flash_az;
     }
 
     /// This frame's overall lightning glare in [0,1] (0 when no strike is live), for
@@ -318,13 +357,23 @@ impl StormSky {
         self.flash
     }
 
-    /// Draw the connecting bolt between two clouds as a jagged, fading line.
+    /// The world bearing of this frame's brightest strike, so the sea flash falls on
+    /// the water in its direction rather than everywhere. Valid after [`render`].
+    pub fn flash_az(&self) -> f32 {
+        self.flash_az
+    }
+
+    /// Draw a bolt as a jagged, fading line between its two (offset) endpoints.
     fn draw_arc(&self, arc: &Arc, view: &SkyView, amount: f32, h: f32) {
         let pa = self.cloud_screen(arc.a, view);
         let pb = self.cloud_screen(arc.b, view);
-        let (Some(a), Some(b)) = (pa, pb) else {
+        let (Some(ca), Some(cb)) = (pa, pb) else {
             return;
         };
+        // Each end rides its cloud's centre, offset within the mass (zero for the two
+        // cloud centres of a leaping fork).
+        let a = vec2(ca.x + arc.a_off.0 * h, ca.y + arc.a_off.1 * h);
+        let b = vec2(cb.x + arc.b_off.0 * h, cb.y + arc.b_off.1 * h);
         let q = clamp(arc.age / ARC_LIFE, 0.0, 1.0);
         let bright = (1.0 - q) * amount; // a quick snap then fade
         if bright <= 0.01 {
@@ -410,10 +459,21 @@ impl StormSky {
             c.sweep = a_sweep;
         }
 
+        // Half of all strikes draw a visible zig-zag bolt (whether or not the charge
+        // jumps); the rest light the cloud from within as a silent sheet flash. Roll it
+        // and the jitter up front so both bolt kinds below share them.
+        let show_bolt = self.rand() < BOLT_CHANCE;
+        let mut offs = [0.0_f32; ARC_SEGS];
+        if show_bolt {
+            for o in &mut offs {
+                *o = self.range(-1.0, 1.0);
+            }
+        }
+
         if let Some(b_idx) = fork {
             let life_b = self.range(STRIKE_MIN, STRIKE_MAX);
             // The fork waits until the first charge is most of the way across, then
-            // the bolt leaps and the second cloud lights.
+            // the second cloud lights (and the bolt, if shown, leaps the gap).
             let delay = life_a * 0.55;
             {
                 let c = &mut self.clouds[b_idx];
@@ -422,14 +482,26 @@ impl StormSky {
                 c.strike_life = life_b;
                 c.sweep = a_sweep;
             }
-            let mut offs = [0.0_f32; ARC_SEGS];
-            for o in &mut offs {
-                *o = self.range(-1.0, 1.0);
+            if show_bolt {
+                self.arc = Some(Arc {
+                    a: a_idx,
+                    b: b_idx,
+                    a_off: (0.0, 0.0),
+                    b_off: (0.0, 0.0),
+                    age: -delay,
+                    offs,
+                });
             }
+        } else if show_bolt {
+            // No jump: the bolt streaks across the striking cloud along the charge's own
+            // path (the lit span, in the sweep direction), zig-zagging as it travels.
+            let span = self.clouds[a_idx].litspan.max(0.08);
             self.arc = Some(Arc {
                 a: a_idx,
-                b: b_idx,
-                age: -delay,
+                b: a_idx,
+                a_off: (-span * a_sweep, 0.0),
+                b_off: (span * a_sweep, 0.0),
+                age: 0.0,
                 offs,
             });
         }
