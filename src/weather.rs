@@ -236,6 +236,36 @@ impl WeatherState {
         fury(self.gloom)
     }
 
+    /// A read-only snapshot of the sim's inner state for the logbook's weather debug
+    /// page (see [`crate::captains_log`]): the live scenario, the eased-vs-target sea
+    /// and gloom it drives, the drift timer, and the modifiers leaning the next drift.
+    /// `high_sea` is the caller's open-water flag for this tick, the same one passed to
+    /// [`update`](Self::update).
+    pub fn debug(&self, high_sea: bool) -> WeatherDebug {
+        // Mirror the lean maths of `effective_calm_bias` so the page can show each
+        // multiplier on its own rather than only the folded-in result.
+        let day_frac = (self.storm_free_days / STORM_PRESSURE_DAYS_CAP).min(1.0) as f64;
+        let pressure_mult = 1.0 + (STORM_PRESSURE_ODDS_MULT - 1.0) * day_frac;
+        let high_mult = if high_sea { HIGH_SEA_ODDS_MULT } else { 1.0 };
+        WeatherDebug {
+            weather: self.weather,
+            sea: self.sea,
+            sea_target: self.weather.sea_state(),
+            gloom: self.gloom,
+            gloom_target: self.weather.gloom(),
+            fury: self.fury(),
+            since_change: self.since_change,
+            period: self.period,
+            storm_free_days: self.storm_free_days,
+            storm_free_cap: STORM_PRESSURE_DAYS_CAP,
+            high_sea,
+            base_calm_bias: CALM_BIAS,
+            effective_calm_bias: self.effective_calm_bias(high_sea),
+            pressure_mult,
+            high_mult,
+        }
+    }
+
     /// Force the scenario a step calmer (dev aid); resets the drift timer.
     pub fn nudge_calmer(&mut self) {
         self.weather = self.weather.calmer();
@@ -255,6 +285,38 @@ impl WeatherState {
         self.weather = Weather::Calm;
         self.since_change = 0.0;
     }
+}
+
+/// A read-only snapshot of [`WeatherState`] for the logbook's weather debug page:
+/// the live, eased state and the modifiers leaning the next drift. Built by
+/// [`WeatherState::debug`].
+pub struct WeatherDebug {
+    pub weather: Weather,
+    /// Eased sea-state handed to the ocean, and the scenario target it's chasing.
+    pub sea: f32,
+    pub sea_target: f32,
+    /// Eased sky gloom, and the scenario target it's chasing.
+    pub gloom: f32,
+    pub gloom_target: f32,
+    /// Storm/fury blend off the eased gloom.
+    pub fury: f32,
+    /// Seconds the current scenario has held, and the jittered interval before the
+    /// next drift is rolled.
+    pub since_change: f32,
+    pub period: f32,
+    /// Storm-free days banked toward the storm-pressure lean, and the cap they
+    /// saturate at.
+    pub storm_free_days: f32,
+    pub storm_free_cap: f32,
+    /// Whether the caller flagged the ship out on the high sea this tick.
+    pub high_sea: bool,
+    /// The plain [`CALM_BIAS`] and the effective bias after both leans fold in.
+    pub base_calm_bias: f64,
+    pub effective_calm_bias: f64,
+    /// The two odds multipliers folded into the effective bias: the storm-pressure
+    /// lean (from the storm-free days) and the high-sea lean.
+    pub pressure_mult: f64,
+    pub high_mult: f64,
 }
 
 #[cfg(test)]

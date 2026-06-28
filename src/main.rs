@@ -1155,7 +1155,7 @@ async fn run_game(
             // captain has bought the chart from a tavern (see `crate::tavern`). Pressed
             // again on that page it shuts the book; without the chart, M does nothing.
             if is_key_pressed(KeyCode::M) {
-                if let Some(idx) = captains_log::world_spread_index(&gs) {
+                if let Some(idx) = captains_log::world_spread_index(&gs, dev_mode) {
                     if log_open && log_spread == idx {
                         log_open = false;
                     } else {
@@ -1238,7 +1238,7 @@ async fn run_game(
                     log_open = false;
                 }
                 if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
-                    log_spread = (log_spread + 1).min(captains_log::num_spreads(&gs).saturating_sub(1));
+                    log_spread = (log_spread + 1).min(captains_log::num_spreads(&gs, dev_mode).saturating_sub(1));
                     log_sel = 0;
                 }
                 if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
@@ -1249,7 +1249,7 @@ async fn run_game(
                 // right turn the page), and Enter presses the focused one — the same
                 // arrows-then-Enter flow as the port board. The Vessel spread's button
                 // caulks the hull with a plank; a no-op without timber or on a sound hull.
-                let buttons = captains_log::button_count(&gs, log_spread);
+                let buttons = captains_log::button_count(&gs, dev_mode, log_spread);
                 if buttons > 0 {
                     if is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up) {
                         log_sel = log_sel.saturating_sub(1);
@@ -1267,7 +1267,7 @@ async fn run_game(
                 // The Legendary Trinkets list also takes a direct pointer tap: click or
                 // tap a row to select that trinket (the keyboard Up/Down above does the
                 // same), so the facing page shows it.
-                if captains_log::is_trinkets(&gs, log_spread) {
+                if captains_log::is_trinkets(&gs, dev_mode, log_spread) {
                     for i in 0..SpecialItem::COUNT {
                         if touch.tapped_in(captains_log::trinket_row_rect(i, w, h)) {
                             log_sel = i;
@@ -1863,6 +1863,7 @@ async fn run_game(
                 SAIL_NAMES[sail_mode],
                 day,
                 weather.weather.label(),
+                &weather.debug(high_sea),
                 &chart_marks,
                 &race_marks,
                 log_spread,
