@@ -125,12 +125,28 @@ pub fn fair_sky(d: Daytime) -> [(f32, f32, f32); 3] {
     }
 }
 
-/// The storm sky gradient (top, mid, horizon), from `SailingView`.
+/// The storm sky gradient (top, mid, horizon) by day, from `SailingView`. At night
+/// the overcast has no sun behind it, so [`storm_sky`] drops this toward black: use
+/// that, not the raw const, anywhere the painted or reflected sky is built.
 pub const STORM_SKY: [(f32, f32, f32); 3] = [
     (14.0, 19.0, 26.0),
     (45.0, 58.0, 66.0),
     (69.0, 86.0, 92.0),
 ];
+
+/// How far the storm overcast falls toward black at full night ([`storm_sky`]). A
+/// gale's daytime grey would otherwise hang through the small hours and you could not
+/// tell the sun had set, so the overcast goes nearly black once it is fully dark.
+pub const STORM_SKY_NIGHT_DARKEN: f32 = 0.78;
+
+/// The storm sky gradient for the time of night (`night` in [0,1] from
+/// [`night_factor`]): the daytime overcast [`STORM_SKY`] in full light, dropping
+/// toward black as night falls. The painted sky (`main::draw_sky`) and the sky the
+/// water mirrors (`ocean_renderer`) both read off this so they stay in step.
+pub fn storm_sky(night: f32) -> [(f32, f32, f32); 3] {
+    let k = 1.0 - STORM_SKY_NIGHT_DARKEN * night.clamp(0.0, 1.0);
+    STORM_SKY.map(|(r, g, b)| (r * k, g * k, b * k))
+}
 
 // --- Continuous time-of-day -------------------------------------------------
 // The four palettes above are keyframes spaced evenly around a 24-hour ring:

@@ -115,6 +115,7 @@ const PAGES: &[GuidePage] = &[
              draught for a burst of speed, a glass to calm a gale.",
             "Sail back any time for a ware you passed up; each tavern always keeps the \
              same stock.",
+            "Press Escape to close this window and start playing.",
         ],
     },
 ];

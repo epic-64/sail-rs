@@ -135,13 +135,17 @@ fn draw_sky(
         w,
         horizon,
     } = *view;
+    // How fully night has fallen: the overcast darkens with it (an unlit night sky has
+    // no sun behind the cloud), so a storm at night reads dark rather than daytime-grey.
+    let base_night = palette::night_factor(sun_alt); // 0 by day, 1 once set
+    let storm_sky = palette::storm_sky(base_night);
     // The two gradients blended between horizontally: the clock's "lit" sky and the
     // cool night sky stood in for the un-sunlit side. Both eased toward the overcast.
     let storm_blend = |g: [(f32, f32, f32); 3]| {
         [
-            lerp3(g[0], palette::STORM_SKY[0], storm),
-            lerp3(g[1], palette::STORM_SKY[1], storm),
-            lerp3(g[2], palette::STORM_SKY[2], storm),
+            lerp3(g[0], storm_sky[0], storm),
+            lerp3(g[1], storm_sky[1], storm),
+            lerp3(g[2], storm_sky[2], storm),
         ]
     };
     let lit = storm_blend(sky);
@@ -156,9 +160,8 @@ fn draw_sky(
         }
     };
 
-    // The whole sky darkens to the night gradient as the sun sinks past the horizon,
-    // so no warm tint lingers overhead once it's down (a uniform vertical fall).
-    let base_night = palette::night_factor(sun_alt); // 0 by day, 1 once set
+    // `base_night` (computed above) eases the whole sky to the night gradient as the
+    // sun sinks past the horizon, so no warm tint lingers overhead once it's down.
     // The strength of the *directional* split: a bell centred on the sun sitting on
     // the horizon, so it rises as the sun approaches the sea line (from above on the
     // way down, from below on the way up) and fades both at high noon and at the dead
@@ -1514,6 +1517,7 @@ async fn run_game(
             sky.light_alt,
             sky.light_strength,
             storm,
+            base_night,
             w,
             h,
             &visible,
