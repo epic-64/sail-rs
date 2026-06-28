@@ -1,9 +1,10 @@
 //! Sound — the voyage's audio bed and its event cues.
 //!
 //! Three ambient loops play continuously and are cross-faded by volume each
-//! frame: the **sailing** bed rides up with the boat's speed (silent at anchor),
-//! the **calm** sea bed is the base ambience (ducked as a gale rises), and the
-//! **storm** bed swells with the gale's fury. Over the top sit one-shot cues:
+//! frame: the **sailing** bed is the ship's timbers creaking and is always
+//! sounding, the **calm** bed is the wash of water past the hull and rides up
+//! with the boat's speed (silent at anchor), and the **storm** bed swells with
+//! the gale's fury (heard only in a gale). Over the top sit one-shot cues:
 //! a canvas *flap* when sail is raised or lowered, a transition *whoosh* when the
 //! wind shifts quarter, a single coin / coin pour on a market Buy-Sell /
 //! Fill-Dump (the pour reused for repairs, upgrades and contract payouts), a
@@ -76,28 +77,28 @@ const CHARGED_LASER_MP3: &[u8] = snd!("charged_laser.mp3");
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues. These started from the per-clip
 // volumes the original `SailingView`/`PortView` assigned to each `<audio>` element
-// (sailing/calm/storm beds at 0.5/0.5/0.6, the flap/wind-shift/coin one-shots at
-// the browser default 1.0, salvage at 0.6, race stings at 0.25 since their clips
-// are mastered hot), since tuned: the sailing bed lifted 50% (0.5 -> 0.75) so it
-// reads over the sea, and the trade coin dropped 50% (1.0 -> 0.5) as it was too hot.
-const SAIL_MAX_VOL: f32 = 0.75;
-const CALM_MAX_VOL: f32 = 0.5;
-const STORM_MAX_VOL: f32 = 0.6;
+// (the flap/coin one-shots at the browser default 1.0, race stings at 0.25 since
+// their clips are mastered hot), since tuned: the trade coin dropped 50% as it was
+// too hot, the ambient beds were lifted so they read over the one-shots, and the
+// wind-shift whoosh and salvage chime were eased so the cues sit under the bed.
+const SAIL_MAX_VOL: f32 = 0.9;
+const CALM_MAX_VOL: f32 = 0.75;
+const STORM_MAX_VOL: f32 = 0.75;
 const FLAP_VOL: f32 = 1.0;
-const WIND_SHIFT_VOL: f32 = 1.0;
+const WIND_SHIFT_VOL: f32 = 0.7;
 // Market Buy/Sell (one coin) and Fill/Dump (coin pour), both at half voice.
 const ONE_COIN_VOL: f32 = 0.5;
 const COINS_VOL: f32 = 0.5;
 // Accept/abandon contract, book a race.
 const ACCEPT_VOL: f32 = 0.5;
-const SALVAGE_VOL: f32 = 0.6;
+const SALVAGE_VOL: f32 = 0.45;
 const RACE_WON_VOL: f32 = 0.25;
 const RACE_LOST_VOL: f32 = 0.25;
 // The invalid-action buzzer — present enough to register without nagging.
 const INVALID_VOL: f32 = 0.4;
 // The Dolphin's Draught charge whine.
 const CHARGED_LASER_VOL: f32 = 0.6;
-// The boat speed (knots) at which the sailing bed reaches full voice.
+// The boat speed (knots) at which the water-wash (calm) bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
 // changes fade rather than jump.
@@ -189,17 +190,19 @@ impl SoundBank {
     /// Ease the three beds toward the targets the current sea state implies and
     /// push the new volumes to the mixer. Call once per frame.
     ///
-    /// - `docked` silences the sailing bed (the ship lies at anchor).
-    /// - `knots` opens the sailing bed up toward full at [`SAIL_FULL_KN`].
-    /// - `storm` (gale fury, 0..1) swells the storm bed and ducks the calm one.
+    /// - the sailing (creak) bed holds a steady voice the whole time.
+    /// - `knots` opens the calm (water-wash) bed up toward full at [`SAIL_FULL_KN`];
+    ///   `docked` silences it (the ship lies still at anchor).
+    /// - `storm` (gale fury, 0..1) swells the storm bed.
     pub fn update(&mut self, dt: f32, docked: bool, knots: f32, storm: f32) {
-        let sail_target = if docked {
+        // The timbers creak whether under way or at anchor, so this bed is constant.
+        let sail_target = SAIL_MAX_VOL;
+        let calm_target = if docked {
             0.0
         } else {
-            SAIL_MAX_VOL * (knots / SAIL_FULL_KN).clamp(0.0, 1.0)
+            CALM_MAX_VOL * (knots / SAIL_FULL_KN).clamp(0.0, 1.0)
         };
         let storm_target = STORM_MAX_VOL * storm.clamp(0.0, 1.0);
-        let calm_target = CALM_MAX_VOL * (1.0 - storm).clamp(0.0, 1.0);
 
         let ease = (VOL_EASE * dt).clamp(0.0, 1.0);
         self.sailing_vol += (sail_target - self.sailing_vol) * ease;
@@ -269,10 +272,10 @@ impl SoundBank {
         );
     }
 
-    /// A bright *chime* — salvage hauled aboard from the swell. Its own clip
-    /// (`collect-item`), distinct from the trade coin, played at the original
-    /// level and restarted so a rapid run of pickups retriggers cleanly rather
-    /// than piling up.
+    /// A bright *chime*: salvage hauled aboard from the swell. Its own clip
+    /// (`collect-item`), distinct from the trade coin, eased back so it sits under
+    /// the ambient bed, and restarted so a rapid run of pickups retriggers cleanly
+    /// rather than piling up.
     pub fn salvage(&self) {
         stop_sound(&self.salvage);
         play_sound(
