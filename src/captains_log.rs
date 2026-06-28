@@ -35,6 +35,7 @@ use crate::ui::{
     alarm_ink, dim_ink, format_dist, fs_body, fs_chip, fs_heading, fs_small, fs_title, ink, line_h,
     parchment, parchment_edge, px,
 };
+use crate::weather::{Weather, WeatherDebug};
 use crate::world::World;
 
 /// One two-page spread of the log. The first four always stand; the Almanac and the
@@ -54,11 +55,16 @@ enum Spread {
     /// The full-spread keepsake world map (the World Map ware): no spine, no second
     /// page, the whole leaf handed to the chart.
     World,
+    /// A diagnostic spread on the weather sim: the live eased state on the left, the
+    /// modifiers leaning the next drift on the right. Present only while the dev
+    /// controls are unlocked (the "banana" cheat, see `main`).
+    Weather,
 }
 
 /// The spreads in the book, in reading order: the four standing spreads, then the
-/// Almanac and the World map, each only when the captain owns the ware unlocking it.
-fn active_spreads(gs: &GameState) -> Vec<Spread> {
+/// Almanac and the World map, each only when the captain owns the ware unlocking it,
+/// and finally the weather debug spread while the dev controls are unlocked.
+fn active_spreads(gs: &GameState, dev_mode: bool) -> Vec<Spread> {
     let mut v = vec![
         Spread::CourseChart,
         Spread::VesselHold,
@@ -74,26 +80,30 @@ fn active_spreads(gs: &GameState) -> Vec<Spread> {
     if gs.owns(SpecialItem::WorldMap) {
         v.push(Spread::World);
     }
+    // The weather diagnostics ride at the back of the book, a dev-only leaf.
+    if dev_mode {
+        v.push(Spread::Weather);
+    }
     v
 }
 
 /// How many spreads the book holds for this captain; `main` clamps the page cursor
 /// to it.
-pub fn num_spreads(gs: &GameState) -> usize {
-    active_spreads(gs).len()
+pub fn num_spreads(gs: &GameState, dev_mode: bool) -> usize {
+    active_spreads(gs, dev_mode).len()
 }
 
 /// The page index of the world-map spread, if the captain owns the World Map, so
 /// `main` can flip straight to it on **M**.
-pub fn world_spread_index(gs: &GameState) -> Option<usize> {
-    active_spreads(gs).iter().position(|s| *s == Spread::World)
+pub fn world_spread_index(gs: &GameState, dev_mode: bool) -> Option<usize> {
+    active_spreads(gs, dev_mode).iter().position(|s| *s == Spread::World)
 }
 
 /// How many Up/Down-navigable items the spread at `index` carries — `main` uses it to
 /// clamp the selection cursor. The Vessel spread has one (the **Caulk hull** button);
 /// the Trinkets spread has one row per trinket (the selectable list).
-pub fn button_count(gs: &GameState, index: usize) -> usize {
-    match active_spreads(gs).get(index) {
+pub fn button_count(gs: &GameState, dev_mode: bool, index: usize) -> usize {
+    match active_spreads(gs, dev_mode).get(index) {
         Some(Spread::VesselHold) => 1,
         Some(Spread::Trinkets) => SpecialItem::COUNT,
         _ => 0,
@@ -102,8 +112,8 @@ pub fn button_count(gs: &GameState, index: usize) -> usize {
 
 /// Whether the spread at `index` is the Legendary Trinkets spread — so `main` can
 /// hit-test pointer taps on its rows (see [`trinket_row_rect`]).
-pub fn is_trinkets(gs: &GameState, index: usize) -> bool {
-    matches!(active_spreads(gs).get(index), Some(Spread::Trinkets))
+pub fn is_trinkets(gs: &GameState, dev_mode: bool, index: usize) -> bool {
+    matches!(active_spreads(gs, dev_mode).get(index), Some(Spread::Trinkets))
 }
 
 /// The book panel's outer rect `(x0, y0, pw, ph)` for a `w`×`h` screen. The one place
@@ -205,13 +215,17 @@ pub fn render(
     sail_name: &str,
     day: Daytime,
     weather_label: &str,
+    // A snapshot of the weather sim for the dev-only weather debug spread (see
+    // [`page_weather_state`]/[`page_weather_modifiers`]).
+    weather_dbg: &WeatherDebug,
     chart_marks: &[i32],
     race_marks: &[i32],
     spread: usize,
     sel: usize,
     frame_dt: f32,
     // Whether the dev controls are unlocked (the "banana" cheat, see `main`): the
-    // opening page flags it so the captain can see the cheat is live.
+    // opening page flags it so the captain can see the cheat is live, and the weather
+    // debug spread rides at the back of the book only while it's on.
     dev_mode: bool,
     w: f32,
     h: f32,
@@ -226,7 +240,7 @@ pub fn render(
 
     // Which spread is open. The book's pages depend on the wares owned (see
     // `active_spreads`); the cursor index is clamped to whatever is in the book now.
-    let spreads = active_spreads(gs);
+    let spreads = active_spreads(gs, dev_mode);
     let kind = spreads
         .get(spread.min(spreads.len().saturating_sub(1)))
         .copied()
@@ -288,6 +302,10 @@ pub fn render(
         }
         Spread::World => {
             page_world(world, gs, x0, y0, pw, ph, pad, head_y);
+        }
+        Spread::Weather => {
+            page_weather_state(&left, weather_dbg);
+            page_weather_modifiers(&right, weather_dbg);
         }
     }
 
@@ -1047,4 +1065,103 @@ fn page_wagers(p: &Page, gs: &GameState) {
         ("0 g".to_string(), dim_ink())
     };
     row_colored("Winnings", &txt, col, p.x, y, p.col_w, fs);
+}
+
+/// **Weather** (left page, dev-only) — the live, eased state of the weather sim: the
+/// current scenario, the sea-state and sky gloom it drives (eased value chasing its
+/// scenario target, so a drift mid-ease is visible), the fury blend, and the
+/// auto-drift timer. The facing page lists the modifiers leaning the next drift.
+fn page_weather_state(p: &Page, d: &WeatherDebug) {
+    heading(p, "Weather");
+
+    let fs = fs_body();
+    let lh = line_h(fs);
+    let mut y = p.body_y;
+
+    let rungs = Weather::LADDER.len();
+    row(
+        "Scenario",
+        &format!("{} ({}/{})", d.weather.label(), d.weather.ordinal() + 1, rungs),
+        p.x,
+        y,
+        p.col_w,
+        fs,
+    );
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+
+    // Eased value, then the scenario target it's chasing (see `weather`'s easing).
+    row("Sea state", &format!("{:.2} \u{2192} {:.2}", d.sea, d.sea_target), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Sky gloom", &format!("{:.2} \u{2192} {:.2}", d.gloom, d.gloom_target), p.x, y, p.col_w, fs);
+    y += lh;
+    let fury_col = if d.fury > 0.0 { warn_ink() } else { ink() };
+    row_colored("Fury", &format!("{:.2}", d.fury), fury_col, p.x, y, p.col_w, fs);
+    y += lh * 0.6;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+
+    // The auto-drift timer: how long this scenario has held, and the jittered
+    // interval before the next drift is rolled.
+    row("Held for", &format!("{:.0} s", d.since_change), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Next drift in", &format!("{:.0} s", (d.period - d.since_change).max(0.0)), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Drift interval", &format!("{:.0} s", d.period), p.x, y, p.col_w, fs);
+}
+
+/// **Development** (right page, dev-only) — the modifiers leaning the next drift: the
+/// effective calm bias (and the per-drift odds of building stormier it implies), then
+/// the two leans that scale the storm odds (the storm-pressure lean banked from
+/// storm-free days, and the high-sea lean). See [`crate::weather`].
+fn page_weather_modifiers(p: &Page, d: &WeatherDebug) {
+    heading(p, "Development");
+
+    let fs = fs_body();
+    let lh = line_h(fs);
+    let mut y = p.body_y;
+
+    // A middle-rung drift eases calmer with probability `effective_calm_bias`, else
+    // builds stormier; at the ladder's ends it is forced inward, so this is the odds
+    // on the middle rungs. Flagged amber once the lean tips past the base bias.
+    let stormier = (1.0 - d.effective_calm_bias) * 100.0;
+    let leaning = d.effective_calm_bias < d.base_calm_bias - 1e-9;
+    let odds_col = if leaning { warn_ink() } else { ink() };
+    row_colored("Stormier odds", &format!("{stormier:.0}%"), odds_col, p.x, y, p.col_w, fs);
+    y += lh;
+    row_colored("Calm bias", &format!("{:.3}", d.effective_calm_bias), odds_col, p.x, y, p.col_w, fs);
+    y += lh;
+    row("Base calm bias", &format!("{:.3}", d.base_calm_bias), p.x, y, p.col_w, fs);
+    y += lh * 0.7;
+
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+    heading_minor(p, "Leans", y);
+    y += lh * 0.9;
+
+    // Storm pressure: each storm-free day ramps this lean up to its cap; reaching a
+    // Storm resets the day count (see `weather`).
+    let days_col = if d.storm_free_days > 0.0 { warn_ink() } else { ink() };
+    row_colored(
+        "Storm-free days",
+        &format!("{:.0} / {:.0}", d.storm_free_days, d.storm_free_cap),
+        days_col,
+        p.x,
+        y,
+        p.col_w,
+        fs,
+    );
+    y += lh;
+    row("Pressure odds", &format!("\u{00D7}{:.2}", d.pressure_mult), p.x, y, p.col_w, fs);
+    y += lh * 0.7;
+    draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
+    y += lh * 0.8;
+
+    // High sea: out past the isles the drift leans stormier too (the boundary is the
+    // caller's, see `HIGH_SEA_MARGIN` in `main`).
+    let (hs_txt, hs_col) = if d.high_sea { ("yes", warn_ink()) } else { ("no", ink()) };
+    row_colored("High sea", hs_txt, hs_col, p.x, y, p.col_w, fs);
+    y += lh;
+    row("High-sea odds", &format!("\u{00D7}{:.2}", d.high_mult), p.x, y, p.col_w, fs);
 }
