@@ -85,7 +85,7 @@ const SAIL_MAX_VOL: f32 = 0.9;
 const CALM_MAX_VOL: f32 = 0.75;
 const STORM_MAX_VOL: f32 = 0.75;
 const FLAP_VOL: f32 = 1.0;
-const WIND_SHIFT_VOL: f32 = 0.7;
+const WIND_SHIFT_VOL: f32 = 0.8;
 // Market Buy/Sell (one coin) and Fill/Dump (coin pour), both at half voice.
 const ONE_COIN_VOL: f32 = 0.5;
 const COINS_VOL: f32 = 0.5;
