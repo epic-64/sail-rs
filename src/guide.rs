@@ -29,6 +29,20 @@ struct GuidePage {
 /// the footer dots follow the array, so adding a topic needs no other change.
 const PAGES: &[GuidePage] = &[
     GuidePage {
+        title: "Welcome Aboard",
+        body: &[
+            "The horizon is yours, captain. A trim ship, a hold to fill and a \
+             chain of islands waiting beyond the swell.",
+            "Make your fortune by the wind: run trade contracts between ports, \
+             scoop salvage from the waves, race rivals for their stake, and refit \
+             your ship at the shipyard until she outruns any sea.",
+            "The helm at a glance:",
+            "\u{2022} Steer with A/D or the left and right arrows.",
+            "\u{2022} Raise and lower sail with W/S (or up/down).",
+            "\u{2022} Press G at any time to reopen this guide for a closer read.",
+        ],
+    },
+    GuidePage {
         title: "Your First Gold",
         body: &[
             "To earn your first coin, accept a trade contract bound for the \
