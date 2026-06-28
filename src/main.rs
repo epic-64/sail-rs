@@ -516,6 +516,10 @@ async fn run_game(
     if guide_open {
         save::store_guide_seen();
     }
+    // On the web the canvas only receives keyboard input once it has focus, which
+    // a click grants. Until the captain clicks (or presses a key), a big centred
+    // call-to-action sits over the scene; the first input dismisses it for good.
+    let mut need_focus_click = true;
     // The dev controls (nudge weather Q/E, fast-forward F, nudge clock T/Y, stave in
     // the hull X, nudge wind [ ]) are off until unlocked by a cheat: type "banana"
     // while the captain's log is open. Toggles, so typing it again locks them back.
@@ -1925,6 +1929,19 @@ async fn run_game(
                 }
             }
             draw_keybind_hints(harbor.dockable.is_some(), &extra, h);
+        }
+
+        // The focus call-to-action, over everything until the first click or key.
+        if need_focus_click {
+            if is_mouse_button_pressed(MouseButton::Left) || !get_keys_pressed().is_empty() {
+                need_focus_click = false;
+            } else {
+                draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
+                let msg = "Click here to bring game into focus";
+                let fs = ui::fs_title();
+                let m = measure_text(msg, None, fs, 1.0);
+                draw_text(msg, (w - m.width) / 2.0, h / 2.0, fs as f32, WHITE);
+            }
         }
 
         // A new day breaks at sunrise (the clock crossing ¼ going forward). The clock
