@@ -5,7 +5,8 @@
 //!   (lower-left), sail up/down (lower-right), dock (centre), and a left-edge rail
 //!   of pause / log / look-astern (under the top-left status strip);
 //! - the **menu nav cluster** ([`nav_cluster`] / [`draw_nav_cluster`]): a d-pad
-//!   plus confirm / back, which emit the same arrow / Enter / Esc verbs the
+//!   plus a corner ✕ (back) and an optional ✓ (confirm, only when the menu has an
+//!   action to take), which emit the same arrow / Enter / Esc verbs the
 //!   keyboard-driven pause menu, captain's log and port board already consume.
 //!   (The board can *also* be tapped directly — see [`crate::port_view`] — but it
 //!   shows the cluster too, for captains who'd rather step the cursor.)
@@ -222,9 +223,16 @@ pub fn draw_sail_hud(
 // Menu nav cluster
 // =====================================================================
 
-/// The menu nav cluster's hit-rects: a d-pad (lower-left) plus confirm / back
+/// The menu nav cluster's hit-rects: a d-pad (lower-left) plus back / confirm
 /// (lower-right). Used by the pause menu and the captain's log (the port board is
 /// tapped directly instead).
+///
+/// **Back (✕) always sits in the far-right corner** (the easiest thumb reach, and
+/// the verb every menu honours). **Confirm (✓) only exists when the open menu has
+/// an action to take on the current selection**: when it's hidden, `confirm` is a
+/// zero rect that no tap can land in (`tapped_in` is always false), and the draw
+/// skips its glyph. So an info-only surface (the guide, a log page with no button)
+/// shows just the ✕, sparing the player a checkmark that does nothing.
 pub struct NavRects {
     pub up: Rect,
     pub down: Rect,
@@ -234,8 +242,10 @@ pub struct NavRects {
     pub back: Rect,
 }
 
-/// Lay out the nav cluster for a `w`×`h` screen.
-pub fn nav_cluster(w: f32, h: f32) -> NavRects {
+/// Lay out the nav cluster for a `w`×`h` screen. `show_confirm` is whether the open
+/// menu has something to confirm right now (see [`NavRects`]); when false, the
+/// confirm rect is empty so its slot stays blank and untappable.
+pub fn nav_cluster(w: f32, h: f32, show_confirm: bool) -> NavRects {
     let mg = margin(h);
     let b = btn(h);
 
@@ -247,10 +257,15 @@ pub fn nav_cluster(w: f32, h: f32) -> NavRects {
     let left = Rect::new(cx - 1.5 * b, cy - 0.5 * b, b, b);
     let right = Rect::new(cx + 0.5 * b, cy - 0.5 * b, b, b);
 
-    // Confirm / back, lower-right.
+    // Back / confirm, lower-right: ✕ pinned to the corner, ✓ (when present) to its
+    // left. An absent confirm collapses to a zero rect so its slot reads as blank.
     let gap = b * 0.3;
-    let confirm = Rect::new(w - mg - b, h - mg - b, b, b);
-    let back = Rect::new(confirm.x - b - gap, h - mg - b, b, b);
+    let back = Rect::new(w - mg - b, h - mg - b, b, b);
+    let confirm = if show_confirm {
+        Rect::new(back.x - b - gap, h - mg - b, b, b)
+    } else {
+        Rect::new(0.0, 0.0, 0.0, 0.0)
+    };
 
     NavRects { up, down, left, right, confirm, back }
 }
@@ -279,9 +294,12 @@ pub fn draw_nav_cluster(n: &NavRects) {
     panel(n.right, false);
     tri_right(n.right, glyph());
 
-    panel(n.confirm, true);
-    check(n.confirm);
     panel(n.back, false);
     cross(n.back);
+    // The confirm glyph only when the menu offers one (an empty rect means none).
+    if n.confirm.w > 0.0 {
+        panel(n.confirm, true);
+        check(n.confirm);
+    }
 }
 
