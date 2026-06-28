@@ -85,6 +85,14 @@ impl World {
             .collect()
     }
 
+    /// How far `p` lies past the edge of the nearest archipelago, in metres (negative
+    /// while still within the isles' bounding square). The "high sea" the weather
+    /// leans stormier on begins a kilometre or two beyond this edge (see `weather`).
+    pub fn dist_outside_archipelago(&self, p: Vec2) -> f32 {
+        let (centre, half) = self.cluster_bounds(self.cluster_at(p));
+        centre.distance_to(p) - half
+    }
+
     /// Tight square framing of a cluster's isles: the centre of their bounding box
     /// and the half-width of its larger axis. Lets a chart fill the frame with the
     /// isles themselves rather than the cluster's generous (corner-safe) radius.
