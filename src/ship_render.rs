@@ -455,6 +455,52 @@ impl ShipRenderer {
             }
         }
 
+        // --- The mast's shadow, thrown across the deck by the key light --------
+        // The mast stands at the origin; each metre of it lands on the deck
+        // offset along the light's horizontal throw, so the shadow swings round
+        // the deck with the hour and the ship's heading, and stretches as the
+        // sun or moon sinks. A translucent strip drawn in segments, each kept
+        // inside the hull's footprint so it never paints on the sea; its
+        // darkness is the key light's share of a lit deck face, so it fades
+        // away under a gale's overcast or a bare night sky.
+        let (lx, ly, lz) = lume.l;
+        if ly > 0.05 {
+            // Horizontal throw per metre of mast height; the pole length is
+            // capped so a low light runs the shadow off the hull, not forever.
+            let (tx, tz) = (-lx / ly, -lz / ly);
+            let throw = (tx * tx + tz * tz).sqrt().max(1e-3);
+            let mast_h = 14.0f32.min(30.0 / throw);
+            let key_l = (lume.key.0 + lume.key.1 + lume.key.2) / 3.0;
+            let amb_l = (lume.ambient.0 + lume.ambient.1 + lume.ambient.2) / 3.0;
+            let key_part = (1.0 - AMBIENT_SHARE) * ly * key_l;
+            let shade = key_part / (key_part + AMBIENT_SHARE * amb_l + 1e-4);
+            let col = Color::new(0.0, 0.0, 0.0, 0.5 * shade);
+            // Perpendicular of the shadow's run, for the strip's width.
+            let (qx, qz) = (-tz / throw, tx / throw);
+            let segs = 12;
+            for i in 0..segs {
+                let (t0, t1) = (i as f32 / segs as f32, (i + 1) as f32 / segs as f32);
+                // The pole tapers, so its shadow thins toward the tip.
+                let (w0, w1) = (0.17 * (1.0 - 0.45 * t0), 0.17 * (1.0 - 0.45 * t1));
+                let (x0, z0) = (t0 * mast_h * tx, t0 * mast_h * tz);
+                let (x1, z1) = (t1 * mast_h * tx, t1 * mast_h * tz);
+                let (zm, xm) = ((z0 + z1) * 0.5, (x0 + x1) * 0.5);
+                let (bm, _, _) = station_at(zm);
+                if xm.abs() > bm - 0.1 || !(-14.5..8.5).contains(&zm) {
+                    continue;
+                }
+                let (_, d0, _) = station_at(z0);
+                let (_, d1, _) = station_at(z1);
+                try_quad(
+                    pt(x0 - qx * w0, d0 + 0.02, z0 - qz * w0),
+                    pt(x0 + qx * w0, d0 + 0.02, z0 + qz * w0),
+                    pt(x1 + qx * w1, d1 + 0.02, z1 + qz * w1),
+                    pt(x1 - qx * w1, d1 + 0.02, z1 - qz * w1),
+                    col,
+                );
+            }
+        }
+
         // --- Bulwarks: a planked wall up each side riding the deck edge, its
         // height running the sheer in `STATIONS`. Strakes and a cap board carry
         // the whole run, so nothing kinks over the quarterdeck break.
@@ -570,6 +616,41 @@ impl ShipRenderer {
             );
         }
 
+        // --- Breast rail: a railing across the quarterdeck's forward edge, so
+        // the raised platform the helmsman stands on actually reads from the
+        // helm: you look over it, down onto the waist where the cargo rides.
+        // Drawn after the crates, since it stands nearer the eye than
+        // everything forward of the break.
+        {
+            let brk = 5.1; // just aft of the quarterdeck break
+            let (_, qd_y, _) = station_at(brk);
+            let rail_y = qd_y + 0.85; // waist-high off the platform
+            let half_w = 3.25; // just inside the bulwarks
+            let posts = 7;
+            for i in 0..posts {
+                let x = (i as f32 / (posts - 1) as f32 * 2.0 - 1.0) * half_w;
+                if let (Some((b0, s)), Some((t0, _))) = (cam(x, qd_y, brk), cam(x, rail_y, brk))
+                {
+                    let pw = (0.05 * s).max(1.0);
+                    quad(
+                        vec2(b0.x - pw, b0.y),
+                        vec2(b0.x + pw, b0.y),
+                        vec2(t0.x + pw, t0.y),
+                        vec2(t0.x - pw, t0.y),
+                        rail_col,
+                    );
+                }
+            }
+            // The rail board along the post tops, and a mid rail below it.
+            for (y, th_m) in [(rail_y, 0.07f32), (qd_y + 0.45, 0.045)] {
+                if let (Some((l, s)), Some((r, _))) = (cam(-half_w, y, brk), cam(half_w, y, brk))
+                {
+                    let th = th_m * s;
+                    quad(l, r, vec2(r.x, r.y + th), vec2(l.x, l.y + th), board_col);
+                }
+            }
+        }
+
         // --- Bowsprit: a tapered spar from the stemhead out toward the horizon.
         // It anchors the forestay and closes the ship's profile so the prow
         // reads as a ship's, not a raft's. Two-tone halves, matching the mast.
@@ -644,9 +725,10 @@ impl ShipRenderer {
         // Sized so the rim stays under the horizon: the wheel should command the
         // foreground without blocking the view dead ahead you navigate by.
         const WHEEL_Z: f32 = 6.6;
-        // Hub about chest height off the quarterdeck, well under the eye line,
-        // so the helmsman looks down over the wheel rather than through it.
-        const HUB_Y: f32 = 1.6; // above the waist deck; the pedestal adds the rest
+        // Hub about waist height off the quarterdeck, far under the eye line:
+        // the helmsman looks down onto the wheel, its lower rim running off the
+        // bottom of the screen.
+        const HUB_Y: f32 = 1.25; // above the waist deck; the pedestal adds the rest
         const WHEEL_R: f32 = 0.52;
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
