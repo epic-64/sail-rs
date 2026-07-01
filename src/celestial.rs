@@ -54,12 +54,20 @@ pub fn sky_state(tod: f32) -> Sky {
 
     let sun_light = clamp(sun_alt * 1.4 + 0.05, 0.0, 1.0);
     let moon_light = clamp(moon_alt, 0.0, 1.0) * 0.16;
-    // While the sun is up it owns the lighting; once it dips the moon takes over.
-    let (light_az, light_alt) = if sun_alt > -0.02 {
-        (sun_az, sun_alt.max(0.0))
-    } else {
-        (moon_az, moon_alt.max(0.0))
-    };
+    // Handover from sun-lit to moon-lit. The moon runs half a cycle behind, so at
+    // sunset it has already risen on the *opposite* horizon: switching the key
+    // light to it the instant the sun dips would snap the whole scene's shading
+    // across the sky (the deck appears to jump brighter and side-lit from the
+    // other side). Instead crossfade the direction across a short window once the
+    // sun reaches the horizon, so the light glides round the low sky from the
+    // setting sun to the risen moon while both are grazing and dim. `hand` opens
+    // as the sun sinks past the sea line and eases to full moon just below it.
+    let hand = clamp((-0.02 - sun_alt) / 0.14, 0.0, 1.0);
+    let moon_w = hand * hand * (3.0 - 2.0 * hand); // smoothstep, no kink at either end
+    let light_alt = sun_alt.max(0.0) + (moon_alt.max(0.0) - sun_alt.max(0.0)) * moon_w;
+    // Blend the bearing along the shortest arc (west round to east through the
+    // south), so the light sweeps low across the horizon rather than teleporting.
+    let light_az = sun_az + wrap_angle(moon_az - sun_az) * moon_w;
     let light_strength = sun_light.max(moon_light);
     let star_alpha = clamp(-sun_alt * 1.8 - 0.05, 0.0, 1.0);
 

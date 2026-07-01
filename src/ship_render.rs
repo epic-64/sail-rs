@@ -94,10 +94,29 @@ pub struct ShipLight {
 /// (`islands_render::AMBIENT`) so the near woodwork stays readable on a
 /// moonless deck.
 const AMBIENT_SHARE: f32 = 0.5;
+/// How far to drain the chill from the ambient sky-fill *for the ship only*. The
+/// woodwork is warm brown, so a clear midday sky's blue ambient (half of every
+/// face's light, see `AMBIENT_SHARE`) tints the planks a cold green the islands'
+/// greens never show. This eases the fill back toward neutral grey, scaled by how
+/// cool it actually is, so a blue daytime sky stops chilling the deck while a warm
+/// dusk fill is left alone (and the *key* light still carries the hour's colour).
+const AMBIENT_WARMTH: f32 = 0.8;
 /// The cold blue-white a lightning strike throws over the deck, matched to the
 /// sea's `LIGHTNING_COL`, and how strongly the flash relights the wood.
 const FLASH_COL: [f32; 3] = [200.0, 216.0, 244.0];
 const FLASH_GAIN: f32 = 0.5;
+
+/// Ease an ambient fill toward neutral grey in proportion to how cool it is
+/// (blue over red), preserving its overall brightness. A warm fill (red ≥ blue)
+/// passes through untouched; a cold blue fill loses `AMBIENT_WARMTH` of its
+/// chroma, so daylight stops washing the warm deck cold.
+fn warm_ambient(a: (f32, f32, f32)) -> (f32, f32, f32) {
+    let grey = (a.0 + a.1 + a.2) / 3.0;
+    let cool = ((a.2 - a.0) / grey.max(1e-3)).clamp(0.0, 1.0);
+    let k = AMBIENT_WARMTH * cool;
+    let mix = |c: f32| c + (grey - c) * k;
+    (mix(a.0), mix(a.1), mix(a.2))
+}
 
 /// Per-frame shading context: the key light direction resolved into the rig's
 /// local frame (+x starboard, +y up, +z aft toward the viewer) plus the coloured
@@ -118,7 +137,7 @@ impl Lume {
         let horiz = (1.0 - light.light_alt * light.light_alt).max(0.0).sqrt();
         Lume {
             key: light.key,
-            ambient: light.ambient,
+            ambient: warm_ambient(light.ambient),
             l: (
                 light.light_rel.sin() * horiz,
                 light.light_alt.max(0.0),
