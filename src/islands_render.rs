@@ -80,6 +80,11 @@ pub struct IslandView {
     /// of every facet's shading, so the land takes the hour's colour rather than
     /// only darkening into a grey silhouette.
     pub ambient: (f32, f32, f32),
+    /// The low sun's warm hue (normalised so its brightest channel is 1) and how
+    /// hard to pull the lit land toward it this frame (0 by day and under the moon,
+    /// rising at dawn/dusk). See [`IslandView::warm_shift`] and `WARM_SHIFT`.
+    pub warm: (f32, f32, f32),
+    pub warm_amt: f32,
     /// How brightly the houses' windows burn (0 by day, 1 once the sun is well
     /// down): the dusk ramp from [`crate::port_lights::dusk_glow`]. Lights only the
     /// settlement on a port island.
@@ -323,20 +328,6 @@ fn palette(isle: &Island) -> ([f32; 3], [f32; 3]) {
     }
 }
 
-/// Multiply a base colour (0–255 channels) by a per-channel light multiplier and
-/// stamp an alpha. The multiplier carries both the day/night brightness and the
-/// hour's tint, so an island reddens at dusk and cools under the moon rather than
-/// just dimming.
-#[inline]
-fn lit_col(base: [f32; 3], m: (f32, f32, f32), alpha: f32) -> Color {
-    Color::new(
-        base[0] / 255.0 * m.0,
-        base[1] / 255.0 * m.1,
-        base[2] / 255.0 * m.2,
-        alpha,
-    )
-}
-
 // --- Day/night island lighting -----------------------------------------------
 // The land is lit by two coloured lights pulled from the same time-of-day palette
 // the sea uses: a *key* (the sun by day, the moon by night) whose warmth swings
@@ -348,6 +339,31 @@ fn lit_col(base: [f32; 3], m: (f32, f32, f32), alpha: f32) -> Color {
 // lower for a more muted one; 0 returns the old grey-only day/night dimming.
 const KEY_TINT: f32 = 0.9;
 const AMBIENT_TINT: f32 = 0.8;
+// Sunrise/sunset reddening on top of the tinted key light. Tinting the light only
+// *multiplies* the surface, so a green hillside stays green at dusk (it reflects little
+// red however red the sun is) and the isles never really catch fire. This is a
+// luminance-preserving hue *recolour*: it swings each facet's hue right onto the low
+// sun's warm colour at its own brightness, so the whole island reads sunset-red the way
+// the sea palette flips fully red, keeping only light/dark for form. Scaled by how warm
+// the hour's light actually is, so it does nothing at noon or under the moon. `WARM_MAX`
+// is the full-tilt strength at peak dusk (1 = the facet's hue is entirely the sun's);
+// raise `WARM_GAIN` to reach full tilt sooner, drop `WARM_MAX` for a softer sunset.
+// `WARM_KNEE` is the warmth below which the light counts as white and reddens nothing
+// (the noon sun is a warm-*white*, so a plain gain would tint the land all day) — only
+// the low sun, redder than the knee, swings the land toward its colour.
+const WARM_KNEE: f32 = 0.22;
+const WARM_GAIN: f32 = 1.45;
+const WARM_MAX: f32 = 1.0;
+// The low sun's own hue is a blood-*orange* (its green channel is high), so recolouring
+// straight onto it leaves the land orange/yellow rather than red. This deepens the
+// recolour target toward pure red by draining that share of its green and blue, so a
+// house burns red at dusk, not amber. 0 = the sun's own orange, 1 = pure red.
+const WARM_RED: f32 = 0.6;
+// The share of the recolour a fully shadowed facet still takes: the whole landmass goes
+// red, not just the sun-facing side (as the entire sea reddens, not only its lit crests),
+// with the sunlit side taking all of it. 1 = flat uniform hue; lower keeps the shadowed
+// faces a touch truer to their daylight colour for a little more relief.
+const WARM_FLOOR: f32 = 0.7;
 
 /// Normalise an RGB triple to pure chroma (mean channel = 1), then ease it back
 /// toward neutral grey: `sat` scales how strongly the resulting hue reads (0 = grey,
@@ -373,6 +389,25 @@ pub fn island_light(
     (scale(tint(sun, KEY_TINT)), scale(tint(sky, AMBIENT_TINT)))
 }
 
+/// The warm sunset colour and recolour strength for one frame, from the key light's
+/// reference hue (the sea palette's warmth channel). Returns the hue normalised to
+/// unit luminance (so recolouring onto it neither brightens nor darkens the land), and
+/// a `warm_amt` in [0, `WARM_MAX`] that rises with how far the light leans red over
+/// blue: 0 for a white noon sun or the cool moon, full at the blood-orange dusk sun.
+/// Feeds [`IslandView::warm_shift`].
+pub fn warm_light(sun: [f32; 3]) -> ((f32, f32, f32), f32) {
+    let warmth = ((sun[0] - sun[2]) / 255.0).clamp(0.0, 1.0);
+    // Deepen the sun's orange toward pure red for the recolour target (drain green/blue),
+    // then normalise to unit luminance so the swing recolours without brightening.
+    let r = sun[0];
+    let g = sun[1] * (1.0 - WARM_RED);
+    let b = sun[2] * (1.0 - WARM_RED);
+    let luma = (r * 0.30 + g * 0.59 + b * 0.11).max(1.0);
+    let t = ((warmth - WARM_KNEE) / (1.0 - WARM_KNEE)).clamp(0.0, 1.0);
+    let amt = (t * WARM_GAIN).min(WARM_MAX);
+    ((r / luma, g / luma, b / luma), amt)
+}
+
 impl IslandView {
     /// The light multiplier on a facet whose Lambert term is `diff` (0 in shadow,
     /// 1 fully sunlit): the ambient sky fill plus the key light scaled by the
@@ -388,11 +423,34 @@ impl IslandView {
         )
     }
 
-    /// The flat, fully-lit multiplier (`diff` = 1) for the floor disc and the
-    /// billboard scenery, which carry no surface normal to shade against.
+    /// Recolour an already-lit colour onto the low sun's warm hue at its own
+    /// brightness (see `WARM_GAIN`/`WARM_FLOOR`): a luminance-preserving hue swing.
+    /// The sunlit side (`diff` = 1) takes the full recolour, shadowed faces still take
+    /// `WARM_FLOOR` of it so the whole island goes red, not just its lit facets. A
+    /// no-op away from dawn/dusk (`warm_amt` = 0).
     #[inline]
-    fn flat(&self) -> (f32, f32, f32) {
-        self.lit(1.0)
+    fn warm_shift(&self, c: (f32, f32, f32), diff: f32) -> (f32, f32, f32) {
+        let w = self.warm_amt * (WARM_FLOOR + (1.0 - WARM_FLOOR) * diff);
+        if w <= 0.0 {
+            return c;
+        }
+        let l = c.0 * 0.30 + c.1 * 0.59 + c.2 * 0.11;
+        (
+            c.0 + (self.warm.0 * l - c.0) * w,
+            c.1 + (self.warm.1 * l - c.1) * w,
+            c.2 + (self.warm.2 * l - c.2) * w,
+        )
+    }
+
+    /// A surface colour lit for this frame: the base albedo through the key/ambient
+    /// multiply ([`lit`]/[`flat`]), then warmed toward the sunset hue
+    /// ([`warm_shift`]). `diff` is the facet's Lambert term (1 for flat scenery).
+    #[inline]
+    fn shade(&self, base: [f32; 3], diff: f32, alpha: f32) -> Color {
+        let m = self.lit(diff);
+        let c = (base[0] / 255.0 * m.0, base[1] / 255.0 * m.1, base[2] / 255.0 * m.2);
+        let c = self.warm_shift(c, diff);
+        Color::new(c.0, c.1, c.2, alpha)
     }
 }
 
@@ -488,8 +546,8 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         }
         fill_poly(&xs, &ys, &front, color);
     };
-    floor_ring(1.10, lit_col(SHADOW, v.flat(), alpha * 0.45));
-    floor_ring(1.0, lit_col(sand, v.flat(), alpha));
+    floor_ring(1.10, v.shade(SHADOW, 1.0, alpha * 0.45));
+    floor_ring(1.0, v.shade(sand, 1.0, alpha));
 
     // --- Faceted heightfield body --------------------------------------------
     // Build a polar grid (rings × segments) of world (x, y, z) + screen points,
@@ -546,7 +604,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         tris.push(Tri {
             key: kin.pos.distance_to(Vec2::new(cx, cy)),
             p: [pa, pb, pc],
-            color: lit_col(base, v.lit(diff), alpha),
+            color: v.shade(base, diff, alpha),
         });
     };
     for lvl in 0..levels - 1 {
@@ -614,7 +672,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             continue;
         }
         let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
-        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v.flat());
+        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v);
         // After dusk the settlement's windows light up: a tiny warm or cold lamp in
         // each house, the watchtower carrying a brighter beacon. Drawn over the
         // building it belongs to, so it rides the island's depth slot and a nearer
@@ -712,7 +770,7 @@ fn feature_aspect(kind: FeatureKind) -> f32 {
 // ground, 1 = top), mapped to screen at (cx + lx·w, foot − ly·h). Two-tone where
 // it helps imply form, matching the faceted low-poly look.
 
-fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, light: (f32, f32, f32)) {
+fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, v: &IslandView) {
     // Local→screen.
     let p = |lx: f32, ly: f32| vec2(cx + lx * w, foot - ly * h);
     let quad = |x0: f32, y0: f32, x1: f32, y1: f32, c: Color| {
@@ -722,12 +780,10 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
     let tri = |a: (f32, f32), b: (f32, f32), cc: (f32, f32), c: Color| {
         draw_triangle(p(a.0, a.1), p(b.0, b.1), p(cc.0, cc.1), c);
     };
-    // Shadow the module `rgba` with one tinted by the day/night light, so every
-    // feature colour below takes the hour's warmth and darkens with the rest of the
-    // isle after dusk.
-    let rgba = |c: [f32; 3], a: f32| {
-        Color::new(c[0] / 255.0 * light.0, c[1] / 255.0 * light.1, c[2] / 255.0 * light.2, a)
-    };
+    // Shadow the module `rgba` with one shaded by the day/night light (flat, like the
+    // floor disc), so every feature colour below takes the hour's warmth, reddens at
+    // dusk with the rest of the isle, and darkens after dark.
+    let rgba = |c: [f32; 3], a: f32| v.shade(c, 1.0, a);
 
     const TRUNK: [f32; 3] = [92.0, 64.0, 40.0];
     const CANOPY: [f32; 3] = [52.0, 132.0, 64.0];
@@ -859,6 +915,8 @@ mod tests {
             sun: (0.0, 0.0, 1.0),
             key,
             ambient,
+            warm: (1.0, 1.0, 1.0),
+            warm_amt: 0.0,
             lamp: 0.0,
             t: 0.0,
         }
@@ -902,5 +960,40 @@ mod tests {
         let (kb, ab) = island_light(0.5, [255.0, 112.0, 60.0], [40.0, 80.0, 160.0]);
         assert!((kb.0 - ka.0 * 0.5).abs() < 1e-5);
         assert!((ab.2 - aa.2 * 0.5).abs() < 1e-5);
+    }
+
+    /// `warm_light` only fires for a genuinely warm (red-over-blue) light: the dusk
+    /// sun pulls hard, a white noon sun barely at all, and the cool moon not at all.
+    #[test]
+    fn warm_light_tracks_the_hour() {
+        let (_, dusk) = warm_light([255.0, 112.0, 60.0]);
+        let (_, noon) = warm_light([255.0, 246.0, 222.0]);
+        let (_, moon) = warm_light([138.0, 170.0, 212.0]);
+        assert!(dusk >= WARM_MAX - 1e-6, "dusk should pull full tilt: {dusk}");
+        assert!(noon == 0.0, "the warm-white noon sun must not redden the land: {noon}");
+        assert!(moon == 0.0, "the cool moon must not warm the land: {moon}");
+    }
+
+    /// The warm-shift reddens a face a plain multiply cannot: a green hillside at dusk
+    /// comes out fully red (red well ahead of green) at the same brightness (a hue
+    /// recolour, not a brighten). Even a shadowed facet reddens (the whole island goes
+    /// red, per `WARM_FLOOR`); only an absence of warmth leaves it untouched.
+    #[test]
+    fn warm_shift_reddens_green_without_brightening() {
+        let (warm, warm_amt) = warm_light([255.0, 112.0, 60.0]);
+        let mut v = view((1.0, 1.0, 1.0), (1.0, 1.0, 1.0));
+        v.warm = warm;
+        v.warm_amt = warm_amt;
+        let green = (0.28, 0.45, 0.20); // a foliage facet already through the dusk multiply
+        let luma = |c: (f32, f32, f32)| c.0 * 0.30 + c.1 * 0.59 + c.2 * 0.11;
+        let lit = v.warm_shift(green, 1.0);
+        assert!(lit.0 > lit.1 * 1.5, "dusk green should turn fully red: r {} vs g {}", lit.0, lit.1);
+        assert!((luma(lit) - luma(green)).abs() < 1e-5, "warm-shift must preserve brightness");
+        // Shadowed faces still redden (WARM_FLOOR), just less than the sunlit side.
+        let shade = v.warm_shift(green, 0.0);
+        assert!(shade.0 > green.0 && shade.0 < lit.0, "shadow should redden, but less: {shade:?}");
+        // Only an absence of warmth (noon/night) leaves the colour untouched.
+        v.warm_amt = 0.0;
+        assert_eq!(v.warm_shift(green, 1.0), green);
     }
 }

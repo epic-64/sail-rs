@@ -431,6 +431,9 @@ impl OceanRenderer {
         // Day/night island lighting: see `scene_light` (this frame's palette state
         // was just eased above, so the pair is current).
         let (key, ambient) = self.scene_light();
+        // The sunset/sunrise warm-shift pull, from the same warmth channel the key
+        // light takes, so the land reddens at dusk beyond what the multiply alone can.
+        let (warm, warm_amt) = crate::islands_render::warm_light(self.p_sun);
 
         // Island view: same camera, with the light in *world* space (chart x/y, z up)
         // so the landmass facets shade consistently as the ship turns and the sun moves.
@@ -448,6 +451,8 @@ impl OceanRenderer {
             ),
             key,
             ambient,
+            warm,
+            warm_amt,
             lamp,
             t,
         };
