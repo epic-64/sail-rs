@@ -117,7 +117,7 @@ To vendor them locally, drop the release builds under `.tools/` (e.g.
 
 ```
 src/            game + renderer modules (see PLAN.md for the full map)
-assets/         img/ + sounds/ (baked into the binary), favicon
+assets/         sounds/ + fonts/ (baked into the binary), favicon
 web/            web shell source (index.html)
 build.rs        build-time web-audio re-encode (wasm target only)
 build-web.sh    build / serve / package the web version

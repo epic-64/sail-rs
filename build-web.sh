@@ -5,7 +5,7 @@
 #   ./build-web.sh --build  # build only (no server)
 #   ./build-web.sh --zip    # build + package an itch.io-ready zip (no server)
 #
-# All assets (img/sounds) are baked into the binary via include_bytes!, so the
+# All assets (fonts/sounds) are baked into the binary via include_bytes!, so the
 # dist/ folder is self-contained: index.html + mq_js_bundle.js + sail-rs.wasm.
 set -euo pipefail
 cd "$(dirname "$0")"
