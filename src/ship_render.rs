@@ -833,6 +833,24 @@ impl ShipRenderer {
                 // The brace: from the yard's tip (matching the spar's own span).
                 let (ax, az) = braced(side * 0.54, -stand_off);
                 ropes.push(lead(project(ax, sail_top, az), az, side, 0.90));
+                // The leech line: strung corner to corner, from the sail's head
+                // at the yard straight down to the clew, the tackle the furl
+                // hauls on. It spans free of the cloth (no belly), with just a
+                // little slack of its own that shrinks as the furl draws the
+                // corners together.
+                let (hx, hz) = braced(u, panel_z(u, 0.0));
+                let head = project(hx, sail_top, hz);
+                let clew = project(kx, sail_bot, kz);
+                let slack = head.distance(clew) * 0.05;
+                let leech: Vec<Vec2> = (0..=segs)
+                    .map(|i| {
+                        let t = i as f32 / segs as f32;
+                        let mut p = head.lerp(clew, t);
+                        p.y += slack * (t * std::f32::consts::PI).sin();
+                        p
+                    })
+                    .collect();
+                ropes.push((leech, kz < 0.0));
             }
             ropes
         };
