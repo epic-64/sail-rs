@@ -2,6 +2,12 @@ A native **Rust + [macroquad](https://github.com/not-fl3/macroquad)** sailing ga
 Run with `cargo run --release` (the dense wave mesh wants release for smooth FPS;
 debug runs but is choppier). Tests: `cargo test`.
 
+**On Linux, develop against the web build (`./build-web.sh`), not the native
+desktop binary.** A local GL driver issue pins the desktop window to ~6 FPS, while
+the exact same code runs at a smooth 60 FPS in the browser. `./build-web.sh` with
+no args builds and serves at http://127.0.0.1:8080; use that to see and test
+changes during development.
+
 ## Writing
 
 - **No em dashes (`—`), ever.** This applies everywhere: code comments, user-facing

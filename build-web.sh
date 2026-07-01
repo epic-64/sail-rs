@@ -20,7 +20,7 @@ WASM="target/wasm32-unknown-unknown/web/sail-rs.wasm"
 # vendored copy under .tools/). This shrinks the code section further; the wasm
 # uses bulk-memory ops, so that feature must be enabled for the validator.
 WASM_OPT=$(command -v wasm-opt || true)
-[ -z "$WASM_OPT" ] && WASM_OPT=$(ls .tools/binaryen-*/bin/wasm-opt.exe 2>/dev/null | sort -V | tail -1)
+[ -z "$WASM_OPT" ] && WASM_OPT=$(ls .tools/binaryen-*/bin/wasm-opt.exe 2>/dev/null | sort -V | tail -1 || true)
 if [ -n "$WASM_OPT" ]; then
   echo ">> wasm-opt -Oz ($("$WASM_OPT" --version))"
   "$WASM_OPT" -Oz --enable-bulk-memory --enable-bulk-memory-opt \
