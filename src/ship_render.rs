@@ -62,8 +62,8 @@ const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
 const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
 const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
-// Tarred rigging (the forestay and the sheets working the sail).
-const ROPE: [f32; 3] = [74.0, 60.0, 44.0];
+// Rigging: weathered hemp, light enough not to read as black lines on the sky.
+const ROPE: [f32; 3] = [118.0, 98.0, 72.0];
 // Kept darker than the deck planks so the rim reads against them.
 const WHEEL_C: [f32; 3] = [104.0, 74.0, 44.0];
 const WHEEL_DK: [f32; 3] = [76.0, 52.0, 30.0];
@@ -628,8 +628,8 @@ impl ShipRenderer {
         h: f32,
         w: f32,
     ) {
-        // Tarred rope is round and matte: no face to turn to the light, so it
-        // takes a fixed half-diffuse of the hour's colour everywhere.
+        // Rope is round and matte: no face to turn to the light, so it takes
+        // a fixed half-diffuse of the hour's colour everywhere.
         let rope_col = lume.col(ROPE, 0.5, 1.0);
         let cx = w * 0.5;
         let foot_y = h * 0.82; // mast steps into the deck here (lowered with the deck)
