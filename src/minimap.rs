@@ -279,15 +279,26 @@ pub fn render(
         }
     }
 
-    // Every isle in view: a dot each (ports brighter), shipyards ringed. A mission
-    // destination gets a yellow ring with an "M"; a race mark gets a red ring with an
-    // "R" (both drawn on top of all). A small helper rings the isle and letters it
-    // just above the ring, clear of it.
-    let mark = |x: f32, y: f32, letter: &str, col: Color, rr: f32| {
-        draw_circle_lines(x, y, rr, 2.0, col);
-        let fs = (13.0 * s).max(11.0);
-        let dims = measure_text(letter, None, fs as u16, 1.0);
-        draw_text(letter, x - dims.width / 2.0, y - rr - 3.0 * s, fs, col);
+    // Concentric ring radii for the isle fittings, in design pixels (scaled by `s`).
+    // Kept strictly increasing so the rings nest without overlapping, and the letter
+    // ring clears the widest of them.
+    const SHIPYARD_RING: f32 = 4.5;
+    const MISSION_RING: f32 = 7.0;
+    const RACE_RING: f32 = 9.5;
+    const LETTER_DIST: f32 = 13.0;
+    // Every isle in view: a dot each (ports brighter). Its fittings (a shipyard, a
+    // booked mission, a booked race) each add a concentric ring and a letter. The
+    // rings are drawn smallest to largest so a larger one never hides a smaller
+    // (blue shipyard inside yellow mission inside red race). Each letter sits the same
+    // distance from the isle but at its own angle so the three never collide: S
+    // straight above, M to the upper left, R to the upper right.
+    let fs = (13.0 * s).max(11.0);
+    let letter = |x: f32, y: f32, glyph: &str, col: Color, ang_deg: f32| {
+        let a = ang_deg.to_radians();
+        let lx = x + LETTER_DIST * s * a.sin();
+        let ly = y - LETTER_DIST * s * a.cos();
+        let dims = measure_text(glyph, None, fs as u16, 1.0);
+        draw_text(glyph, lx - dims.width / 2.0, ly + dims.offset_y / 2.0, fs, col);
     };
     for isle in &world.islands {
         let x = sx(isle.pos);
@@ -300,21 +311,28 @@ pub fn render(
         }
         let r = if isle.is_port { 3.2 } else { 2.4 } * s;
         draw_circle(x, y, r, if isle.is_port { pal.port } else { pal.land });
+
+        let is_mission = mission_targets.contains(&isle.id);
+        let is_race = race_targets.contains(&isle.id);
+        // Rings, smallest first.
         if isle.is_shipyard {
-            let rr = 5.4 * s;
-            draw_circle_lines(x, y, rr, 1.5, pal.shipyard_ring);
-            // An "S" below the ring (clear of the M/R marks, which sit above).
-            let fs = (13.0 * s).max(11.0);
-            let dims = measure_text("S", None, fs as u16, 1.0);
-            draw_text("S", x - dims.width / 2.0, y + rr + fs, fs, pal.shipyard_ring);
+            draw_circle_lines(x, y, SHIPYARD_RING * s, 1.5, pal.shipyard_ring);
         }
-        if mission_targets.contains(&isle.id) {
-            mark(x, y, "M", pal.mission_mark, 5.5 * s);
+        if is_mission {
+            draw_circle_lines(x, y, MISSION_RING * s, 2.0, pal.mission_mark);
         }
-        // A race mark rings a touch wider so it reads distinctly even when the same
-        // port also holds a contract.
-        if race_targets.contains(&isle.id) {
-            mark(x, y, "R", pal.race_mark, 7.2 * s);
+        if is_race {
+            draw_circle_lines(x, y, RACE_RING * s, 2.0, pal.race_mark);
+        }
+        // Letters, each fixed distance from the isle at its own angle.
+        if isle.is_shipyard {
+            letter(x, y, "S", pal.shipyard_ring, 0.0);
+        }
+        if is_mission {
+            letter(x, y, "M", pal.mission_mark, -50.0);
+        }
+        if is_race {
+            letter(x, y, "R", pal.race_mark, 50.0);
         }
     }
 
