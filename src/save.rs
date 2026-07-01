@@ -102,7 +102,7 @@ impl Save {
             &mut o,
             "stats",
             &format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 s.contracts_fulfilled,
                 s.contract_earnings,
                 s.races_won,
@@ -115,7 +115,8 @@ impl Save {
                 s.times_docked,
                 s.hull_repairs,
                 s.upgrades_bought,
-                s.log_opened
+                s.log_opened,
+                s.sails_fully_opened
             ),
         );
         // Tavern wares (see `crate::tavern`): the owned set as a list of slot indices,
@@ -397,6 +398,7 @@ fn parse_stats(v: &str) -> Stats {
         hull_repairs: field(10).parse().unwrap_or(0),
         upgrades_bought: field(11).parse().unwrap_or(0),
         log_opened: field(12).parse().unwrap_or(0),
+        sails_fully_opened: field(13).parse().unwrap_or(0),
     }
 }
 
@@ -564,6 +566,7 @@ mod tests {
             hull_repairs: 6,
             upgrades_bought: 5,
             log_opened: 9,
+            sails_fully_opened: 7,
         };
         // Own a couple of wares, one of them an active used on day 5.
         gs.items.owned[SpecialItem::WorldMap.index()] = true;
