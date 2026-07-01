@@ -88,11 +88,16 @@ const STATIONS: [(f32, f32, f32, f32); 12] = [
     (-3.0, 3.40, 0.10, 0.65),
     (0.0, 3.50, 0.02, 0.65), // the mast station: full beam
     (3.0, 3.45, 0.00, 0.66),
-    (5.0, 3.36, 0.01, 0.68), // waist side of the quarterdeck break
-    (5.0, 3.36, 0.82, 0.68), // quarterdeck side (the riser between the two)
+    (QDECK_BREAK, 3.36, 0.01, 0.68), // waist side of the quarterdeck break
+    (QDECK_BREAK, 3.36, 0.82, 0.68), // quarterdeck side (the riser between the two)
     (9.0, 3.05, 0.88, 0.74),
     (11.0, 2.72, 0.92, 0.80), // transom, behind the eye
 ];
+
+/// Where the deck steps up onto the helm's raised platform (the doubled
+/// station above). The deck loft splits into waist and quarterdeck phases
+/// here, with the companion stairs drawn between them.
+const QDECK_BREAK: f32 = 5.0;
 
 /// Hull data (half-beam, deck height, bulwark height) interpolated at fore-aft
 /// z, for placing furniture and rope feet between stations.
@@ -427,19 +432,24 @@ impl ShipRenderer {
         let n_deck = (0.0, 0.94, 0.34);
         let n_wall = |side: f32| (-side * 0.72, 0.42, 0.55);
 
+        let rail_col = lume.face(RAIL, (0.0, 0.25, 0.97));
+        let board_col = lume.face(RAIL_DK, (0.0, 0.8, 0.6));
+
         // --- Deck floor: planks lofted station to station. Strips between fixed
         // fractions of the half-beam in two alternating tones, so every board
         // springs from the stem and follows the hull's plan curve. A segment
         // standing more up than along (the quarterdeck riser) faces away from an
         // eye abaft it, so it is skipped; the quarterdeck floor then overpaints
         // exactly the run of waist its edge hides, which is the correct
-        // painter's-order occlusion.
+        // painter's-order occlusion. The loft runs in two phases, waist then
+        // quarterdeck, with the companion stairs drawn between them: they stand
+        // on the one and duck under the other.
         let planks = 9;
-        for pair in STATIONS.windows(2) {
+        let floor_pair = |pair: &[(f32, f32, f32, f32)]| {
             let (z0, b0, d0, _) = pair[0];
             let (z1, b1, d1, _) = pair[1];
             if (d1 - d0).abs() > (z1 - z0).abs() {
-                continue;
+                return;
             }
             for i in 0..planks {
                 let u0 = i as f32 / planks as f32 * 2.0 - 1.0;
@@ -453,7 +463,80 @@ impl ShipRenderer {
                     lume.face(tone, n_deck),
                 );
             }
+        };
+        // A station belongs to the quarterdeck run if it lies aft of the break
+        // (the raised twin of the doubled break station included).
+        let is_aft = |z: f32, d: f32| z > QDECK_BREAK || (z == QDECK_BREAK && d > 0.4);
+        for pair in STATIONS.windows(2).filter(|p| !is_aft(p[0].0, p[0].2)) {
+            floor_pair(pair);
         }
+
+        // --- Companion stairs: the way down from the quarterdeck to the waist,
+        // starboard, under the breast rail's open end. A long shallow flight,
+        // so it emerges from behind the platform edge into view (a steep ladder
+        // would hide entirely inside the wedge the edge masks from the eye).
+        // Only the treads and the inboard carriage face the eye; the risers
+        // face the bow. The sloped handrail pokes above the platform edge, so
+        // the flight reads even where its top treads are rightly hidden.
+        {
+            let (x0, x1) = (2.0f32, 3.3); // inboard / outboard edges
+            let steps = 6;
+            let run = 4.0; // fore-aft reach of the flight
+            let (_, qd_y, _) = station_at(QDECK_BREAK + 0.1);
+            let side_col = lume.col(RAIL_DK, lume.diff(n_wall(1.0)), 0.9);
+            for k in (1..steps).rev() {
+                let y = qd_y * (1.0 - k as f32 / steps as f32);
+                let za = QDECK_BREAK - run * k as f32 / steps as f32;
+                let zb = QDECK_BREAK - run * (k as f32 - 1.0) / steps as f32;
+                // The carriage: the solid side wall under this tread.
+                try_quad(
+                    pt(x0, 0.0, za),
+                    pt(x0, 0.0, zb),
+                    pt(x0, y, zb),
+                    pt(x0, y, za),
+                    side_col,
+                );
+                // The tread.
+                let tone = if k % 2 == 0 { DECK_A } else { DECK_B };
+                try_quad(
+                    pt(x0, y, za),
+                    pt(x1, y, za),
+                    pt(x1, y, zb),
+                    pt(x0, y, zb),
+                    lume.face(tone, n_deck),
+                );
+            }
+            // The handrail down the inboard carriage: head post height off the
+            // platform, foot height off the lowest tread.
+            let rail_at = |f: f32| (QDECK_BREAK - run * f, (qd_y + 0.8) + (0.75 - (qd_y + 0.8)) * f);
+            for f in [0.3f32, 0.7] {
+                let (z, ry) = rail_at(f);
+                let ty = qd_y * (1.0 - f); // the tread the post stands on
+                if let (Some((b, s)), Some((t, _))) = (cam(x0, ty, z), cam(x0, ry, z)) {
+                    let pw = (0.05 * s).max(1.0);
+                    quad(
+                        vec2(b.x - pw, b.y),
+                        vec2(b.x + pw, b.y),
+                        vec2(t.x + pw, t.y),
+                        vec2(t.x - pw, t.y),
+                        rail_col,
+                    );
+                }
+            }
+            let (hz, hy) = rail_at(0.0);
+            let (fz, fy) = rail_at(0.95);
+            if let (Some((a, s)), Some((b, _))) = (cam(x0, hy, hz), cam(x0, fy, fz)) {
+                let th = 0.07 * s;
+                quad(a, b, vec2(b.x, b.y + th), vec2(a.x, a.y + th), board_col);
+            }
+        }
+
+        // The rest of the woodwork draws in two depth phases around the
+        // quarterdeck floor: everything at waist level first, then the platform
+        // over it, then the quarterdeck's own walls and rails. That is what
+        // makes the platform opaque: the waist walls, rails and cargo inside
+        // the wedge its edge masks are painted first and covered by it, rather
+        // than painting through it.
 
         // --- The mast's shadow, thrown across the deck by the key light --------
         // The mast stands at the origin; each metre of it lands on the deck
@@ -462,9 +545,13 @@ impl ShipRenderer {
         // sun or moon sinks. A translucent strip drawn in segments, each kept
         // inside the hull's footprint so it never paints on the sea; its
         // darkness is the key light's share of a lit deck face, so it fades
-        // away under a gale's overcast or a bare night sky.
-        let (lx, ly, lz) = lume.l;
-        if ly > 0.05 {
+        // away under a gale's overcast or a bare night sky. Called once per
+        // deck level with that level's fore-aft range.
+        let mast_shadow = |z_lo: f32, z_hi: f32| {
+            let (lx, ly, lz) = lume.l;
+            if ly <= 0.05 {
+                return;
+            }
             // Horizontal throw per metre of mast height; the pole length is
             // capped so a low light runs the shadow off the hull, not forever.
             let (tx, tz) = (-lx / ly, -lz / ly);
@@ -486,7 +573,7 @@ impl ShipRenderer {
                 let (x1, z1) = (t1 * mast_h * tx, t1 * mast_h * tz);
                 let (zm, xm) = ((z0 + z1) * 0.5, (x0 + x1) * 0.5);
                 let (bm, _, _) = station_at(zm);
-                if xm.abs() > bm - 0.1 || !(-14.5..8.5).contains(&zm) {
+                if xm.abs() > bm - 0.1 || !(z_lo..z_hi).contains(&zm) {
                     continue;
                 }
                 let (_, d0, _) = station_at(z0);
@@ -499,92 +586,95 @@ impl ShipRenderer {
                     col,
                 );
             }
-        }
+        };
 
         // --- Bulwarks: a planked wall up each side riding the deck edge, its
-        // height running the sheer in `STATIONS`. Strakes and a cap board carry
-        // the whole run, so nothing kinks over the quarterdeck break.
-        for side in [-1.0f32, 1.0] {
-            let wall_col = lume.col(RAIL, lume.diff(n_wall(side)), 0.9);
-            let seam_col = lume.col(RAIL_DK, lume.diff(n_wall(side)), 0.9);
-            for pair in STATIONS.windows(2) {
-                let (z0, b0, d0, w0) = pair[0];
-                let (z1, b1, d1, w1) = pair[1];
-                let base0 = pt(side * b0, d0, z0);
-                let base1 = pt(side * b1, d1, z1);
-                let top1 = pt(side * b1, d1 + w1, z1);
-                let top0 = pt(side * b0, d0 + w0, z0);
-                try_quad(base0, base1, top1, top0, wall_col);
-                // Strakes: seam lines along the inboard face.
-                for fr in [0.34f32, 0.67] {
-                    if let (Some(s0), Some(s1)) =
-                        (pt(side * b0, d0 + w0 * fr, z0), pt(side * b1, d1 + w1 * fr, z1))
-                    {
-                        draw_line(s0.x, s0.y, s1.x, s1.y, (h * 0.0022).max(1.0), seam_col);
+        // height running the sheer in `STATIONS`, with strakes and a cap board.
+        // Called once per deck level.
+        let bulwarks = |aft: bool| {
+            for side in [-1.0f32, 1.0] {
+                let wall_col = lume.col(RAIL, lume.diff(n_wall(side)), 0.9);
+                let seam_col = lume.col(RAIL_DK, lume.diff(n_wall(side)), 0.9);
+                for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2) == aft) {
+                    let (z0, b0, d0, w0) = pair[0];
+                    let (z1, b1, d1, w1) = pair[1];
+                    let base0 = pt(side * b0, d0, z0);
+                    let base1 = pt(side * b1, d1, z1);
+                    let top1 = pt(side * b1, d1 + w1, z1);
+                    let top0 = pt(side * b0, d0 + w0, z0);
+                    try_quad(base0, base1, top1, top0, wall_col);
+                    // Strakes: seam lines along the inboard face.
+                    for fr in [0.34f32, 0.67] {
+                        if let (Some(s0), Some(s1)) =
+                            (pt(side * b0, d0 + w0 * fr, z0), pt(side * b1, d1 + w1 * fr, z1))
+                        {
+                            draw_line(s0.x, s0.y, s1.x, s1.y, (h * 0.0022).max(1.0), seam_col);
+                        }
                     }
+                    // A thin cap board on top, flared a touch outboard.
+                    let c0 = pt(side * b0 * 1.04, d0 + w0 + 0.07, z0);
+                    let c1 = pt(side * b1 * 1.04, d1 + w1 + 0.07, z1);
+                    try_quad(top0, top1, c1, c0, lume.face(RAIL_DK, (0.0, 0.9, 0.44)));
                 }
-                // A thin cap board on top, flared a touch outboard.
-                let c0 = pt(side * b0 * 1.04, d0 + w0 + 0.07, z0);
-                let c1 = pt(side * b1 * 1.04, d1 + w1 + 0.07, z1);
-                try_quad(top0, top1, c1, c0, lume.face(RAIL_DK, (0.0, 0.9, 0.44)));
             }
-        }
+        };
 
         // --- Open railing: stanchions on the bulwark cap joined by a rail board
         // riding their tops, so the topsides read as guarded rather than a bare
-        // wall. One post per station; perspective spaces and sizes them.
+        // wall. One post per station; perspective spaces and sizes them. Called
+        // once per deck level, so each level's rail run ends at the break and
+        // the quarterdeck's begins on its own corner post.
         let post_h = 0.42; // m above the cap
         let post_hw = 0.05;
-        let rail_col = lume.face(RAIL, (0.0, 0.25, 0.97));
-        let board_col = lume.face(RAIL_DK, (0.0, 0.8, 0.6));
-        for side in [-1.0f32, 1.0] {
-            let mut prev: Option<(Vec2, f32)> = None; // previous rail top + px/m
-            let mut last_z = f32::NEG_INFINITY;
-            for &(z, b, d, wh) in STATIONS.iter() {
-                if z == last_z {
-                    continue; // the doubled break station carries one post
-                }
-                last_z = z;
-                let (Some((cap_p, s)), Some((rail_p, _))) =
-                    (cam(side * b, d + wh, z), cam(side * b, d + wh + post_h, z))
-                else {
-                    continue;
-                };
-                // The rail board from the previous post's top.
-                if let Some((pr, ps)) = prev {
+        let railing = |aft: bool| {
+            for side in [-1.0f32, 1.0] {
+                let mut prev: Option<(Vec2, f32)> = None; // previous rail top + px/m
+                for &(z, b, d, wh) in STATIONS.iter().filter(|s| is_aft(s.0, s.2) == aft) {
+                    let (Some((cap_p, s)), Some((rail_p, _))) =
+                        (cam(side * b, d + wh, z), cam(side * b, d + wh + post_h, z))
+                    else {
+                        continue;
+                    };
+                    // The rail board from the previous post's top.
+                    if let Some((pr, ps)) = prev {
+                        quad(
+                            pr,
+                            rail_p,
+                            vec2(rail_p.x, rail_p.y + 0.07 * s),
+                            vec2(pr.x, pr.y + 0.07 * ps),
+                            board_col,
+                        );
+                    }
+                    prev = Some((rail_p, s));
+                    // The stanchion itself.
+                    let pw = (post_hw * s).max(1.0);
                     quad(
-                        pr,
-                        rail_p,
-                        vec2(rail_p.x, rail_p.y + 0.07 * s),
-                        vec2(pr.x, pr.y + 0.07 * ps),
-                        board_col,
+                        vec2(cap_p.x - pw, cap_p.y),
+                        vec2(cap_p.x + pw, cap_p.y),
+                        vec2(rail_p.x + pw, rail_p.y),
+                        vec2(rail_p.x - pw, rail_p.y),
+                        rail_col,
                     );
                 }
-                prev = Some((rail_p, s));
-                // The stanchion itself.
-                let pw = (post_hw * s).max(1.0);
-                quad(
-                    vec2(cap_p.x - pw, cap_p.y),
-                    vec2(cap_p.x + pw, cap_p.y),
-                    vec2(rail_p.x + pw, rail_p.y),
-                    vec2(rail_p.x - pw, rail_p.y),
-                    rail_col,
-                );
             }
-        }
+        };
+
+        // Waist level: shadow on its planks, then its walls and rails.
+        mast_shadow(-14.5, QDECK_BREAK);
+        bulwarks(false);
+        railing(false);
 
         // --- Deck cargo: lashed crates riding the waist, drawn far → near so
         // nearer crates overlap those behind. Each is a flat-shaded box: side
         // and near faces in shade, the lit top catching the sky; the far face is
-        // hidden, so it is never drawn. Keep them forward of the strip of waist
-        // the quarterdeck's edge hides from the eye (they draw after the
-        // quarterdeck floor, so one standing in that shadowed strip would paint
-        // over the platform that should hide it).
+        // hidden, so it is never drawn. Drawn before the quarterdeck floor, so
+        // a crate reaching into the wedge the platform edge masks is rightly
+        // covered by it.
         // (centre x, centre z, half-width, half-depth, height, base lift) metres
         let crates: [(f32, f32, f32, f32, f32, f32); 5] = [
             (-1.5, 0.9, 0.65, 0.55, 0.85, 0.0),
             (-1.4, 0.9, 0.50, 0.45, 0.60, 0.85), // stacked on the first
-            (1.7, 1.9, 0.70, 0.60, 0.95, 0.0),
+            (1.1, 1.9, 0.70, 0.60, 0.95, 0.0), // inboard of the stairs' run
             (0.9, -0.4, 0.50, 0.40, 0.60, 0.0),
             (-2.1, 2.3, 0.75, 0.60, 1.00, 0.0),
         ];
@@ -616,19 +706,29 @@ impl ShipRenderer {
             );
         }
 
+        // Quarterdeck level: the platform floor over the waist detail, then its
+        // own shadow run, walls and rails.
+        for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
+            floor_pair(pair);
+        }
+        mast_shadow(QDECK_BREAK, 8.5);
+        bulwarks(true);
+        railing(true);
+
         // --- Breast rail: a railing across the quarterdeck's forward edge, so
         // the raised platform the helmsman stands on actually reads from the
         // helm: you look over it, down onto the waist where the cargo rides.
-        // Drawn after the crates, since it stands nearer the eye than
-        // everything forward of the break.
+        // It spans port to just past the centreline; the starboard end stays
+        // open where the companion stairs come up. Drawn after the crates,
+        // since it stands nearer the eye than everything forward of the break.
         {
-            let brk = 5.1; // just aft of the quarterdeck break
+            let brk = QDECK_BREAK + 0.1; // just aft of the quarterdeck break
             let (_, qd_y, _) = station_at(brk);
             let rail_y = qd_y + 0.85; // waist-high off the platform
-            let half_w = 3.25; // just inside the bulwarks
-            let posts = 7;
+            let (rail_l, rail_r) = (-3.25f32, 1.6); // port bulwark → the stair head
+            let posts = 6;
             for i in 0..posts {
-                let x = (i as f32 / (posts - 1) as f32 * 2.0 - 1.0) * half_w;
+                let x = rail_l + (rail_r - rail_l) * (i as f32 / (posts - 1) as f32);
                 if let (Some((b0, s)), Some((t0, _))) = (cam(x, qd_y, brk), cam(x, rail_y, brk))
                 {
                     let pw = (0.05 * s).max(1.0);
@@ -643,7 +743,7 @@ impl ShipRenderer {
             }
             // The rail board along the post tops, and a mid rail below it.
             for (y, th_m) in [(rail_y, 0.07f32), (qd_y + 0.45, 0.045)] {
-                if let (Some((l, s)), Some((r, _))) = (cam(-half_w, y, brk), cam(half_w, y, brk))
+                if let (Some((l, s)), Some((r, _))) = (cam(rail_l, y, brk), cam(rail_r, y, brk))
                 {
                     let th = th_m * s;
                     quad(l, r, vec2(r.x, r.y + th), vec2(l.x, l.y + th), board_col);
