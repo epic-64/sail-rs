@@ -79,7 +79,7 @@ const HORIZON: f32 = 0.54;
 /// ship means editing numbers here and nowhere else. The transom lies behind
 /// the eye (`CAM_AFT`), which is what keeps the woodwork running off-screen
 /// through any sway: there is simply more ship back there.
-const STATIONS: [(f32, f32, f32, f32); 12] = [
+const STATIONS: [(f32, f32, f32, f32); 13] = [
     (-15.0, 0.05, 1.55, 0.50), // stem tip
     (-13.5, 0.95, 1.22, 0.72),
     (-11.5, 1.95, 0.88, 0.70),
@@ -88,8 +88,9 @@ const STATIONS: [(f32, f32, f32, f32); 12] = [
     (-3.0, 3.40, 0.10, 0.65),
     (0.0, 3.50, 0.02, 0.65), // the mast station: full beam
     (3.0, 3.45, 0.00, 0.66),
-    (QDECK_BREAK, 3.36, 0.01, 0.68), // waist side of the quarterdeck break
-    (QDECK_BREAK, 3.36, 0.82, 0.68), // quarterdeck side (the riser between the two)
+    (4.0, 3.40, 0.005, 0.68), // the sheer starts its climb to the quarterdeck...
+    (QDECK_BREAK, 3.36, 0.01, 1.49), // ...topping out level with the platform's wall
+    (QDECK_BREAK, 3.36, 0.82, 0.68), // quarterdeck side of the break (the riser)
     (9.0, 3.05, 0.88, 0.74),
     (11.0, 2.72, 0.92, 0.80), // transom, behind the eye
 ];
