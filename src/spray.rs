@@ -120,10 +120,13 @@ impl Spray {
 
         // Emitter anchors (screen space). The bow sits up-screen at the stem; the
         // shoulders a touch aft and out to either side where the bow wave parts.
+        // Matched to the hull's helm-camera projection (ship_render::STATIONS):
+        // the plume at the waterline under the stem, the shoulders a touch aft
+        // where the bow wave parts.
         let cx = w * 0.5;
-        let bow_y = h * 0.72;
-        let shoulder_y = h * 0.80;
-        let shoulder_dx = w * 0.15;
+        let bow_y = h * 0.70;
+        let shoulder_y = h * 0.74;
+        let shoulder_dx = w * 0.065;
 
         // Bow plume: up the screen with a little spread, bursting on a slam.
         let bow_rate = BOW_RATE * way + SLAM_RATE * slam;
@@ -136,7 +139,7 @@ impl Spray {
             let speed_px = self.range(380.0, 720.0) * energy;
             let vx = speed_px * ang.sin() + self.range(-90.0, 90.0);
             let vy = -speed_px * ang.cos();
-            let px = cx + self.range(-w * 0.035, w * 0.035);
+            let px = cx + self.range(-w * 0.02, w * 0.02);
             let py = bow_y + self.range(-h * 0.01, h * 0.01);
             let size = self.range(2.0, 4.6) * (0.7 + 0.5 * drive);
             self.push(vec2(px, py), vec2(vx, vy), size);
