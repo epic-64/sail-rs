@@ -865,7 +865,8 @@ impl PortScreen {
         let marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
         let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
         let route = self.route_line(gs, world);
-        minimap::render(world, kin, wind, chart, &cpal, &marks, &race_marks, route, &[], None);
+        let here = world.islands[self.island_id as usize].pos;
+        minimap::render(world, kin, wind, chart, &cpal, &marks, &race_marks, route, &[], None, Some(here));
         // Name the local waters under the chart.
         let waters = &world.cluster_at(kin.pos).name;
         let cd = measure_text(waters, None, fs_small(), 1.0);
