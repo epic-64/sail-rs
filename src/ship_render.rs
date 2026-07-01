@@ -9,7 +9,8 @@
 //! of that rigid sway the rig *articulates*:
 //!
 //! - the **yard** braces about the mast's vertical axis to trim to the wind,
-//! - the **sail** bows into a parabolic belly out of plane (deepest amidships),
+//! - the **sail** bows into a belly out of plane, laced flat along the yard and
+//!   deepest toward the free foot, so the curve runs down the cloth,
 //! - and **luffs** — a travelling ripple flogs the cloth when starved of wind.
 //!
 //! The belly/brace/luff are built in a small local 3-D rig space (x across, y up,
@@ -34,7 +35,8 @@ use crate::sailing::wind_factor_rel;
 use std::f32::consts::TAU;
 
 // --- Rig trim feel (ported from SailingView) ---------------------------------
-const SAIL_PANELS: usize = 8; // vertical cloth panels the sail is built from
+const SAIL_PANELS: usize = 8; // cloth panels across the sail's width
+const SAIL_ROWS: usize = 6; // rows down its height (they resolve the vertical belly)
 const BELLY_DEPTH: f32 = 0.37; // deepest draft, as a fraction of sail width
 const FLAP_HZ: f32 = 1.6; // luff flutter rate
 const FLAP_WAVES: f32 = 1.6; // ripple crests across the sail at once
@@ -610,11 +612,11 @@ impl ShipRenderer {
         draw_circle(hub.x, hub.y, r * 0.22, rim_col);
     }
 
-    /// Mast, yard and the square sail — the articulating rig. The sail is built
-    /// from overlapping vertical panels, each given an out-of-plane depth (belly +
-    /// luff), then the whole yard rotated about the mast (the brace) before
-    /// projecting through the fake perspective. Panels draw back-to-front so the
-    /// curved surface overlaps correctly.
+    /// Mast, yard and the square sail: the articulating rig. The sail is built
+    /// from a grid of cloth cells, each vertex given an out-of-plane depth
+    /// (belly + luff), then the whole yard rotated about the mast (the brace)
+    /// before projecting through the fake perspective. Cells draw back-to-front
+    /// so the curved surface overlaps correctly.
     #[allow(clippy::too_many_arguments)] // sway/projection inputs for the rig
     fn draw_rig(
         &self,
@@ -678,12 +680,20 @@ impl ShipRenderer {
         let sail_top = yard_y;
         let sail_bot = yard_y - sail_h * furl;
 
-        // The out-of-plane offset of a panel edge at across-fraction `u` (-0.5..0.5)
-        // and down-fraction `v` (0 = the head, laced to the yard, 1 = the foot).
+        // The belly's draft profiles. Down the height the cloth is laced flat
+        // along the yard, bows to its deepest about two thirds down, and is
+        // hauled partway back at the foot by the sheets (a 3/4 sine arc gives
+        // exactly that). Across the width it stays nearly uniform, with just a
+        // gentle ease toward the leeches, so the sail reads as one deep fold
+        // between yard and foot rather than a bulge between its sides.
+        let vert = |v: f32| (v * 0.75 * std::f32::consts::PI).sin();
+        let horiz = |u: f32| 1.0 - 0.3 * (2.0 * u).powi(2);
+        // The out-of-plane offset of a cloth point at across-fraction `u`
+        // (-0.5..0.5) and down-fraction `v` (0 = the head, 1 = the foot).
         // The belly and the flog both fade to nothing at the head, so the cloth
         // stays pinned along the yard and swings out toward the free foot.
         let panel_z = |u: f32, v: f32| -> f32 {
-            let belly = depth * (1.0 - (2.0 * u).powi(2)) * v.powf(0.6); // parabolic bulge
+            let belly = depth * vert(v) * horiz(u);
             let wave = (phase - u * FLAP_WAVES * TAU).sin();
             let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
             -stand_off + belly + flog
@@ -708,42 +718,53 @@ impl ShipRenderer {
             draw_line(head.x, head.y, tip.x, tip.y, thick, rope_col);
         }
 
-        // --- Sail panels, a continuous mesh drawn back-to-front by depth -------
-        // Adjacent panels share their seam vertices exactly, so the cloth reads
-        // as one watertight surface from any brace angle instead of overlapping
-        // strips shingling at a slant. Drawn *before* the spars so the mast and
-        // yard (at the rig's z≈0 plane, nearest the viewer) always part the
-        // cloth instead of the cloth painting over them.
+        // --- Sail cloth, a continuous mesh drawn back-to-front by depth --------
+        // A grid of cells: columns across the width, rows down the height. The
+        // rows are what let the vertical belly actually bow in projection; a
+        // single head-to-foot quad would interpolate the arc away. Adjacent
+        // cells share their seam vertices exactly, so the cloth reads as one
+        // watertight surface from any brace angle. Drawn *before* the spars so
+        // the mast and yard (at the rig's z≈0 plane, nearest the viewer) always
+        // part the cloth instead of the cloth painting over them.
         let n = SAIL_PANELS;
-        // The corner geometry at each of the n+1 seams: (head, foot), computed
-        // once so both panels flanking a seam use the very same points.
-        let seams: Vec<((f32, f32), (f32, f32))> = (0..=n)
+        let m = SAIL_ROWS;
+        let sail_y = |v: f32| sail_top + (sail_bot - sail_top) * v;
+        // Every grid vertex, computed once so the cells meeting at a vertex
+        // use the very same projected point.
+        let grid: Vec<Vec<Vec2>> = (0..=n)
             .map(|j| {
                 let u = j as f32 / n as f32 - 0.5;
-                (braced(u, panel_z(u, 0.0)), braced(u, panel_z(u, 1.0)))
+                (0..=m)
+                    .map(|k| {
+                        let v = k as f32 / m as f32;
+                        let (x, z) = braced(u, panel_z(u, v));
+                        project(x, sail_y(v), z)
+                    })
+                    .collect()
             })
             .collect();
-        let mut order: Vec<usize> = (0..n).collect();
-        let panel_u = |i: usize| (i as f32 + 0.5) / n as f32 - 0.5;
-        order.sort_by(|&a, &b| {
-            // Farthest (most negative z at the panel's belly) first.
-            let za = braced(panel_u(a), panel_z(panel_u(a), 0.7)).1;
-            let zb = braced(panel_u(b), panel_z(panel_u(b), 0.7)).1;
-            za.partial_cmp(&zb).unwrap()
-        });
+        let cell_z = |i: usize, k: usize| {
+            let u = (i as f32 + 0.5) / n as f32 - 0.5;
+            let v = (k as f32 + 0.5) / m as f32;
+            braced(u, panel_z(u, v)).1
+        };
+        let mut order: Vec<(usize, usize)> =
+            (0..n).flat_map(|i| (0..m).map(move |k| (i, k))).collect();
+        // Farthest (most negative z at the cell's centre) first.
+        order.sort_by(|&a, &b| cell_z(a.0, a.1).partial_cmp(&cell_z(b.0, b.1)).unwrap());
 
-        for &i in &order {
-            let u = panel_u(i);
-            // Head corners ride the yard's plane; foot corners carry the full belly.
-            let ((ltx, ltz), (lbx, lbz)) = seams[i];
-            let ((rtx, rtz), (rbx, rbz)) = seams[i + 1];
-            let tl = project(ltx, sail_top, ltz);
-            let tr = project(rtx, sail_top, rtz);
-            let br = project(rbx, sail_bot, rbz);
-            let bl = project(lbx, sail_bot, lbz);
-            // The belly catches the light amidships and falls to shade at the edges;
-            // a panel braced edge-on (small horizontal span) also dims.
-            let belly_lit = 1.0 - 0.28 * fill * (2.0 * u).powi(2);
+        for &(i, k) in &order {
+            let u = (i as f32 + 0.5) / n as f32 - 0.5;
+            let v = (k as f32 + 0.5) / m as f32;
+            let tl = grid[i][k];
+            let tr = grid[i + 1][k];
+            let br = grid[i + 1][k + 1];
+            let bl = grid[i][k + 1];
+            // The belly catches the light at its deepest reach and falls to
+            // shade where the cloth flattens back toward its pinned edges (the
+            // yard above, the sheeted foot, the leeches at the sides); a cell
+            // braced edge-on (small horizontal span) also dims.
+            let belly_lit = 1.0 - 0.28 * fill * (1.0 - vert(v) * horiz(u));
             let face = ((tr.x - tl.x).abs() / (sail_w / n as f32 + 1.0)).min(1.0);
             let shade = (0.55 + 0.45 * face) * belly_lit;
             // Directional cloth: the braced plane's normal (the belly's edge
