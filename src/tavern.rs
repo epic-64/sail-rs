@@ -30,7 +30,7 @@ pub enum SpecialItem {
     WindWhistle,
     /// A swig that drives the ship on: after a moment's charge it hauls her up past her
     /// top speed (to her best plus a margin) on any point of sail, as long as canvas is
-    /// set (full at full sail, nil with sails struck). Once a day.
+    /// set (full at full sail, nil with sails furled). Once a day.
     DolphinsDraught,
     /// Read the glass and calm the seas: the weather eases back to a flat calm,
     /// once a day.
