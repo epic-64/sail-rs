@@ -242,61 +242,61 @@ impl ShipRenderer {
 
         // Foredeck: the planking carries on past the far edge and pinches to the
         // stemhead, a fan of converging triangles forming the pointed bow. Same
-        // plank count and tone parity as the main deck, so every seam and board
-        // continues straight across the shared far edge.
+        // plank count, tone parity and shade as the main deck, so every board
+        // runs unbroken from the helm to the stem.
         let stem = sway(cx, stem_y);
         for i in 0..planks {
             let u0 = i as f32 / planks as f32 * 2.0 - 1.0;
             let u1 = (i + 1) as f32 / planks as f32 * 2.0 - 1.0;
             let a = sway(cx + u0 * far_hw, far_y);
             let b = sway(cx + u1 * far_hw, far_y);
-            // Slightly darker than the main deck so the raked foredeck reads apart.
             let tone = if i % 2 == 0 { DECK_A } else { DECK_B };
-            draw_triangle(a, b, stem, rgba(tone, 0.92 * lit, 1.0));
+            draw_triangle(a, b, stem, rgba(tone, lit, 1.0));
         }
 
-        // Bulwarks: a solid planked wall up each side. Its height grows with
+        // Bulwarks: one continuous planked wall up each side, running from the
+        // stemhead along the foredeck and aft to the helm. Its height grows with
         // nearness the way the deck's width does, so the wall stands waist-high
-        // amidships and towers by the helm instead of thinning to a fence line.
-        // Shaded apart from the sunlit deck, with strake seams so it reads as a
-        // built wall rather than a flat band.
+        // amidships and towers by the helm. One surface with one shade, its
+        // strakes and cap board carried the whole sheer, so nothing kinks where
+        // the foredeck meets the main deck.
         let rail_h = h * 0.10;
-        let wall_far = rail_h * 0.45; // wall height at the bow end of the side
+        let wall_stem = rail_h * 0.55; // a touch of sheer rise at the stemhead
+        let wall_far = rail_h * 0.45; // where the foredeck meets the main deck
         let wall_near = rail_h * 1.6; // ...towering by the helm
         for side in [-1.0f32, 1.0] {
-            let fb = sway(cx + side * far_hw, far_y);
-            let nb = sway(cx + side * near_hw, near_y);
-            let ft = sway(cx + side * far_hw, far_y - wall_far);
-            let nt = sway(cx + side * near_hw, near_y - wall_near);
-            quad(fb, nb, nt, ft, rgba(RAIL, 0.82 * lit, 1.0));
-            // Strakes: seam lines along the inboard face.
-            for f in [0.34f32, 0.67] {
-                let s0 = sway(cx + side * far_hw, far_y - wall_far * f);
-                let s1 = sway(cx + side * near_hw, near_y - wall_near * f);
-                draw_line(
-                    s0.x,
-                    s0.y,
-                    s1.x,
-                    s1.y,
-                    (h * 0.0022).max(1.0),
-                    rgba(RAIL_DK, 0.9 * lit, 1.0),
-                );
+            // Sheer stations bow → helm: (x, wall base y, wall height, cap flare).
+            let sts = [
+                (cx, stem_y, wall_stem, 1.0f32),
+                (cx + side * far_hw, far_y, wall_far, 1.04),
+                (cx + side * near_hw, near_y, wall_near, 1.02),
+            ];
+            for seg in sts.windows(2) {
+                let (x0, y0, h0, f0) = seg[0];
+                let (x1, y1, h1, f1) = seg[1];
+                let b0 = sway(x0, y0);
+                let b1 = sway(x1, y1);
+                let t1 = sway(x1, y1 - h1);
+                let t0 = sway(x0, y0 - h0);
+                quad(b0, b1, t1, t0, rgba(RAIL, 0.82 * lit, 1.0));
+                // Strakes: seam lines along the inboard face.
+                for f in [0.34f32, 0.67] {
+                    let s0 = sway(x0, y0 - h0 * f);
+                    let s1 = sway(x1, y1 - h1 * f);
+                    draw_line(
+                        s0.x,
+                        s0.y,
+                        s1.x,
+                        s1.y,
+                        (h * 0.0022).max(1.0),
+                        rgba(RAIL_DK, 0.9 * lit, 1.0),
+                    );
+                }
+                // A thin cap board on top, flared a touch outboard.
+                let c0 = sway(cx + (x0 - cx) * f0, y0 - h0);
+                let c1 = sway(cx + (x1 - cx) * f1, y1 - h1);
+                quad(t0, t1, c1, c0, rgba(RAIL_DK, lit, 1.0));
             }
-            // A thin cap line on top of the wall.
-            let fc = sway(cx + side * far_hw * 1.04, far_y - wall_far);
-            let nc = sway(cx + side * near_hw * 1.02, near_y - wall_near);
-            quad(ft, nt, nc, fc, rgba(RAIL_DK, lit, 1.0));
-        }
-
-        // Bow rails: the topside sweeps in from each far corner to the raised
-        // stemhead, closing the prow and giving it a little sheer.
-        let stem_cap = sway(cx, stem_y - rail_h * 0.55);
-        for side in [-1.0f32, 1.0] {
-            let fb = sway(cx + side * far_hw, far_y);
-            let ft = sway(cx + side * far_hw, far_y - wall_far);
-            // Outer (lit) face down to the waterline, then the capped top edge.
-            quad(fb, ft, stem_cap, stem, rgba(RAIL, lit, 1.0));
-            draw_triangle(ft, stem_cap, stem, rgba(RAIL_DK, lit, 1.0));
         }
 
         // Bowsprit: a tapered spar running out over the stem toward the horizon.
@@ -331,7 +331,7 @@ impl ShipRenderer {
         let post_hw = w * 0.006;
         let cap_far = far_y - wall_far;
         let cap_near = near_y - wall_near;
-        let stem_cap_y = stem_y - rail_h * 0.55;
+        let stem_cap_y = stem_y - wall_stem;
         // Depth of a deck y in the far(0)→near(1) span; negative past the bow.
         let depth = |y: f32| (y - far_y) / (near_y - far_y);
         // Stanchion height and half-width scale with depth, so the rail grows
