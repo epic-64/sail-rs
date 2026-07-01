@@ -13,6 +13,10 @@
 //!     The bloom and MSAA rows are graphics settings that take effect immediately;
 //!     both rely on render-to-texture / a WebGL2 resolve that the web build can't
 //!     grant, so on the web they show "Not supported" and can't be toggled.
+//!     Every Options value persists across launches (see `crate::save::Settings`):
+//!     the values are flushed to disk on leaving the Options view, and `main`
+//!     restores the lot at boot (fullscreen via `window_conf`, which must know
+//!     before the window opens).
 //!
 //! Keyboard-driven like the rest of the game: Up/Down move the cursor, Left/Right
 //! work the slider, Enter selects, Esc backs out (Options → Main, Main → Resume).
@@ -198,6 +202,22 @@ impl PauseMenu {
         self.feat_density = level.min(crate::isle_features::DENSITY_LEVELS - 1);
     }
 
+    /// Restore the bloom preference (forced off where the build can't run it).
+    pub fn set_bloom(&mut self, on: bool) {
+        self.bloom = on && GRAPHICS_SUPPORTED;
+    }
+
+    /// Restore the MSAA preference (likewise forced off where unsupported).
+    pub fn set_msaa(&mut self, on: bool) {
+        self.msaa = on && GRAPHICS_SUPPORTED;
+    }
+
+    /// Sync the menu's record of the window state to how the window actually
+    /// launched (macroquad offers no getter; see the `fullscreen` field).
+    pub fn set_fullscreen_state(&mut self, on: bool) {
+        self.fullscreen = on;
+    }
+
     /// Raise the menu, always opening on the main view with the cursor at the top.
     pub fn open(&mut self) {
         self.open = true;
@@ -207,7 +227,26 @@ impl PauseMenu {
 
     /// Handle one frame of input while the menu is up. Returns the action the main
     /// loop should take. The master-volume slider writes straight to `sounds`.
+    /// The Options values are persisted the moment the Options view is left (see
+    /// `crate::save::Settings`), batching a session's tweaks into a single write so
+    /// the audio and graphics preferences survive a relaunch.
     pub fn handle_input(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
+        let was_options = self.view == View::Options;
+        let action = self.handle_input_inner(sounds, touch);
+        // Leaving Options (the only exit is back to Main) flushes the current values.
+        if was_options && self.view != View::Options {
+            crate::save::store_settings(&crate::save::Settings {
+                feat_density: Some(self.feat_density),
+                volume: Some(sounds.master()),
+                bloom: Some(self.bloom),
+                msaa: Some(self.msaa),
+                fullscreen: Some(self.fullscreen),
+            });
+        }
+        action
+    }
+
+    fn handle_input_inner(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
         let mut nav = Nav::read(touch);
         // Direct taps on rows the last `render` recorded: a click on a menu item /
         // toggle focuses it and presses it (so it acts like the d-pad's ✓), and a

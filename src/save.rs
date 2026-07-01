@@ -30,8 +30,8 @@ use crate::tavern::SpecialItem;
 /// The storage key (a `localStorage` entry on the web, a `<KEY>.sav` file natively).
 const KEY: &str = "sailrs_save";
 /// A separate key for global preferences that aren't voyage state (so they survive a
-/// change of world and don't ride the per-seed save). Currently just the scenery
-/// density level (the pause-menu performance slider).
+/// change of world and don't ride the per-seed save): the audio and graphics
+/// settings from the pause menu's Options (see [`Settings`]).
 const SETTINGS_KEY: &str = "sailrs_settings";
 /// Marks that the captain has seen the guide at least once, so it only pops up by
 /// itself on a first voyage (see `crate::guide`). A global flag, not voyage state:
@@ -301,14 +301,102 @@ pub fn clear() {
     backend::remove(KEY);
 }
 
-/// Persist the scenery-density level (a global preference, see [`SETTINGS_KEY`]).
-pub fn store_feat_density(level: usize) {
-    backend::write(SETTINGS_KEY, &level.to_string());
+// --- Global settings (the pause menu's audio + graphics preferences) ----------
+
+/// First line of the settings blob; bumped if the format changes. The pre-v1
+/// settings file was a bare scenery-density number; [`Settings::parse`] still
+/// reads that, so an old file keeps its density preference.
+const SETTINGS_MAGIC: &str = "sailrs-settings-v1";
+
+/// The persisted preferences, one field per Options row that should outlive a
+/// launch. Every field is optional: `None` means the stored blob doesn't carry it
+/// (an older file, a hand-edited one, or no file at all), so the caller keeps its
+/// built-in default rather than being forced onto ours.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Settings {
+    /// Scenery-density level (the performance slider).
+    pub feat_density: Option<usize>,
+    /// Master volume, 0..1.
+    pub volume: Option<f32>,
+    /// Post-process bloom (native only; forced off on the web regardless).
+    pub bloom: Option<bool>,
+    /// 4x MSAA on the scene (native only, likewise).
+    pub msaa: Option<bool>,
+    /// Whether the window opens full-screen (applied by `window_conf`).
+    pub fullscreen: Option<bool>,
 }
 
-/// Read the saved scenery-density level, if one was stored and parses.
-pub fn load_feat_density() -> Option<usize> {
-    backend::read(SETTINGS_KEY).and_then(|s| s.trim().parse().ok())
+impl Settings {
+    /// Serialise to the same line-based `key=value` text the voyage save uses.
+    /// Only the fields that are `Some` are written, so a partial record
+    /// round-trips as itself.
+    fn serialize(&self) -> String {
+        let mut o = String::new();
+        o.push_str(SETTINGS_MAGIC);
+        o.push('\n');
+        if let Some(v) = self.feat_density {
+            kv(&mut o, "density", &v.to_string());
+        }
+        if let Some(v) = self.volume {
+            kv(&mut o, "volume", &v.to_string());
+        }
+        for (key, val) in [("bloom", self.bloom), ("msaa", self.msaa), ("fullscreen", self.fullscreen)] {
+            if let Some(v) = val {
+                kv(&mut o, key, if v { "1" } else { "0" });
+            }
+        }
+        o
+    }
+
+    /// Parse leniently: every line stands alone, and an unknown or malformed one
+    /// is skipped, so a settings file from another build keeps whatever it can.
+    /// A blob without the magic header is read as the legacy format (a bare
+    /// scenery-density number); anything else parses to all-defaults.
+    fn parse(s: &str) -> Settings {
+        let mut lines = s.lines();
+        if lines.next().map(str::trim) != Some(SETTINGS_MAGIC) {
+            return Settings {
+                feat_density: s.trim().parse().ok(),
+                ..Settings::default()
+            };
+        }
+        let mut out = Settings::default();
+        for line in lines {
+            let Some((key, val)) = line.trim().split_once('=') else {
+                continue;
+            };
+            match key {
+                "density" => out.feat_density = val.parse().ok(),
+                "volume" => out.volume = val.parse().ok(),
+                "bloom" => out.bloom = parse_flag(val),
+                "msaa" => out.msaa = parse_flag(val),
+                "fullscreen" => out.fullscreen = parse_flag(val),
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// A settings boolean: exactly "1" or "0"; anything else is treated as absent.
+fn parse_flag(v: &str) -> Option<bool> {
+    match v {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Persist the global preferences (see [`SETTINGS_KEY`]).
+pub fn store_settings(s: &Settings) {
+    backend::write(SETTINGS_KEY, &s.serialize());
+}
+
+/// Read the saved preferences; every field the store doesn't carry is `None`.
+pub fn load_settings() -> Settings {
+    backend::read(SETTINGS_KEY)
+        .map(|t| Settings::parse(&t))
+        .unwrap_or_default()
 }
 
 /// Whether the captain has already been shown the guide on a previous launch.
@@ -675,6 +763,45 @@ mod tests {
             .join("\n");
         let back = Save::deserialize(&stripped).expect("should parse");
         assert_eq!(back.gs.items, Inventory::default());
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let s = Settings {
+            feat_density: Some(3),
+            volume: Some(0.4),
+            bloom: Some(false),
+            msaa: Some(true),
+            fullscreen: Some(false),
+        };
+        assert_eq!(Settings::parse(&s.serialize()), s);
+    }
+
+    #[test]
+    fn partial_settings_round_trip_leaving_the_rest_absent() {
+        let s = Settings {
+            volume: Some(0.7),
+            ..Settings::default()
+        };
+        assert_eq!(Settings::parse(&s.serialize()), s);
+    }
+
+    #[test]
+    fn legacy_bare_density_settings_still_read() {
+        // The pre-v1 settings file was just the density level as a bare number.
+        let s = Settings::parse("2");
+        assert_eq!(s.feat_density, Some(2));
+        assert_eq!(s.volume, None);
+        assert_eq!(s.fullscreen, None);
+    }
+
+    #[test]
+    fn garbage_settings_parse_to_defaults() {
+        assert_eq!(Settings::parse("not a setting"), Settings::default());
+        assert_eq!(
+            Settings::parse("sailrs-settings-v1\nvolume=loud\nbloom=maybe\n"),
+            Settings::default()
+        );
     }
 
     #[test]

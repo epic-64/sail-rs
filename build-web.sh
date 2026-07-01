@@ -74,8 +74,13 @@ case "${1:-}" in
     echo ">> serving http://127.0.0.1:8080  (Ctrl-C to stop)"
     if command -v basic-http-server >/dev/null 2>&1; then
       exec basic-http-server -a 127.0.0.1:8080 dist
-    else
+    elif command -v python3 >/dev/null 2>&1; then
+      exec python3 -m http.server 8080 --directory dist
+    elif command -v python >/dev/null 2>&1; then
       exec python -m http.server 8080 --directory dist
+    else
+      echo "!! no web server found (install basic-http-server or python3)" >&2
+      exit 1
     fi
     ;;
 esac
