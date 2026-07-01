@@ -479,7 +479,10 @@ impl ShipRenderer {
         // Only the treads and the inboard carriage face the eye; the risers
         // face the bow. The sloped handrail pokes above the platform edge, so
         // the flight reads even where its top treads are rightly hidden.
-        {
+        // Deferred until the waist walls and railing are down: the flight
+        // stands inboard of them, so it must paint over the starboard wall,
+        // never hide behind it.
+        let companion_stairs = || {
             let (x0, x1) = (2.0f32, 3.3); // inboard / outboard edges
             let steps = 6;
             let run = 4.0; // fore-aft reach of the flight
@@ -530,7 +533,7 @@ impl ShipRenderer {
                 let th = 0.07 * s;
                 quad(a, b, vec2(b.x, b.y + th), vec2(a.x, a.y + th), board_col);
             }
-        }
+        };
 
         // The rest of the woodwork draws in two depth phases around the
         // quarterdeck floor: everything at waist level first, then the platform
@@ -660,10 +663,12 @@ impl ShipRenderer {
             }
         };
 
-        // Waist level: shadow on its planks, then its walls and rails.
+        // Waist level: shadow on its planks, then its walls and rails, then the
+        // companion stairs over them (the flight is inboard of the walls).
         mast_shadow(-14.5, QDECK_BREAK);
         bulwarks(false);
         railing(false);
+        companion_stairs();
 
         // --- Deck cargo: lashed crates riding the waist, drawn far → near so
         // nearer crates overlap those behind. Each is a flat-shaded box: side
