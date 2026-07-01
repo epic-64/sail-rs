@@ -241,30 +241,50 @@ impl ShipRenderer {
         }
 
         // Foredeck: the planking carries on past the far edge and pinches to the
-        // stemhead, a fan of converging triangles forming the pointed bow.
+        // stemhead, a fan of converging triangles forming the pointed bow. Same
+        // plank count and tone parity as the main deck, so every seam and board
+        // continues straight across the shared far edge.
         let stem = sway(cx, stem_y);
-        let fore_planks = 8;
-        for i in 0..fore_planks {
-            let u0 = i as f32 / fore_planks as f32 * 2.0 - 1.0;
-            let u1 = (i + 1) as f32 / fore_planks as f32 * 2.0 - 1.0;
+        for i in 0..planks {
+            let u0 = i as f32 / planks as f32 * 2.0 - 1.0;
+            let u1 = (i + 1) as f32 / planks as f32 * 2.0 - 1.0;
             let a = sway(cx + u0 * far_hw, far_y);
             let b = sway(cx + u1 * far_hw, far_y);
             // Slightly darker than the main deck so the raked foredeck reads apart.
-            let tone = if i % 2 == 0 { DECK_B } else { DECK_A };
+            let tone = if i % 2 == 0 { DECK_A } else { DECK_B };
             draw_triangle(a, b, stem, rgba(tone, 0.92 * lit, 1.0));
         }
 
-        // Bulwarks: a raised rail up each side, darker on the inboard face.
+        // Bulwarks: a solid planked wall up each side. Its height grows with
+        // nearness the way the deck's width does, so the wall stands waist-high
+        // amidships and towers by the helm instead of thinning to a fence line.
+        // Shaded apart from the sunlit deck, with strake seams so it reads as a
+        // built wall rather than a flat band.
         let rail_h = h * 0.10;
+        let wall_far = rail_h * 0.45; // wall height at the bow end of the side
+        let wall_near = rail_h * 1.6; // ...towering by the helm
         for side in [-1.0f32, 1.0] {
             let fb = sway(cx + side * far_hw, far_y);
             let nb = sway(cx + side * near_hw, near_y);
-            let ft = sway(cx + side * far_hw, far_y - rail_h * 0.5);
-            let nt = sway(cx + side * near_hw, near_y - rail_h);
-            quad(fb, nb, nt, ft, rgba(RAIL, lit, 1.0));
-            // A thin cap line on top of the rail.
-            let fc = sway(cx + side * far_hw * 1.04, far_y - rail_h * 0.5);
-            let nc = sway(cx + side * near_hw * 1.02, near_y - rail_h);
+            let ft = sway(cx + side * far_hw, far_y - wall_far);
+            let nt = sway(cx + side * near_hw, near_y - wall_near);
+            quad(fb, nb, nt, ft, rgba(RAIL, 0.82 * lit, 1.0));
+            // Strakes: seam lines along the inboard face.
+            for f in [0.34f32, 0.67] {
+                let s0 = sway(cx + side * far_hw, far_y - wall_far * f);
+                let s1 = sway(cx + side * near_hw, near_y - wall_near * f);
+                draw_line(
+                    s0.x,
+                    s0.y,
+                    s1.x,
+                    s1.y,
+                    (h * 0.0022).max(1.0),
+                    rgba(RAIL_DK, 0.9 * lit, 1.0),
+                );
+            }
+            // A thin cap line on top of the wall.
+            let fc = sway(cx + side * far_hw * 1.04, far_y - wall_far);
+            let nc = sway(cx + side * near_hw * 1.02, near_y - wall_near);
             quad(ft, nt, nc, fc, rgba(RAIL_DK, lit, 1.0));
         }
 
@@ -273,7 +293,7 @@ impl ShipRenderer {
         let stem_cap = sway(cx, stem_y - rail_h * 0.55);
         for side in [-1.0f32, 1.0] {
             let fb = sway(cx + side * far_hw, far_y);
-            let ft = sway(cx + side * far_hw, far_y - rail_h * 0.5);
+            let ft = sway(cx + side * far_hw, far_y - wall_far);
             // Outer (lit) face down to the waterline, then the capped top edge.
             quad(fb, ft, stem_cap, stem, rgba(RAIL, lit, 1.0));
             draw_triangle(ft, stem_cap, stem, rgba(RAIL_DK, lit, 1.0));
@@ -309,8 +329,8 @@ impl ShipRenderer {
         let posts = 8; // along the main deck side (far corner → helm)
         let fore_posts = 4; // up the foredeck (stem → far corner)
         let post_hw = w * 0.006;
-        let cap_far = far_y - rail_h * 0.5;
-        let cap_near = near_y - rail_h;
+        let cap_far = far_y - wall_far;
+        let cap_near = near_y - wall_near;
         let stem_cap_y = stem_y - rail_h * 0.55;
         // Depth of a deck y in the far(0)→near(1) span; negative past the bow.
         let depth = |y: f32| (y - far_y) / (near_y - far_y);
@@ -652,8 +672,8 @@ impl ShipRenderer {
             // A point atop the railing cap at fore-aft fraction v (0=bow, 1=helm).
             let rail_top = |side: f32, v: f32| -> Vec2 {
                 let hw = far_hw + (near_hw - far_hw) * v;
-                let cap_far = far_y - rail_h * 0.5;
-                let cap_near = near_y - rail_h;
+                let cap_far = far_y - rail_h * 0.45;
+                let cap_near = near_y - rail_h * 1.6;
                 let cap = cap_far + (cap_near - cap_far) * v;
                 // Sit a touch above the cap, on the stanchion tops.
                 sway(cx + side * hw, cap - rail_h * (0.35 + 0.7 * v) * 0.9)
