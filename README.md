@@ -1,7 +1,5 @@
 # sail-rs
 
-test
-
 A first-person age-of-sail trading game — sail a low-poly ship across a procedurally
 generated archipelago, trade goods between ports, run haulage contracts, wager on
 races, and scoop salvage from the swell. A Rust + [macroquad](https://github.com/not-fl3/macroquad)
