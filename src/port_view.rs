@@ -2,7 +2,7 @@
 //! docking handshake from `client.SailingView`).
 //!
 //! Sail a port within its dock range with the bow pointed at it and the sails
-//! struck, press **Space**, and the captain ties up: the world keeps running
+//! furled, press **Space**, and the captain ties up: the world keeps running
 //! underneath while a parchment board opens over it. The board has three tabs:
 //!
 //!   - **Market** — buy and sell the seven goods at this port's deterministic
@@ -81,7 +81,7 @@ impl Harbor {
             .map(|p| p.id);
     }
 
-    /// Tie up at the dockable port (Space, sails struck). Returns true if docked.
+    /// Tie up at the dockable port (Space, sails furled). Returns true if docked.
     pub fn try_dock(&mut self, gs: &mut GameState) -> bool {
         if let Some(id) = self.dockable {
             gs.location = Location::Docked(id);
@@ -1187,7 +1187,7 @@ impl PortScreen {
             ry += step + gap();
             draw_text("Set sail and the rival draws up alongside.", x, ry, fs_small() as f32, dim_ink());
             ry += line_h(fs_small());
-            draw_text("Heave to, then raise sail to start level.", x, ry, fs_small() as f32, dim_ink());
+            draw_text("Heave to, then deploy sail to start level.", x, ry, fs_small() as f32, dim_ink());
             ry += line_h(fs_small()) + gap();
             let focused = self.focus == Focus::RaceWithdraw;
             button(x, ry, w.min(btn_wide()), chip_h(), "Abandon race (stake refunded)", focused);
@@ -1556,13 +1556,13 @@ impl PortScreen {
 }
 
 /// Render the "press Space to dock" call-to-action when a port is in range,
-/// drawn in screen space over the sea. `sail_struck` gates the action text.
+/// drawn in screen space over the sea. `sail_furled` gates the action text.
 /// `race_target` is the finish-line island of a race in progress (if any): we
-/// suppress the prompt there so a novice doesn't strike sail short of the line.
+/// suppress the prompt there so a novice doesn't furl sail short of the line.
 pub fn render_prompt(
     harbor: &Harbor,
     world: &World,
-    sail_struck: bool,
+    sail_furled: bool,
     race_target: Option<i32>,
     w: f32,
     h: f32,
@@ -1571,15 +1571,15 @@ pub fn render_prompt(
     if harbor.is_open() {
         return;
     }
-    // Don't urge "strike sail to enter port" at the very island we're racing to.
+    // Don't urge "furl sail to enter port" at the very island we're racing to.
     if race_target == Some(id) {
         return;
     }
     let name = &world.islands[id as usize].name;
-    let msg = if sail_struck {
+    let msg = if sail_furled {
         format!("Press  Space  to dock at {name}")
     } else {
-        format!("Strike sail (S) to enter {name}")
+        format!("Furl sail (S) to enter {name}")
     };
     // Drawn over the open sea (not the parchment board), so it keeps the larger
     // title size to catch the eye; sizes/spacing still come from `style`.

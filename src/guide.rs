@@ -38,7 +38,7 @@ const PAGES: &[GuidePage] = &[
              your ship at the shipyard until she outruns any sea.",
             "The helm at a glance:",
             "\u{2022} Steer with A/D or the left and right arrows.",
-            "\u{2022} Raise and lower sail with W/S (or up/down).",
+            "\u{2022} Deploy and furl sail with W/S (or up/down).",
             "\u{2022} Press G at any time to reopen this guide for a closer read.",
         ],
     },

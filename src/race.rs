@@ -164,7 +164,7 @@ pub fn reached(kin: &Kinematics, island: &Island) -> bool {
 
 /// Place the rival right alongside the player at the off: a short way abeam, dead
 /// in the water, bow already pointed at the mark. The player only has to heave to
-/// (sails struck, dead slow) to arm the start. (`SailingView.rivalStart`.)
+/// (sails furled, dead slow) to arm the start. (`SailingView.rivalStart`.)
 pub fn rival_start(kin: &Kinematics, target: &Island, gap: f32) -> Kinematics {
     let to_target = target.pos - kin.pos;
     let len = to_target.length();

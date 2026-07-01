@@ -495,6 +495,9 @@ pub struct Stats {
     /// Times the captain has flipped open the log (toggled with L in `main`). Drives
     /// the checklist's "inspect the captain's log" step.
     pub log_opened: u32,
+    /// Times the captain has deployed full sail (the topmost notch, set in `main`).
+    /// Drives the checklist's "fully open sails" step.
+    pub sails_fully_opened: u32,
 }
 
 impl GameState {
