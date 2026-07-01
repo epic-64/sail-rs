@@ -30,7 +30,6 @@ use std::f32::consts::TAU;
 
 // --- Rig trim feel (ported from SailingView) ---------------------------------
 const SAIL_PANELS: usize = 8; // vertical cloth panels the sail is built from
-const PANEL_OVERLAP: f32 = 1.75; // each strip wider than its slot so neighbours overlap
 const BELLY_DEPTH: f32 = 0.37; // deepest draft, as a fraction of sail width
 const FLAP_HZ: f32 = 1.6; // luff flutter rate
 const FLAP_WAVES: f32 = 1.6; // ripple crests across the sail at once
@@ -585,12 +584,21 @@ impl ShipRenderer {
             draw_line(head.x, head.y, tip.x, tip.y, thick, rgba(ROPE, lit, 1.0));
         }
 
-        // --- Sail panels, drawn back-to-front by depth -------------------------
-        // Drawn *before* the spars so the mast and yard (at the rig's z≈0 plane,
-        // nearest the viewer) always part the cloth instead of the cloth painting
-        // over them.
+        // --- Sail panels, a continuous mesh drawn back-to-front by depth -------
+        // Adjacent panels share their seam vertices exactly, so the cloth reads
+        // as one watertight surface from any brace angle instead of overlapping
+        // strips shingling at a slant. Drawn *before* the spars so the mast and
+        // yard (at the rig's z≈0 plane, nearest the viewer) always part the
+        // cloth instead of the cloth painting over them.
         let n = SAIL_PANELS;
-        let half_strip = (PANEL_OVERLAP / n as f32) * 0.5; // overlapping half-width in u
+        // The corner geometry at each of the n+1 seams: (head, foot), computed
+        // once so both panels flanking a seam use the very same points.
+        let seams: Vec<((f32, f32), (f32, f32))> = (0..=n)
+            .map(|j| {
+                let u = j as f32 / n as f32 - 0.5;
+                (braced(u, panel_z(u, 0.0)), braced(u, panel_z(u, 1.0)))
+            })
+            .collect();
         let mut order: Vec<usize> = (0..n).collect();
         let panel_u = |i: usize| (i as f32 + 0.5) / n as f32 - 0.5;
         order.sort_by(|&a, &b| {
@@ -602,13 +610,9 @@ impl ShipRenderer {
 
         for &i in &order {
             let u = panel_u(i);
-            let ul = u - half_strip;
-            let ur = u + half_strip;
             // Head corners ride the yard's plane; foot corners carry the full belly.
-            let (ltx, ltz) = braced(ul, panel_z(ul, 0.0));
-            let (rtx, rtz) = braced(ur, panel_z(ur, 0.0));
-            let (lbx, lbz) = braced(ul, panel_z(ul, 1.0));
-            let (rbx, rbz) = braced(ur, panel_z(ur, 1.0));
+            let ((ltx, ltz), (lbx, lbz)) = seams[i];
+            let ((rtx, rtz), (rbx, rbz)) = seams[i + 1];
             let tl = project(ltx, sail_top, ltz);
             let tr = project(rtx, sail_top, rtz);
             let br = project(rbx, sail_bot, rbz);
@@ -681,11 +685,9 @@ impl ShipRenderer {
             let thick = (h * 0.0028).max(1.0);
             let sag = h * 0.035; // the rope's own weight bows the run a little
             let segs = 8;
-            // The cloth's true outer edge: the outermost panel's strip reaches
-            // past u = 0.5 by the overlap's half-width (see half_strip).
-            let edge_u = 0.5 + (PANEL_OVERLAP - 1.0) * 0.5 / SAIL_PANELS as f32;
             for side in [-1.0f32, 1.0] {
-                let u = side * edge_u;
+                // The clew: the sail mesh's outermost seam at the foot.
+                let u = side * 0.5;
                 let (kx, kz) = braced(u, panel_z(u, 1.0));
                 let clew = project(kx, sail_bot, kz);
                 let foot = rail_top(side, 0.74); // belayed well astern
