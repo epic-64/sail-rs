@@ -58,8 +58,9 @@ const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
 const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
 // Tarred standing rigging (shrouds + ratlines).
 const ROPE: [f32; 3] = [74.0, 60.0, 44.0];
-const WHEEL_C: [f32; 3] = [134.0, 98.0, 58.0];
-const WHEEL_DK: [f32; 3] = [96.0, 68.0, 40.0];
+// Kept darker than the deck planks so the rim reads against them.
+const WHEEL_C: [f32; 3] = [104.0, 74.0, 44.0];
+const WHEEL_DK: [f32; 3] = [76.0, 52.0, 30.0];
 // Deck cargo: lashed crates. Top catches the sky, the side faces fall to shade.
 const CRATE_TOP: [f32; 3] = [182.0, 148.0, 96.0];
 const CRATE_MID: [f32; 3] = [150.0, 116.0, 70.0];
@@ -278,6 +279,27 @@ impl ShipRenderer {
             draw_triangle(ft, stem_cap, stem, rgba(RAIL_DK, lit, 1.0));
         }
 
+        // Bowsprit: a tapered spar running out over the stem toward the horizon.
+        // It anchors the forestay (see draw_rig) and closes the ship's profile so
+        // the prow reads as a ship's, not a raft's. Two-tone halves for round form,
+        // matching the mast.
+        {
+            let base_y = stem_y - rail_h * 0.25;
+            let tip_y = stem_y - h * 0.115; // reaches out past the stemhead
+            let bw = w * 0.0065; // half-width at the knightheads
+            let tw = bw * 0.45; // taper to the tip
+            let b0 = sway(cx - bw, base_y);
+            let b1 = sway(cx + bw, base_y);
+            let t1 = sway(cx + tw, tip_y);
+            let t0 = sway(cx - tw, tip_y);
+            let mb = sway(cx, base_y);
+            let mt = sway(cx, tip_y);
+            draw_triangle(b0, mb, mt, rgba(SPAR, lit, 1.0));
+            draw_triangle(b0, mt, t0, rgba(SPAR, lit, 1.0));
+            draw_triangle(mb, b1, t1, rgba(SPAR_DK, lit, 1.0));
+            draw_triangle(mb, t1, mt, rgba(SPAR_DK, lit, 1.0));
+        }
+
         // Open railing: stanchions standing along each topside, joined by a cap
         // rail above the bulwark, so the deck reads as guarded rather than a bare
         // wall. The sheer runs the whole side, from the stemhead forward along the
@@ -417,8 +439,8 @@ impl ShipRenderer {
     /// hub, standing proud of the deck at the bottom-centre.
     fn draw_wheel(&self, sway: &impl Fn(f32, f32) -> Vec2, lit: f32, h: f32, w: f32) {
         let cx = w * 0.5;
-        let cy = h * 1.0; // pulled back with the helm, half off the bottom edge
-        let r = h * 0.095;
+        let cy = h * 0.99; // pulled back with the helm, half off the bottom edge
+        let r = h * 0.12;
         let a = self.wheel_angle;
 
         // Rim: a ring approximated by a fan of short trapezoids.
@@ -513,19 +535,35 @@ impl ShipRenderer {
         let sail_top = yard_y;
         let sail_bot = yard_y - sail_h * furl;
 
-        // The out-of-plane offset of a panel edge at across-fraction `u` (-0.5..0.5).
-        let panel_z = |u: f32| -> f32 {
-            let belly = depth * (1.0 - (2.0 * u).powi(2)); // parabolic bulge
+        // The out-of-plane offset of a panel edge at across-fraction `u` (-0.5..0.5)
+        // and down-fraction `v` (0 = the head, laced to the yard, 1 = the foot).
+        // The belly and the flog both fade to nothing at the head, so the cloth
+        // stays pinned along the yard and swings out toward the free foot.
+        let panel_z = |u: f32, v: f32| -> f32 {
+            let belly = depth * (1.0 - (2.0 * u).powi(2)) * v.powf(0.6); // parabolic bulge
             let wave = (phase - u * FLAP_WAVES * TAU).sin();
-            let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs());
+            let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
             -stand_off + belly + flog
         };
-        // Rotate a panel edge (across x0, out-of-plane z0) about the mast (the brace).
-        let braced = |u: f32| -> (f32, f32) {
+        // Rotate a panel edge (across `u`, out-of-plane `z0`) about the mast (the brace).
+        let braced = |u: f32, z0: f32| -> (f32, f32) {
             let x0 = u * sail_w;
-            let z0 = panel_z(u);
             (x0 * cb + z0 * sb, -x0 * sb + z0 * cb)
         };
+
+        // --- Forestay: the rope from the masthead down over the bow to the
+        // bowsprit tip (matching draw_deck's spar). The one piece of standing
+        // rigging forward of the canvas, so it draws *before* the sail and the
+        // cloth hides its upper run; only the lower reach to the bow shows.
+        {
+            let nod = pitch_ang * h * 0.72;
+            let far_y = h * 0.76 - nod;
+            let stem_y = far_y - h * 0.09;
+            let tip = sway(cx, stem_y - h * 0.115);
+            let head = project(0.0, mast_top, 0.0);
+            let thick = (h * 0.0028).max(1.0);
+            draw_line(head.x, head.y, tip.x, tip.y, thick, rgba(ROPE, lit, 1.0));
+        }
 
         // --- Sail panels, drawn back-to-front by depth -------------------------
         // Drawn *before* the spars so the mast and yard (at the rig's z≈0 plane,
@@ -536,9 +574,9 @@ impl ShipRenderer {
         let mut order: Vec<usize> = (0..n).collect();
         let panel_u = |i: usize| (i as f32 + 0.5) / n as f32 - 0.5;
         order.sort_by(|&a, &b| {
-            // Farthest (most negative z at the panel centre) first.
-            let za = braced(panel_u(a)).1;
-            let zb = braced(panel_u(b)).1;
+            // Farthest (most negative z at the panel's belly) first.
+            let za = braced(panel_u(a), panel_z(panel_u(a), 0.7)).1;
+            let zb = braced(panel_u(b), panel_z(panel_u(b), 0.7)).1;
             za.partial_cmp(&zb).unwrap()
         });
 
@@ -546,12 +584,15 @@ impl ShipRenderer {
             let u = panel_u(i);
             let ul = u - half_strip;
             let ur = u + half_strip;
-            let (lx, lz) = braced(ul);
-            let (rx, rz) = braced(ur);
-            let tl = project(lx, sail_top, lz);
-            let tr = project(rx, sail_top, rz);
-            let br = project(rx, sail_bot, rz);
-            let bl = project(lx, sail_bot, lz);
+            // Head corners ride the yard's plane; foot corners carry the full belly.
+            let (ltx, ltz) = braced(ul, panel_z(ul, 0.0));
+            let (rtx, rtz) = braced(ur, panel_z(ur, 0.0));
+            let (lbx, lbz) = braced(ul, panel_z(ul, 1.0));
+            let (rbx, rbz) = braced(ur, panel_z(ur, 1.0));
+            let tl = project(ltx, sail_top, ltz);
+            let tr = project(rtx, sail_top, rtz);
+            let br = project(rbx, sail_bot, rbz);
+            let bl = project(lbx, sail_bot, lbz);
             // The belly catches the light amidships and falls to shade at the edges;
             // a panel braced edge-on (small horizontal span) also dims.
             let belly_lit = 1.0 - 0.28 * fill * (2.0 * u).powi(2);
@@ -565,8 +606,8 @@ impl ShipRenderer {
         // --- Yard: a spar along the braced across-axis at the sail's head -------
         // Drawn over the panels so it crosses ahead of the cloth it carries.
         {
-            let (lx, lz) = braced(-0.54);
-            let (rx, rz) = braced(0.54);
+            let (lx, lz) = braced(-0.54, -stand_off);
+            let (rx, rz) = braced(0.54, -stand_off);
             let th = h * 0.012;
             let a = project(lx, sail_top + th, lz);
             let b = project(rx, sail_top + th, rz);
@@ -619,9 +660,9 @@ impl ShipRenderer {
             };
             let thick = (h * 0.0028).max(1.0);
             // Fore-aft positions the shrouds land on the rail, set well abaft the
-            // mast (which steps in around v ≈ 0.13) so the fan stands nearer the
-            // viewer.
-            let feet_v = [0.16f32, 0.31, 0.46];
+            // mast (which steps in around v ≈ 0.13) so the fan leans out to the
+            // sides of the view and frames the sail instead of crossing it.
+            let feet_v = [0.40f32, 0.58, 0.76];
             for side in [-1.0f32, 1.0] {
                 // The masthead: all shrouds on a side gather at the very top.
                 let hounds = project(side * w * 0.011, mast_top, 0.0);

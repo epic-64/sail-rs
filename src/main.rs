@@ -80,11 +80,27 @@ fn window_conf() -> Conf {
         window_title: "sail-rs".to_owned(),
         window_width: 1280,
         window_height: 720,
-        fullscreen: true, // launch full-screen (toggle in the pause menu's Options)
+        fullscreen: launch_fullscreen(), // toggle in the pause menu's Options
         high_dpi: true,
         sample_count,
         ..Default::default()
     }
+}
+
+/// Whether the window opens full-screen: the saved preference from the pause
+/// menu's Options (defaulting on), unless `SAIL_WINDOWED=1` (a native dev
+/// convenience, matching `SAIL_TOUCH`'s style) forces a plain 1280x720 window.
+/// Called by `window_conf` (the choice must be made before the window opens) and
+/// again at boot to sync the pause menu's record of the window state.
+#[cfg(not(target_arch = "wasm32"))]
+fn launch_fullscreen() -> bool {
+    std::env::var_os("SAIL_WINDOWED").is_none()
+        && save::load_settings().fullscreen.unwrap_or(true)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn launch_fullscreen() -> bool {
+    true
 }
 
 #[inline]
@@ -355,11 +371,25 @@ async fn main() {
     // so it persists too rather than reallocating them on every new world.
     let mut sounds = sound::SoundBank::load().await;
     let mut pause = pause_menu::PauseMenu::new();
-    // Apply the saved scenery-density preference (the performance slider), if any, so
-    // it persists across launches and worlds (see `save::store_feat_density`).
-    if let Some(level) = save::load_feat_density() {
+    // Apply the saved audio/graphics preferences (see `save::Settings`), so the
+    // Options values persist across launches and worlds. Anything the store doesn't
+    // carry keeps its built-in default. Fullscreen was already applied by
+    // `window_conf` (it must be known before the window opens); here the menu's
+    // record is synced to how the window actually launched.
+    let settings = save::load_settings();
+    if let Some(level) = settings.feat_density {
         pause.set_feat_density(level);
     }
+    if let Some(v) = settings.volume {
+        sounds.set_master(v);
+    }
+    if let Some(on) = settings.bloom {
+        pause.set_bloom(on);
+    }
+    if let Some(on) = settings.msaa {
+        pause.set_msaa(on);
+    }
+    pause.set_fullscreen_state(launch_fullscreen());
     let mut bloom = bloom::Bloom::new();
 
     // Replace macroquad's default ProggyClean (no symbols, blurry when scaled) with
@@ -780,11 +810,11 @@ async fn run_game(
         }
 
         // The captain may have moved the scenery-density slider in the pause menu:
-        // rebuild every island's features at the new level and persist the preference.
+        // rebuild every island's features at the new level. (The preference itself
+        // is persisted by the menu, along with the other Options values.)
         if pause.feat_density() != feat_density_level {
             feat_density_level = pause.feat_density();
             features = regen_features(feat_density_level);
-            save::store_feat_density(feat_density_level);
         }
 
         // Dev aid (needs dev mode, see the "banana" cheat): hold F to fast-forward the
