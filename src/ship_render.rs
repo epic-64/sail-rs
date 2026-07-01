@@ -781,15 +781,16 @@ impl ShipRenderer {
             draw_triangle(tl, br, bl, col);
         }
 
-        // --- Sheets: the two ropes working the sail, one from each clew (the
-        // foot's free corners) hauled aft to the railing well astern. The clew
-        // end rides the same brace/belly/luff transform as the cloth's own
-        // panels, so the ropes lead wherever the sail swings and tremble with
-        // it when it flogs. Braced hard on the wind a clew swings abaft the
-        // mast plane; that side's rope must hide behind the spars, so each
-        // rope draws before or after them by its clew's depth.
-        let sheet_thick = (h * 0.0028).max(1.0);
-        let sheets: Vec<(Vec<Vec2>, bool)> = {
+        // --- Running rigging: the ropes led aft to the railing. Each side
+        // carries a sheet from the clew (the foot's free corner) and, belayed
+        // further astern, a brace from the yardarm. The sheet's clew end rides
+        // the same brace/belly/luff transform as the cloth's own panels, so it
+        // leads wherever the sail swings and trembles with it when it flogs;
+        // the brace follows the rigid yard tip. Braced hard on the wind an
+        // attachment swings abaft the mast plane; that rope must hide behind
+        // the spars, so each rope draws before or after them by its end's depth.
+        let rope_thick = (h * 0.0028).max(1.0);
+        let ropes: Vec<(Vec<Vec2>, bool)> = {
             // Recompute the deck's side geometry (matches draw_deck) so the feet
             // sit on the railing as the hull nods.
             let nod = pitch_ang * h * 0.72;
@@ -809,35 +810,41 @@ impl ShipRenderer {
             };
             let sag = h * 0.035; // the rope's own weight bows the run a little
             let segs = 8;
-            [-1.0f32, 1.0]
-                .iter()
-                .map(|&side| {
-                    // The clew: the sail mesh's outermost seam at the foot.
-                    let u = side * 0.5;
-                    let (kx, kz) = braced(u, panel_z(u, 1.0));
-                    let clew = project(kx, sail_bot, kz);
-                    let foot = rail_top(side, 0.74); // belayed well astern
-                    let pts: Vec<Vec2> = (0..=segs)
-                        .map(|i| {
-                            let t = i as f32 / segs as f32;
-                            let mut p = clew.lerp(foot, t);
-                            p.y += sag * (t * std::f32::consts::PI).sin();
-                            p
-                        })
-                        .collect();
-                    (pts, kz < 0.0)
-                })
-                .collect()
+            // A rope from a rig point (already projected, with its pre-projection
+            // depth `z`) down to the railing at fore-aft fraction `at`.
+            let lead = |top: Vec2, z: f32, side: f32, at: f32| -> (Vec<Vec2>, bool) {
+                let foot = rail_top(side, at);
+                let pts: Vec<Vec2> = (0..=segs)
+                    .map(|i| {
+                        let t = i as f32 / segs as f32;
+                        let mut p = top.lerp(foot, t);
+                        p.y += sag * (t * std::f32::consts::PI).sin();
+                        p
+                    })
+                    .collect();
+                (pts, z < 0.0)
+            };
+            let mut ropes = Vec::new();
+            for &side in &[-1.0f32, 1.0] {
+                // The sheet: from the sail mesh's outermost seam at the foot.
+                let u = side * 0.5;
+                let (kx, kz) = braced(u, panel_z(u, 1.0));
+                ropes.push(lead(project(kx, sail_bot, kz), kz, side, 0.74));
+                // The brace: from the yard's tip (matching the spar's own span).
+                let (ax, az) = braced(side * 0.54, -stand_off);
+                ropes.push(lead(project(ax, sail_top, az), az, side, 0.90));
+            }
+            ropes
         };
-        let draw_sheet = |pts: &[Vec2]| {
+        let draw_rope = |pts: &[Vec2]| {
             for w2 in pts.windows(2) {
-                draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, sheet_thick, rope_col);
+                draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, rope_thick, rope_col);
             }
         };
-        // The rope(s) whose clew lies abaft the mast plane, hidden by the spars.
-        for (pts, behind) in &sheets {
+        // The rope(s) whose rig end lies abaft the mast plane, hidden by the spars.
+        for (pts, behind) in &ropes {
             if *behind {
-                draw_sheet(pts);
+                draw_rope(pts);
             }
         }
 
@@ -879,11 +886,11 @@ impl ShipRenderer {
             draw_triangle(mid0, t1, mid1, lit_r);
         }
 
-        // The remaining sheet(s), their clews riding forward of the mast plane,
-        // drawn nearest so the rope leads over the spars toward the rail.
-        for (pts, behind) in &sheets {
+        // The remaining ropes, their rig ends riding forward of the mast plane,
+        // drawn nearest so they lead over the spars toward the rail.
+        for (pts, behind) in &ropes {
             if !*behind {
-                draw_sheet(pts);
+                draw_rope(pts);
             }
         }
     }
