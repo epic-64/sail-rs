@@ -1614,6 +1614,11 @@ async fn run_game(
             bow_lift,
             // The whole laden hold, so reserved mission goods show on deck too.
             cargo: gs.hold_used(),
+            // The crate physics' inputs: the turn's centrifugal throw and the
+            // wave slam's jolt, so hard weather and hard helm shift the cargo.
+            speed: kin.speed(),
+            yaw_rate: kin.yaw_rate,
+            slam,
         };
         // --- Bow spray ---------------------------------------------------------
         // Foam torn off the bow, drawn *before* the deck so the hull occludes the

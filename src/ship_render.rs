@@ -178,6 +178,67 @@ const CRATE_TOP: [f32; 3] = [182.0, 148.0, 96.0];
 const CRATE_MID: [f32; 3] = [150.0, 116.0, 70.0];
 const CRATE_DK: [f32; 3] = [108.0, 80.0, 46.0];
 
+// --- Deck cargo physics --------------------------------------------------------
+// The crates are heavy and lashed: ordinary sailing never beats their static
+// grip and the pile stands like furniture. What breaks them loose is the
+// extreme stuff: a storm's deck angles, a frontal slam that floats weight off
+// the planks, or the wheel hauled hard over at speed (the turn's centrifugal
+// throw). A loose crate grinds (kinetic friction), slews as it goes, bangs off
+// the bulwarks, the mast, the stairs and its neighbours; a stacked crate holds
+// by less than a lashed one, so it lets go first, and one that slides past its
+// base's edge tips off and tumbles to the deck. All of it is visual-only, in
+// the ship frame the loft draws in; the world simulation never feels it.
+const CRATE_G: f32 = 9.81;
+const CRATE_MU_S: f32 = 0.34; // static grip: tan of the felt deck angle that breaks the lashings
+const CRATE_MU_K: f32 = 0.24; // kinetic: a loose crate grinds to a stop, it doesn't glide
+const TOP_GRIP: f32 = 0.7; // a stack top holds by this fraction of a lashed base's grip
+// The drawn deck angles are kept gentle for the camera's comfort (`DECK_SHARE`
+// of an already-shallow wave slope), far below what the same sea would do to a
+// real deck. The cargo *feels* the sea, not the camera: its tilt is amplified
+// by `CARGO_TILT`, and the turn's centrifugal throw by `CENTRI_GAIN` (standing
+// in for the hard-over heel the visual deck doesn't take). Calibrated against
+// measured motion (see the `storm_calibration` test): a full storm's worst
+// rolls and slams must beat the grip, a working breeze must not come close.
+const CARGO_TILT: f32 = 2.5;
+const CENTRI_GAIN: f32 = 1.5;
+const SLAM_KICK: f32 = 14.0; // m/s² of forward jolt a full frontal slam throws through the deck
+const SLAM_LIGHTEN: f32 = 0.55; // share of weight a full slam floats off the crates
+const CRATE_BOUNCE: f32 = 0.25; // speed kept (reversed) banging off a wall
+const CRATE_SPIN: f32 = 0.6; // yaw per metre slid, scaled by each crate's signed jitter
+const CRATE_STOP: f32 = 0.06; // m/s under which a sliding crate settles
+const RESTOW_RATE: f32 = 0.04; // 1/s the crew ease shifted cargo back to stowage in a calm
+const WALL_GAP: f32 = 0.12; // clearance kept off the bulwark's inboard face
+const MAST_HW: f32 = 0.25; // the mast foot's half-extent crates shove against
+
+/// One crate of deck cargo: its stowage slot, its live pose and motion, and the
+/// per-crate jitter that keeps the pile from letting go all at once. Positions
+/// are ship-frame metres (+x starboard, +z aft), `y` the height of its bottom.
+struct DeckCrate {
+    hw: f32,
+    hd: f32,
+    ht: f32,
+    /// Static-friction jitter: how well this crate's lashings hold.
+    grip: f32,
+    /// Signed yaw tendency while sliding (which way it slews).
+    spin: f32,
+    /// The stowage slot the crew re-stow it toward in a calm.
+    home: (f32, f32),
+    x: f32,
+    z: f32,
+    y: f32,
+    yaw: f32,
+    vx: f32,
+    vz: f32,
+    vy: f32,
+    /// The crate this one is stacked on, if any (always a lower index, so a
+    /// base is stepped before the crates riding it).
+    base: Option<usize>,
+    /// Sliding rather than moving with the deck (or with its base).
+    loose: bool,
+    /// Mid-air, tumbling off a stack.
+    fall: bool,
+}
+
 /// The scene light the ship is shaded by this frame: the same coloured
 /// key/ambient pair the islands and sea take (`OceanRenderer::scene_light`,
 /// already storm-blended, so a gale drains the deck to slate with the water),
@@ -301,6 +362,13 @@ pub struct RigInput {
     /// Units in the hold (sellable cargo plus reserved mission goods, i.e.
     /// `hold_used`): the waist shows one lashed crate per unit.
     pub cargo: i32,
+    /// Speed through the water (m/s) and the hull's yaw rate (rad/s): their
+    /// product is the turn's centrifugal throw on the deck cargo.
+    pub speed: f32,
+    pub yaw_rate: f32,
+    /// Frontal slam this frame, [0,1] (the spray's input): a plunge jolts the
+    /// cargo forward and floats weight off the planks for a moment.
+    pub slam: f32,
 }
 
 /// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
@@ -316,6 +384,11 @@ pub struct ShipRenderer {
     /// instead of painting over the planks. Empty while the deck isn't drawn
     /// (glancing astern), so it then covers nothing.
     deck_silhouette: Vec<Vec2>,
+    /// The deck cargo's live state, stepped by `step_cargo` each frame and
+    /// rebuilt (re-stowed) whenever the hold's unit count changes.
+    crates: Vec<DeckCrate>,
+    /// The hold count `crates` was built for, to notice a change.
+    stowed: i32,
 }
 
 /// Even-odd ray cast: is point `p` inside the (possibly non-convex) polygon `poly`?
@@ -347,7 +420,367 @@ impl ShipRenderer {
             brace_angle: 0.0,
             set: 0.0,
             deck_silhouette: Vec::new(),
+            crates: Vec::new(),
+            stowed: -1,
         }
+    }
+
+    /// Lay out the deck cargo afresh for `target` hold units: one crate per
+    /// unit. Slots fill from the quarterdeck break forward toward the bow (the
+    /// slots nearest the helm are stowed first); sizes and offsets jitter by a
+    /// per-slot hash (`slot_rand`), so the pile reads as stowed by hand yet
+    /// lays out identically for the same count. A first pass lays one crate
+    /// per slot with some rolling a second stacked on top straight away; a
+    /// second pass returns aft to top up the slots left single, so a full hold
+    /// buries the waist two crates deep. The sequence is fixed and only ever
+    /// *extended* by more cargo: crates already stowed keep their slots.
+    fn rebuild_crates(&mut self, target: usize) {
+        self.crates.clear();
+        // Fill-order slots: (hash key, centre x, centre z). Rows march from
+        // just short of the break toward the bow; the columns are shuffled
+        // per row so the pile doesn't fill in tidy stripes.
+        let cols = [-2.4f32, -1.2, 0.0, 1.2]; // clear of the stairs at x 2.0
+        let mut slots: Vec<(u32, f32, f32)> = Vec::new();
+        let mut zrow = 4.2f32;
+        let mut row = 0u32;
+        while zrow > -6.0 {
+            let spin = (slot_rand(row.wrapping_mul(31).wrapping_add(7)) * cols.len() as f32)
+                as usize;
+            for c in 0..cols.len() {
+                let k = row * cols.len() as u32 + c as u32;
+                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
+                let x = cols[(c + spin) % cols.len()] + 0.20 * (j(0) - 0.5);
+                let z = zrow + 0.20 * (j(1) - 0.5);
+                // The mast wants clear deck around its foot.
+                if x.abs() < 0.7 && z.abs() < 1.1 {
+                    continue;
+                }
+                slots.push((k, x, z));
+            }
+            zrow -= 1.1;
+            row += 1;
+        }
+        let crate_at = |k: u32, x: f32, z: f32, hw: f32, hd: f32, ht: f32, y: f32| {
+            let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
+            DeckCrate {
+                hw,
+                hd,
+                ht,
+                grip: 0.85 + 0.3 * j(10),
+                spin: 2.0 * (j(11) - 0.5),
+                home: (x, z),
+                x,
+                z,
+                y,
+                yaw: 0.0,
+                vx: 0.0,
+                vz: 0.0,
+                vy: 0.0,
+                base: None,
+                loose: false,
+                fall: false,
+            }
+        };
+        // The pass-0 crate of each slot, for pass 1 to stack on.
+        let mut base_of: Vec<usize> = Vec::with_capacity(slots.len());
+        for pass in 0..2 {
+            for (si, &(k, x, z)) in slots.iter().enumerate() {
+                if self.crates.len() >= target {
+                    break;
+                }
+                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
+                let (hw, hd) = (0.40 + 0.16 * j(2), 0.35 + 0.15 * j(3));
+                let ht = 0.55 + 0.40 * j(4);
+                let deck = station_at(z).1; // the deck rises toward the bow
+                let stacked_early = j(5) < 0.38;
+                let top = crate_at(
+                    k.wrapping_mul(5).wrapping_add(3),
+                    x + 0.12 * (j(6) - 0.5),
+                    // Jittered only *toward* the eye (never aft of its base),
+                    // so the far-to-near sort always draws it after.
+                    z + 0.06 * j(7),
+                    hw * (0.60 + 0.30 * j(8)),
+                    hd * 0.8,
+                    0.45 + 0.25 * j(9),
+                    deck + ht,
+                );
+                if pass == 0 {
+                    base_of.push(self.crates.len());
+                    self.crates.push(crate_at(k, x, z, hw, hd, ht, deck));
+                    if stacked_early && self.crates.len() < target {
+                        self.crates.push(DeckCrate { base: Some(base_of[si]), ..top });
+                    }
+                } else if !stacked_early {
+                    self.crates.push(DeckCrate { base: Some(base_of[si]), ..top });
+                }
+            }
+        }
+    }
+
+    /// Step the deck cargo's physics for this frame. `roll` / `pitch_ang` are
+    /// the *deck's* tilt (the share of the swell it takes, wind heel folded
+    /// in), so the crates feel exactly the slopes the planks are drawn at.
+    /// Gravity down those slopes, the turn's centrifugal throw and a frontal
+    /// slam's jolt make an acceleration field; a crate holds fast until the
+    /// field beats its static grip, slides under kinetic friction once loose,
+    /// and is fenced by the bulwarks, the quarterdeck riser, the stairs, the
+    /// mast and its neighbours. Stack tops grip less, ride their base while
+    /// they hold, and tumble off its edge when they don't.
+    fn step_cargo(&mut self, rig: &RigInput, roll: f32, pitch_ang: f32, dt: f32) {
+        if self.stowed != rig.cargo {
+            self.rebuild_crates(rig.cargo.max(0) as usize);
+            self.stowed = rig.cargo;
+        }
+        let n = self.crates.len();
+        if n == 0 {
+            return;
+        }
+        let dt = dt.clamp(0.0, 0.05); // a hitch must not explode the pile
+        if dt <= 0.0 {
+            return;
+        }
+        let inv_dt = 1.0 / dt;
+        // Where the crates stand: the slam floats weight off the planks, so
+        // everything holds by less just as the jolt arrives.
+        let g_eff = CRATE_G * (1.0 - SLAM_LIGHTEN * clamp(rig.slam, 0.0, 1.0)).max(0.2);
+        // The deck-plane acceleration field (+x starboard, +z aft): gravity
+        // down the tilted planks (amplified past the camera-gentle drawn tilt,
+        // see CARGO_TILT), the turn's centrifugal throw (a starboard turn
+        // slings cargo to port), and the slam's forward jolt.
+        let ax = CRATE_G * (roll * CARGO_TILT).sin()
+            - rig.speed * rig.yaw_rate * CENTRI_GAIN;
+        let az = CRATE_G * (pitch_ang * CARGO_TILT).sin()
+            - SLAM_KICK * clamp(rig.slam, 0.0, 1.0);
+        let field = (ax * ax + az * az).sqrt();
+
+        let prev: Vec<(f32, f32)> = self.crates.iter().map(|c| (c.x, c.z)).collect();
+        for i in 0..n {
+            // A base is always a lower index, so it has already moved this
+            // frame; copy what its rider needs before borrowing mutably.
+            let carried = self.crates[i].base.map(|b| {
+                let bc = &self.crates[b];
+                (
+                    bc.x,
+                    bc.z,
+                    bc.y + bc.ht,
+                    bc.hw,
+                    bc.hd,
+                    (bc.x - prev[b].0, bc.z - prev[b].1),
+                )
+            });
+            let c = &mut self.crates[i];
+            let hold =
+                CRATE_MU_S * c.grip * if c.base.is_some() { TOP_GRIP } else { 1.0 } * g_eff;
+            if c.fall {
+                // Tumbling off a stack: ballistic to the deck, slewing as it goes.
+                c.vy -= CRATE_G * dt;
+                c.y += c.vy * dt;
+                c.x += c.vx * dt;
+                c.z += c.vz * dt;
+                c.yaw += c.spin * 2.5 * dt;
+                let deck = station_at(c.z).1;
+                if c.y <= deck {
+                    c.y = deck;
+                    c.vy = 0.0;
+                    c.vx *= 0.5;
+                    c.vz *= 0.5;
+                    c.fall = false;
+                    c.home = (c.x, c.z); // re-stowed where it landed, until port
+                }
+                continue;
+            }
+            if let Some((bx, bz, btop, bhw, bhd, (bdx, bdz))) = carried {
+                // Riding a stack: carried by the base while it holds.
+                c.y = btop;
+                if !c.loose {
+                    c.x += bdx;
+                    c.z += bdz;
+                    if field > hold {
+                        c.loose = true;
+                        c.vx = bdx * inv_dt;
+                        c.vz = bdz * inv_dt;
+                    } else if field < hold * 0.5 {
+                        let k = clamp(RESTOW_RATE * dt, 0.0, 1.0);
+                        c.x += (c.home.0 - c.x) * k;
+                        c.z += (c.home.1 - c.z) * k;
+                        c.yaw -= c.yaw * k;
+                    }
+                }
+                if c.loose {
+                    // Kinetic friction drags it toward its base's own motion.
+                    let (rvx, rvz) = (c.vx - bdx * inv_dt, c.vz - bdz * inv_dt);
+                    let rv = (rvx * rvx + rvz * rvz).sqrt();
+                    let (fx, fz) = if rv > 1e-4 { (-rvx / rv, -rvz / rv) } else { (0.0, 0.0) };
+                    c.vx += (ax + fx * CRATE_MU_K * g_eff) * dt;
+                    c.vz += (az + fz * CRATE_MU_K * g_eff) * dt;
+                    c.x += c.vx * dt;
+                    c.z += c.vz * dt;
+                    c.yaw += c.spin * CRATE_SPIN * rv * dt;
+                    if rv < CRATE_STOP && field < hold {
+                        c.loose = false;
+                        c.vx = 0.0;
+                        c.vz = 0.0;
+                    }
+                    // Slid past the base's edge: over it goes.
+                    if (c.x - bx).abs() > bhw || (c.z - bz).abs() > bhd {
+                        c.base = None;
+                        c.fall = true;
+                        c.vy = 0.0;
+                    }
+                }
+                continue;
+            }
+            // On the deck.
+            if !c.loose {
+                if field > hold {
+                    c.loose = true;
+                } else if field < hold * 0.5 {
+                    // Calm: the crew ease shifted cargo back to its stowage.
+                    let k = clamp(RESTOW_RATE * dt, 0.0, 1.0);
+                    c.x += (c.home.0 - c.x) * k;
+                    c.z += (c.home.1 - c.z) * k;
+                    c.yaw -= c.yaw * k;
+                }
+            }
+            if c.loose {
+                let v = (c.vx * c.vx + c.vz * c.vz).sqrt();
+                let (fx, fz) = if v > 1e-4 { (-c.vx / v, -c.vz / v) } else { (0.0, 0.0) };
+                c.vx += (ax + fx * CRATE_MU_K * g_eff) * dt;
+                c.vz += (az + fz * CRATE_MU_K * g_eff) * dt;
+                c.x += c.vx * dt;
+                c.z += c.vz * dt;
+                c.yaw += c.spin * CRATE_SPIN * v * dt;
+                if v < CRATE_STOP && field < hold {
+                    c.loose = false;
+                    c.vx = 0.0;
+                    c.vz = 0.0;
+                }
+            }
+            c.y = station_at(c.z).1;
+        }
+
+        // --- Neighbours: keep grounded crates from interpenetrating -----------
+        // One cheap AABB separation pass (yaw ignored): push overlapping pairs
+        // apart along the shallower axis and kill their approach there. Stack
+        // tops and falling crates are skipped; a top touching its base's top
+        // face doesn't overlap it (strict test). Runs *before* the fences so a
+        // pile pressed against the wall can't be shoved back through it.
+        for i in 0..n {
+            for k in i + 1..n {
+                let (a_ok, b_ok) = {
+                    let (a, b) = (&self.crates[i], &self.crates[k]);
+                    (
+                        a.base.is_none() && !a.fall,
+                        b.base.is_none() && !b.fall,
+                    )
+                };
+                if !a_ok || !b_ok {
+                    continue;
+                }
+                let (l, r) = self.crates.split_at_mut(k);
+                let (a, b) = (&mut l[i], &mut r[0]);
+                if a.y >= b.y + b.ht || b.y >= a.y + a.ht {
+                    continue;
+                }
+                let (dx, dz) = (b.x - a.x, b.z - a.z);
+                let px = a.hw + b.hw - dx.abs();
+                let pz = a.hd + b.hd - dz.abs();
+                if px <= 0.0 || pz <= 0.0 {
+                    continue;
+                }
+                if px < pz {
+                    let s = if dx >= 0.0 { 1.0 } else { -1.0 };
+                    a.x -= s * px * 0.5;
+                    b.x += s * px * 0.5;
+                    let v = (a.vx + b.vx) * 0.5;
+                    a.vx = v;
+                    b.vx = v;
+                } else {
+                    let s = if dz >= 0.0 { 1.0 } else { -1.0 };
+                    a.z -= s * pz * 0.5;
+                    b.z += s * pz * 0.5;
+                    let v = (a.vz + b.vz) * 0.5;
+                    a.vz = v;
+                    b.vz = v;
+                }
+            }
+        }
+
+        // --- Fences: the woodwork a sliding crate fetches up against ----------
+        // Everything not riding a stack is fenced, a tumbling crate included
+        // (it may be mid-air, but the bulwarks still stand in its way). Last,
+        // so nothing a slide or a shove did this frame leaves a crate outside
+        // the hull. A crate stopped short flings the speed it lost into any
+        // crate riding it (inertia), collected and applied after the borrow.
+        let mut kicks: Vec<(usize, f32, f32)> = Vec::new();
+        for i in 0..n {
+            if self.crates[i].base.is_some() {
+                continue;
+            }
+            let c = &mut self.crates[i];
+            let mut kick = (0.0f32, 0.0f32);
+            // The bulwarks, following the hull's curve at this station.
+            let limit = station_at(c.z).0 - WALL_GAP - c.hw;
+            if c.x.abs() > limit {
+                let s = c.x.signum();
+                c.x = s * limit;
+                if c.vx * s > 0.0 {
+                    kick.0 = c.vx;
+                    c.vx = -c.vx * CRATE_BOUNCE;
+                }
+            }
+            // The quarterdeck riser aft; the rising bow forward.
+            let z_max = QDECK_BREAK - WALL_GAP - c.hd;
+            let z_min = -6.5 + c.hd;
+            if c.z > z_max {
+                c.z = z_max;
+                if c.vz > 0.0 {
+                    kick.1 = c.vz;
+                    c.vz = -c.vz * CRATE_BOUNCE;
+                }
+            } else if c.z < z_min {
+                c.z = z_min;
+                if c.vz < 0.0 {
+                    kick.1 = c.vz;
+                    c.vz = -c.vz * CRATE_BOUNCE;
+                }
+            }
+            // The companion stairs block the starboard run abaft the waist.
+            let stair_x = 2.0 - WALL_GAP - c.hw;
+            if c.z + c.hd > QDECK_BREAK - 4.0 && c.x > stair_x {
+                c.x = stair_x;
+                if c.vx > 0.0 {
+                    kick.0 = c.vx;
+                    c.vx = -c.vx * CRATE_BOUNCE;
+                }
+            }
+            // The mast's foot: shove out along the shallower overlap.
+            let px = MAST_HW + c.hw - c.x.abs();
+            let pz = MAST_HW + c.hd - c.z.abs();
+            if px > 0.0 && pz > 0.0 {
+                if px < pz {
+                    c.x += c.x.signum() * px;
+                    c.vx = -c.vx * CRATE_BOUNCE;
+                } else {
+                    c.z += c.z.signum() * pz;
+                    c.vz = -c.vz * CRATE_BOUNCE;
+                }
+            }
+            if kick != (0.0, 0.0) {
+                kicks.push((i, kick.0, kick.1));
+            }
+        }
+        for &(b, kx, kz) in &kicks {
+            for i in 0..n {
+                let c = &mut self.crates[i];
+                if c.base == Some(b) && !c.loose && !c.fall {
+                    c.loose = true;
+                    c.vx = kx;
+                    c.vz = kz;
+                }
+            }
+        }
+
     }
 
     /// True if screen point (`x`, `y`) lies under the deck as drawn this frame, so
@@ -404,7 +837,8 @@ impl ShipRenderer {
             vec2(pvx + rx + dx, pvy + ry + dy)
         };
 
-        let pts = self.draw_deck(&sway, pitch_ang, &lume, rig.cargo, h, w);
+        self.step_cargo(rig, roll, pitch_ang, dt);
+        let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w);
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
         // The wheel last: it is the nearest thing on the ship, standing between
         // the eye and everything else.
@@ -421,7 +855,6 @@ impl ShipRenderer {
         sway: &impl Fn(f32, f32) -> Vec2,
         pitch_ang: f32,
         lume: &Lume,
-        cargo: i32,
         h: f32,
         w: f32,
     ) -> DeckPoints {
@@ -685,105 +1118,62 @@ impl ShipRenderer {
         railing(false);
         companion_stairs();
 
-        // --- Deck cargo: lashed crates riding the waist, one per unit in the
-        // hold (`cargo`), so the deck visibly fills as goods are bought and
-        // clears as they sell. Slots fill from the quarterdeck break forward
-        // toward the bow (the slots nearest the helm are stowed first); sizes
-        // and offsets jitter by a per-slot hash (`slot_rand`), so the pile
-        // reads as stowed by hand yet never shifts between frames. A first
-        // pass lays one crate per slot with some rolling a second stacked on
-        // top straight away; a second pass returns aft to top up the slots
-        // left single, so a full hold buries the waist two crates deep. The
-        // sequence is fixed and only ever *extended* by more cargo: crates
-        // already stowed never move when the count changes.
-        // Drawn far → near so nearer crates overlap those behind. Each is a
-        // flat-shaded box: side and near faces in shade, the lit top catching
-        // the sky; the far face is hidden, so it is never drawn. Drawn before
-        // the quarterdeck floor, so a crate reaching into the wedge the
-        // platform edge masks is rightly covered by it.
-        let target = cargo.max(0) as usize;
-        // Fill-order slots: (hash key, centre x, centre z). Rows march from
-        // just short of the break toward the bow; the columns are shuffled
-        // per row so the pile doesn't fill in tidy stripes.
-        let cols = [-2.4f32, -1.2, 0.0, 1.2]; // clear of the stairs at x 2.0
-        let mut slots: Vec<(u32, f32, f32)> = Vec::new();
-        let mut zrow = 4.2f32;
-        let mut row = 0u32;
-        while zrow > -6.0 {
-            let spin = (slot_rand(row.wrapping_mul(31).wrapping_add(7)) * cols.len() as f32)
-                as usize;
-            for c in 0..cols.len() {
-                let k = row * cols.len() as u32 + c as u32;
-                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
-                let x = cols[(c + spin) % cols.len()] + 0.20 * (j(0) - 0.5);
-                let z = zrow + 0.20 * (j(1) - 0.5);
-                // The mast wants clear deck around its foot.
-                if x.abs() < 0.7 && z.abs() < 1.1 {
+        // --- Deck cargo: the lashed crates. Their layout and motion live in
+        // `self.crates` (one per hold unit, stowed helm-first; stepped by
+        // `step_cargo`, which lets extreme weather and violent turns shift
+        // them). Drawn far → near so nearer crates overlap those behind; each
+        // side face is culled and shaded by its yawed outward normal, so a
+        // crate slewed by a slide keeps honest light. Drawn before the
+        // quarterdeck floor, so a crate reaching into the wedge the platform
+        // edge masks is rightly covered by it.
+        let mut idx: Vec<usize> = (0..self.crates.len()).collect();
+        idx.sort_by(|&a, &b| {
+            // Far (small z) first; a stacked crate (greater height) over its base.
+            let (ca, cb) = (&self.crates[a], &self.crates[b]);
+            (ca.z, ca.y).partial_cmp(&(cb.z, cb.y)).unwrap()
+        });
+        // Outward normals of the four side faces, before the crate's yaw.
+        const SIDE_N: [(f32, f32); 4] = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)];
+        for &k in &idx {
+            let c = &self.crates[k];
+            let (ys, yc) = c.yaw.sin_cos();
+            let plan = |sx: f32, sz: f32| {
+                let (ox, oz) = (sx * c.hw, sz * c.hd);
+                (c.x + ox * yc - oz * ys, c.z + ox * ys + oz * yc)
+            };
+            let corners = [plan(-1.0, -1.0), plan(1.0, -1.0), plan(1.0, 1.0), plan(-1.0, 1.0)];
+            let bot = corners.map(|(x, z)| pt(x, c.y, z));
+            let top = corners.map(|(x, z)| pt(x, c.y + c.ht, z));
+            for f in 0..4 {
+                let g2 = (f + 1) % 4;
+                let n = (
+                    SIDE_N[f].0 * yc - SIDE_N[f].1 * ys,
+                    SIDE_N[f].0 * ys + SIDE_N[f].1 * yc,
+                );
+                // Cull faces turned away from the eye (it stands at the origin
+                // of x, CAM_AFT aft; height doesn't matter for vertical faces).
+                let fcx = (corners[f].0 + corners[g2].0) * 0.5;
+                let fcz = (corners[f].1 + corners[g2].1) * 0.5;
+                if n.0 * -fcx + n.1 * (CAM_AFT - fcz) <= 0.0 {
                     continue;
                 }
-                slots.push((k, x, z));
-            }
-            zrow -= 1.1;
-            row += 1;
-        }
-        // (centre x, centre z, half-width, half-depth, height, base lift) metres
-        let mut crates: Vec<(f32, f32, f32, f32, f32, f32)> = Vec::with_capacity(target);
-        for pass in 0..2 {
-            for &(k, x, z) in &slots {
-                if crates.len() >= target {
-                    break;
-                }
-                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
-                let (hw_, hd) = (0.40 + 0.16 * j(2), 0.35 + 0.15 * j(3));
-                let ht = 0.55 + 0.40 * j(4);
-                let base = station_at(z).1; // the deck rises toward the bow
-                let stacked_early = j(5) < 0.38;
-                // The stacked crate jitters only *toward* the eye (never aft of
-                // its base), so the far-to-near sort always draws it after.
-                let top = (
-                    x + 0.12 * (j(6) - 0.5),
-                    z + 0.06 * j(7),
-                    hw_ * (0.60 + 0.30 * j(8)),
-                    hd * 0.8,
-                    0.45 + 0.25 * j(9),
-                    base + ht,
-                );
-                if pass == 0 {
-                    crates.push((x, z, hw_, hd, ht, base));
-                    if stacked_early && crates.len() < target {
-                        crates.push(top);
-                    }
-                } else if !stacked_early {
-                    crates.push(top);
+                let tone = if n.1 > 0.55 { CRATE_MID } else { CRATE_DK };
+                let norm = (n.0 * 0.95, 0.15, n.1 * 0.95);
+                try_quad(bot[f], bot[g2], top[g2], top[f], lume.face(tone, norm));
+                // A batten across the eye-facing face so the box reads as planked.
+                if n.1 > 0.55 {
+                    let (lo, hi) = (c.y + c.ht * 0.42, c.y + c.ht * 0.52);
+                    try_quad(
+                        pt(corners[f].0, lo, corners[f].1),
+                        pt(corners[g2].0, lo, corners[g2].1),
+                        pt(corners[g2].0, hi, corners[g2].1),
+                        pt(corners[f].0, hi, corners[f].1),
+                        lume.face(CRATE_DK, norm),
+                    );
                 }
             }
-        }
-        let mut idx: Vec<usize> = (0..crates.len()).collect();
-        idx.sort_by(|&a, &b| {
-            // Far (small z) first; a stacked crate (greater lift) over its base.
-            (crates[a].1, crates[a].5)
-                .partial_cmp(&(crates[b].1, crates[b].5))
-                .unwrap()
-        });
-        for &k in &idx {
-            let (cxm, czm, hw_, hd, ht, lift) = crates[k];
-            let corner = |sx: f32, sz: f32, y: f32| pt(cxm + sx * hw_, y, czm + sz * hd);
-            let (bfl, bfr) = (corner(-1.0, -1.0, lift), corner(1.0, -1.0, lift));
-            let (bnr, bnl) = (corner(1.0, 1.0, lift), corner(-1.0, 1.0, lift));
-            let (tfl, tfr) = (corner(-1.0, -1.0, lift + ht), corner(1.0, -1.0, lift + ht));
-            let (tnr, tnl) = (corner(1.0, 1.0, lift + ht), corner(-1.0, 1.0, lift + ht));
-            try_quad(bnl, bfl, tfl, tnl, lume.face(CRATE_DK, (-0.92, 0.0, 0.4))); // left side
-            try_quad(bfr, bnr, tnr, tfr, lume.face(CRATE_DK, (0.92, 0.0, 0.4))); // right side
-            try_quad(bnl, bnr, tnr, tnl, lume.face(CRATE_MID, (0.0, 0.15, 0.99))); // near face
-            try_quad(tfl, tfr, tnr, tnl, lume.face(CRATE_TOP, (0.0, 0.97, 0.26))); // lit top
-            // A batten across the near face so the box reads as planked.
-            try_quad(
-                corner(-1.0, 1.0, lift + ht * 0.42),
-                corner(1.0, 1.0, lift + ht * 0.42),
-                corner(1.0, 1.0, lift + ht * 0.52),
-                corner(-1.0, 1.0, lift + ht * 0.52),
-                lume.face(CRATE_DK, (0.0, 0.15, 0.99)),
-            );
+            // The lit top, always visible from a helmsman's eye above the pile.
+            try_quad(top[0], top[1], top[2], top[3], lume.face(CRATE_TOP, (0.0, 0.97, 0.26)));
         }
 
         // Quarterdeck level: the platform floor over the waist detail, then its
@@ -1246,5 +1636,195 @@ impl ShipRenderer {
                 draw_rope(pts);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rig(cargo: i32, speed: f32, yaw_rate: f32, slam: f32) -> RigInput {
+        RigInput {
+            motion: ShipMotion::default(),
+            set: 1.0,
+            turn: 0.0,
+            wind_rel: 0.0,
+            bow_lift: 0.0,
+            cargo,
+            speed,
+            yaw_rate,
+            slam,
+        }
+    }
+
+    fn step_for(r: &mut ShipRenderer, input: &RigInput, roll: f32, pitch: f32, secs: f32) {
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0;
+        while t < secs {
+            r.step_cargo(input, roll, pitch, dt);
+            t += dt;
+        }
+    }
+
+    fn poses(r: &ShipRenderer) -> Vec<(f32, f32)> {
+        r.crates.iter().map(|c| (c.x, c.z)).collect()
+    }
+
+    fn max_shift(a: &[(f32, f32)], b: &[(f32, f32)]) -> f32 {
+        a.iter()
+            .zip(b)
+            .map(|(p, q)| ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt())
+            .fold(0.0, f32::max)
+    }
+
+    /// Calibration probe for the cargo-physics constants: the deck motion a
+    /// full storm actually produces, sailed hard into the sea. Run with
+    /// --nocapture to read the numbers when retuning CARGO_TILT / SLAM_KICK.
+    #[test]
+    fn storm_calibration() {
+        use crate::geometry::Vec2;
+        use crate::ocean;
+        let sea = 1.3f32;
+        let pos = Vec2::new(1000.0, 2000.0);
+        let heading = std::f32::consts::PI * 1.5; // driving into the dominant train
+        let (mut max_roll, mut max_pitch, mut max_bow_vel) = (0.0f32, 0.0f32, 0.0f32);
+        let dt = 1.0 / 60.0;
+        let mut prev_bow = 0.0f32;
+        for i in 0..(180 * 60) {
+            let t = i as f32 * dt;
+            let p = pos + Vec2::from_heading(heading) * (12.0 * t); // under way
+            let m = ocean::ship_motion(p, heading, t, sea);
+            let bow = ocean::height(p + Vec2::from_heading(heading) * ocean::BOW_REACH, t, sea)
+                - m.heave;
+            if i > 0 {
+                max_bow_vel = max_bow_vel.max((prev_bow - bow) / dt);
+            }
+            prev_bow = bow;
+            max_roll = max_roll.max(m.roll.abs());
+            max_pitch = max_pitch.max(m.pitch.abs());
+        }
+        println!(
+            "storm max |roll| {max_roll:.3} rad, max |pitch| {max_pitch:.3} rad, max bow drop {max_bow_vel:.2} m/s (slam {:.2})",
+            max_bow_vel / 7.0
+        );
+        // The storm must at least rock the hull hard enough that the tuned
+        // cargo constants have something to bite on.
+        assert!(max_roll > 0.05 && max_bow_vel > 0.3);
+    }
+
+    /// A full storm's worst rolls and slams (magnitudes from the calibration
+    /// probe above, deck-shared) must visibly shift cargo even on a straight
+    /// course: lashings give in punches on the big seas.
+    #[test]
+    fn cargo_shifts_in_a_storm() {
+        let mut r = ShipRenderer::new();
+        let mut input = rig(24, 12.0, 0.0, 0.0);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        let before = poses(&r);
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0f32;
+        while t < 90.0 {
+            // Deck-share of the measured storm roll/pitch, at swell periods,
+            // with a slam pulse as the bow drives into a face every few
+            // seconds (encounter rate at speed).
+            let roll = 0.080 * (t * 0.9).sin();
+            let pitch = 0.080 * (t * 0.7 + 1.0).sin();
+            input.slam = if t % 4.0 < 0.5 { 0.35 } else { 0.0 };
+            r.step_cargo(&input, roll, pitch, dt);
+            t += dt;
+        }
+        let shift = max_shift(&before, &poses(&r));
+        assert!(shift > 0.15, "a full storm shifted no cargo (max shift {shift})");
+    }
+
+    /// One crate per hold unit, and the same count lays out identically.
+    #[test]
+    fn crate_count_matches_cargo() {
+        let mut r = ShipRenderer::new();
+        r.step_cargo(&rig(24, 0.0, 0.0, 0.0), 0.0, 0.0, 1.0 / 60.0);
+        assert_eq!(r.crates.len(), 24);
+        let first = poses(&r);
+        let mut r2 = ShipRenderer::new();
+        r2.step_cargo(&rig(24, 0.0, 0.0, 0.0), 0.0, 0.0, 1.0 / 60.0);
+        assert_eq!(first, poses(&r2));
+        // A maxed hold still fits on deck.
+        let mut r3 = ShipRenderer::new();
+        r3.step_cargo(&rig(64, 0.0, 0.0, 0.0), 0.0, 0.0, 1.0 / 60.0);
+        assert_eq!(r3.crates.len(), 64);
+    }
+
+    /// Ordinary sailing (a working deck angle, a leisurely turn) must not
+    /// budge the cargo at all: the crates are heavy and lashed.
+    #[test]
+    fn cargo_holds_fast_in_ordinary_sailing() {
+        let mut r = ShipRenderer::new();
+        let input = rig(24, 8.0, 0.10, 0.1); // ~16 kn, half rudder, light chop
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        let before = poses(&r);
+        step_for(&mut r, &input, 0.10, 0.05, 10.0); // ~6° heel, ~3° pitch
+        assert_eq!(before, poses(&r), "lashed cargo shifted in ordinary sailing");
+    }
+
+    /// A hard turn at a top-tier hull's full speed slings crates loose.
+    #[test]
+    fn cargo_slides_in_a_violent_turn() {
+        let mut r = ShipRenderer::new();
+        let input = rig(24, 20.0, crate::sailing::MAX_YAW_RATE, 0.0); // ~39 kn, wheel hard over
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        let before = poses(&r);
+        step_for(&mut r, &input, 0.15, 0.0, 6.0); // heeling hard through the turn
+        let shift = max_shift(&before, &poses(&r));
+        assert!(shift > 0.3, "no crate slid in a violent turn (max shift {shift})");
+    }
+
+    /// However hard the shaking, every crate stays inside the bulwarks, off
+    /// the stairs, clear of the mast and on (or above) the deck.
+    #[test]
+    fn shaken_cargo_stays_on_deck() {
+        let mut r = ShipRenderer::new();
+        let mut input = rig(64, 20.0, crate::sailing::MAX_YAW_RATE, 0.8);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        // A storm's worth of violence, swinging both ways.
+        for k in 0..8 {
+            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+            input.yaw_rate = crate::sailing::MAX_YAW_RATE * side;
+            step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
+        }
+        for c in &r.crates {
+            if c.base.is_some() {
+                continue; // riding a stack: fenced through its base
+            }
+            let (b, d, _) = station_at(c.z);
+            assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
+            assert!(c.z + c.hd <= QDECK_BREAK + 1e-3, "crate through the riser");
+            assert!(c.z - c.hd >= -6.5 - c.hd * 2.0, "crate off the bow");
+            assert!(c.y >= d - 1e-3, "crate under the deck");
+            if c.z + c.hd > QDECK_BREAK - 4.0 {
+                assert!(c.x + c.hw <= 2.0 + 1e-3, "crate inside the stairs");
+            }
+        }
+    }
+
+    /// Once the violence ends the pile settles: nothing keeps sliding, and
+    /// the crew slowly haul shifted crates back toward their stowage.
+    #[test]
+    fn cargo_settles_and_restows_after_the_storm() {
+        let mut r = ShipRenderer::new();
+        let input = rig(24, 20.0, crate::sailing::MAX_YAW_RATE, 0.0);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        step_for(&mut r, &input, 0.2, 0.0, 5.0); // shift the pile
+        let calm = rig(24, 5.0, 0.0, 0.0);
+        step_for(&mut r, &calm, 0.0, 0.0, 5.0); // let it settle
+        let settled = poses(&r);
+        assert!(r.crates.iter().all(|c| !c.loose && !c.fall), "still sliding in a calm");
+        // Ten more calm seconds: everything eases toward home, nothing runs away.
+        step_for(&mut r, &calm, 0.0, 0.0, 10.0);
+        let dist_home = |p: &[(f32, f32)]| -> f32 {
+            p.iter()
+                .zip(&r.crates)
+                .map(|(q, c)| ((q.0 - c.home.0).powi(2) + (q.1 - c.home.1).powi(2)).sqrt())
+                .sum()
+        };
+        assert!(dist_home(&poses(&r)) <= dist_home(&settled) + 1e-3);
     }
 }
