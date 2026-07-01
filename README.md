@@ -39,10 +39,11 @@ smooth frame rate. A debug `cargo run` works but is choppier.
 
 | Key | Action |
 |---|---|
-| **W / S** | Raise / lower sail (None → Half → Full). Set it and she keeps going. |
+| **W / S** | Deploy / furl sail (None → Half → Full). Set it and she keeps going. |
 | **A / D** | Helm (steer). |
-| **Space** | Dock at a port in range (sails struck, bow pointed at it). |
+| **Space** | Dock at a port in range (sails furled, bow pointed at it). |
 | **C** (hold) | Look astern over the wake (helm unchanged). |
+| **H** | Hide / show the HUD (corner readout, chart, controls). |
 | **Q / E** | Nudge the weather calmer / stormier (it also auto-drifts). |
 | **T / Y** | Advance / rewind the time of day. |
 | **`[` / `]`** | Back / veer the wind (dev aid for feeling the points of sail). |

@@ -5,7 +5,7 @@
 //! sounding, the **calm** bed is the wash of water past the hull and rides up
 //! with the boat's speed (silent at anchor), and the **storm** bed swells with
 //! the gale's fury (heard only in a gale). Over the top sit one-shot cues:
-//! a canvas *flap* when sail is raised or lowered, a transition *whoosh* when the
+//! a canvas *flap* when sail is deployed or furled, a transition *whoosh* when the
 //! wind shifts quarter, a single coin / coin pour on a market Buy-Sell /
 //! Fill-Dump (the pour reused for repairs, upgrades and contract payouts), a
 //! confirming stamp on accepting a contract or booking a race, and a brighter
@@ -49,7 +49,7 @@ macro_rules! snd {
 const SAILING_MP3: &[u8] = snd!("dammafra-sailing-435998.mp3");
 const CALM_MP3: &[u8] = snd!("calm.mp3");
 const STORM_MP3: &[u8] = snd!("thunderstorm-cut.mp3");
-// Canvas-flap one-shots: raising sail (more canvas catching wind) vs lowering.
+// Canvas-flap one-shots: deploying sail (more canvas catching wind) vs furling.
 const FLAP_UP_MP3: &[u8] = snd!("flap1.mp3");
 const FLAP_DOWN_MP3: &[u8] = snd!("flap2.mp3");
 const WIND_SHIFT_MP3: &[u8] = snd!("elemental-woosh.mp3");
@@ -214,12 +214,12 @@ impl SoundBank {
         set_sound_volume(&self.calm, self.calm_vol * self.master);
     }
 
-    /// A canvas *flap* — more sail hauled up, fresh cloth catching the wind.
+    /// A canvas *flap*: more sail deployed, fresh cloth catching the wind.
     pub fn sail_up(&self) {
         self.flap(&self.flap_up);
     }
 
-    /// A canvas *flap* — sail dropped a notch, cloth spilling its wind.
+    /// A canvas *flap*: sail furled a notch, cloth spilling its wind.
     pub fn sail_down(&self) {
         self.flap(&self.flap_down);
     }

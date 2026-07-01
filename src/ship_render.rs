@@ -500,7 +500,7 @@ impl ShipRenderer {
         let set = self.set; // visually-eased set, so the canvas furls/unfurls smoothly
         let fill = draw_f * set; // belly amount
         let luff = (1.0 - draw_f).powi(3) * set; // flog amount
-        let furl = set.max(0.05); // a struck sail keeps a thin rolled sliver
+        let furl = set.max(0.05); // a furled sail keeps a thin rolled sliver
         let brace = self.brace_angle;
         let (sb, cb) = brace.sin_cos();
 

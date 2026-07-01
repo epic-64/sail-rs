@@ -23,8 +23,9 @@ struct Step {
 /// The steps, in the order a first voyage tends to meet them, each resolved against
 /// the lifetime tally. Editing this array is all it takes to change the list: the
 /// panel sizes and lays itself out off its length and contents.
-fn steps(stats: &Stats) -> [Step; 6] {
+fn steps(stats: &Stats) -> [Step; 7] {
     [
+        Step { label: "Fully open sails", done: stats.sails_fully_opened > 0 },
         Step { label: "Dock at a port", done: stats.times_docked > 0 },
         Step { label: "Complete a contract", done: stats.contracts_fulfilled > 0 },
         // A race counts whether it was won or lost: the point is to have sailed one.

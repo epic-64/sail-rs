@@ -256,7 +256,7 @@ fn draw_sky(
     });
 }
 
-/// Discrete sail settings: W raises a notch, S lowers one. Each maps to a sail
+/// Discrete sail settings: W deploys a notch, S furls one. Each maps to a sail
 /// fraction (the throttle) the hull accelerates toward — it sets a *target* speed,
 /// never the speed itself, so you set sail once and the ship keeps going.
 /// (`SailingView.sailFractions` / `sailNames`.)
@@ -300,7 +300,7 @@ fn read_turn(log_open: bool) -> f32 {
 
 /// Faint keybind reminders in the bottom-left while sailing. Only shown in
 /// keyboard mode (the touch HUD carries its own glyphs), so a captain at the
-/// helm always sees how to reach the log, strike sail, steer and dock. The
+/// helm always sees how to reach the log, furl sail, steer and dock. The
 /// dock hint only appears when there's a harbour within reach.
 fn draw_keybind_hints(dockable: bool, extra: &[(&str, &str)], h: f32) {
     // (key, action) top to bottom; the log sits first as the headline hint.
@@ -311,6 +311,7 @@ fn draw_keybind_hints(dockable: bool, extra: &[(&str, &str)], h: f32) {
         ("\u{2191}\u{2193}", "Sail"),
         ("\u{2190}\u{2192}", "Steer"),
         ("C", "Look astern"),
+        ("H", "Hide HUD"),
     ];
     // Any tavern wares the captain has bought (the world map's M, the active wares'
     // number keys), so their shortcuts are reminded only once they're earned.
@@ -505,7 +506,7 @@ async fn run_game(
     let mut storm: f32; // gale fury [0,1], refreshed each frame
 
     // Discrete sail setting, set once with W/S and held. Start furled (None) so the
-    // captain raises sail to get under way, just like the original.
+    // captain deploys sail to get under way, just like the original.
     let mut sail_mode: usize = 0;
 
     // Whether the captain's log is flipped open over the scene (toggled with L),
@@ -523,6 +524,10 @@ async fn run_game(
     if guide_open {
         save::store_guide_seen();
     }
+    // H tucks the helm furniture away (the corner readout + badges, the chart, and
+    // the on-screen/keybind controls) for an unobstructed view of the sea. Toggles;
+    // open menus and the world still draw underneath.
+    let mut hud_hidden = false;
     // On the web the canvas only receives keyboard input once it has focus, which
     // a click grants. Until the captain clicks (or presses a key), a big centred
     // call-to-action sits over the scene; the first input dismisses it for good.
@@ -579,7 +584,7 @@ async fn run_game(
     // The racing rival's live kinematics once it is on the water (`None` = no race
     // afoot or not yet cast off). The race runs in two stages so the rival never
     // gets a head start: while *waiting* it sits at the line and the player must
-    // draw up alongside and heave to (`race_ready`); raising sail then fires the gun
+    // draw up alongside and heave to (`race_ready`); deploying sail then fires the gun
     // (`race_running`) and only then does the rival begin to sail.
     let mut rival: Option<Kinematics> = None;
     let mut race_ready = false;
@@ -670,7 +675,7 @@ async fn run_game(
     // A Dolphin's Draught speed burst running down (seconds left): while it lasts the
     // ship is driven up to its top speed plus `DOLPHIN_BURST_KNOTS`, regardless of wind
     // or load (so even a bad point of sail reaches it), scaled by how much sail is set
-    // (full at full sail, half at half, nil with sails struck). See `crate::tavern`.
+    // (full at full sail, half at half, nil with sails furled). See `crate::tavern`.
     let mut speed_burst: f32 = 0.0;
     // The quaff winds up before it bites: quaffing starts this charge timer (seconds
     // left) running, ticking down alongside the burst, and the burst lands only once it
@@ -900,7 +905,7 @@ async fn run_game(
                 harbor.set_sail(&mut gs);
             }
         } else {
-            // Sails are set in discrete notches (W raises, S lowers) — set once, the
+            // Sails are set in discrete notches (W deploys, S furls): set once, the
             // ship keeps going; only the *first* press of a held key steps the sail.
             // While the log is open the up/down arrows are reserved (alongside
             // left/right) for the book, so only W/S work the sail.
@@ -925,6 +930,11 @@ async fn run_game(
                 sounds.sail_up();
             } else if sail_mode < prev_sail {
                 sounds.sail_down();
+            }
+            // Topping out the rig (the last notch up) strikes the beginner checklist's
+            // "fully open sails" step.
+            if sail_mode == SAIL_FRACTIONS.len() - 1 && prev_sail < sail_mode {
+                gs.stats.sails_fully_opened += 1;
             }
             // Steer with the keys, or with the touch wheel when a finger has it (the
             // wheel is hidden — and so ignored — while the log is open).
@@ -955,7 +965,7 @@ async fn run_game(
             // A Dolphin's Draught drives the hull up to its top speed plus a margin while
             // it runs down, regardless of point of sail: the target is `top_speed +
             // DOLPHIN_BURST_KNOTS`, scaled by the sail set (full at full sail, nil with
-            // sails struck). `burst` is the extra way over the ground (m/s) needed to make
+            // sails furled). `burst` is the extra way over the ground (m/s) needed to make
             // that target this frame, applied as forward displacement in the step loop, so
             // even a hull stalled in irons is hauled up to it. Nil once she's already there.
             let burst = if speed_burst > 0.0 {
@@ -1024,8 +1034,8 @@ async fn run_game(
 
             // --- Race ----------------------------------------------------------
             // While waiting the rival sits dead at the line; the start is armed once
-            // the player draws up alongside and heaves to (sails struck, dead slow),
-            // and the gun fires the moment they raise sail. Once running the rival
+            // the player draws up alongside and heaves to (sails furled, dead slow),
+            // and the gun fires the moment they deploy sail. Once running the rival
             // sails the very same physics — a pristine rig of the player's own boat
             // (its sail level, an empty hold) — beating for the mark but never into
             // the wind's eye, and the race settles the instant either reaches it.
@@ -1086,7 +1096,7 @@ async fn run_game(
                 race_running = false;
             }
 
-            // Offer the port the bow is pointed at; tie up on Space, sails struck.
+            // Offer the port the bow is pointed at; tie up on Space, sails furled.
             harbor.update_dockable(&world, &kin);
             if (is_key_pressed(KeyCode::Space) || touch.tapped_in(hud.dock))
                 && sail_mode == 0
@@ -1204,6 +1214,11 @@ async fn run_game(
                         _ => {}
                     }
                 }
+            }
+            // H hides the helm furniture (corner readout, chart, controls) for a
+            // clean view of the sea; press again to bring it back.
+            if is_key_pressed(KeyCode::H) {
+                hud_hidden = !hud_hidden;
             }
             // The basics primer, summoned with G. Like the log it reserves the arrows
             // while open, so the two are mutually exclusive.
@@ -1657,6 +1672,8 @@ async fn run_game(
         // Wind is shown by the quarter it blows *from* (the seaman's convention).
         // The Dolphin's Draught burst's extra way over the ground (`burst_kn`, set by the
         // sailing physics) rides on top of the hull's own speed in the readout.
+        // The whole corner readout (and its badges) tucks away with H.
+        if !hud_hidden {
         let knots = kin.speed() / sailing::KNOT + burst_kn;
         let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
         let point = wind.point_of_sail(kin.heading_rad).label();
@@ -1720,6 +1737,7 @@ async fn run_game(
                 x = lx + measure_text(label, None, px(15.0) as u16, 1.0).width + px(18.0);
             }
         }
+        }
 
         // Salvage pickup toast: a gold note that floats up and fades over the deck
         // when a piece is hauled aboard.
@@ -1766,25 +1784,27 @@ async fn run_game(
         let chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
         let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
 
-        // Always-on corner chart: the local cluster, top-right.
+        // Corner chart: the local cluster, top-right (tucked away with H).
         let map_size = (h * 0.24).clamp(px(140.0), px(200.0));
         let map_rect = Rect::new(w - map_size - px(16.0), px(16.0), map_size, map_size);
-        minimap::render(
-            &world,
-            &kin,
-            wind,
-            map_rect,
-            &minimap_pal,
-            &chart_marks,
-            &race_marks,
-            None,
-            &traders.positions(),
-            rival.map(|r| (r.pos, r.heading_rad)),
-        );
+        if !hud_hidden {
+            minimap::render(
+                &world,
+                &kin,
+                wind,
+                map_rect,
+                &minimap_pal,
+                &chart_marks,
+                &race_marks,
+                None,
+                &traders.positions(),
+                rival.map(|r| (r.pos, r.heading_rad)),
+            );
 
-        // A beginner's checklist tucked under the chart (until its five steps are all
-        // struck, then it retires itself), so a fresh captain learns the ropes.
-        checklist::render(&gs.stats, map_rect);
+            // A beginner's checklist tucked under the chart (until its steps are all
+            // struck, then it retires itself), so a fresh captain learns the ropes.
+            checklist::render(&gs.stats, map_rect);
+        }
 
         // Race standings strip: the mark and how far the player and rival each have
         // still to sail (or the instructions to get the race under way), shown top-
@@ -1804,7 +1824,7 @@ async fn run_game(
                         lead,
                     )
                 } else if race_ready {
-                    "Alongside the rival — raise sail to start the race!".to_string()
+                    "Alongside the rival: deploy sail to start the race!".to_string()
                 } else {
                     format!(
                         "Heave to alongside the rival to start  ·  {} away",
@@ -1881,7 +1901,7 @@ async fn run_game(
         }
 
         // The docking call-to-action (while sailing), then the port board (docked).
-        // Suppress it at a race's finish line so a novice doesn't strike sail short.
+        // Suppress it at a race's finish line so a novice doesn't furl sail short.
         let race_target = gs.race.map(|r| r.target_id);
         if !log_open && !guide_open {
             port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
@@ -1920,7 +1940,7 @@ async fn run_game(
                     true // pause menu or port board: always a live action
                 };
                 touch_ui::draw_nav_cluster(&touch_ui::nav_cluster(w, h, show_confirm));
-            } else {
+            } else if !hud_hidden {
                 let item_btns: [Option<(&str, bool)>; 3] = std::array::from_fn(|slot| {
                     SpecialItem::from_active_slot(slot)
                         .filter(|it| gs.owns(*it))
@@ -1936,7 +1956,7 @@ async fn run_game(
                     item_btns,
                 );
             }
-        } else if !pause.open && !log_open && !guide_open && !harbor.is_open() {
+        } else if !hud_hidden && !pause.open && !log_open && !guide_open && !harbor.is_open() {
             // Keyboard mode at the helm: faint reminders of the sailing keys,
             // bottom-left. (Touch mode has its own on-screen glyphs above.)
             // Owned tavern wares add their shortcuts, so they show only once earned.
