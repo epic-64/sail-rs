@@ -115,6 +115,17 @@ fn station_at(z: f32) -> (f32, f32, f32) {
     (b, d, wh)
 }
 
+/// A tiny deterministic hash to [0,1): per-slot jitter for the deck cargo's
+/// sizes, offsets and stacking rolls. Render-side only; the world's seeded
+/// RNG is never touched, and the same seed gives the same crate every frame.
+fn slot_rand(seed: u32) -> f32 {
+    let mut x = seed.wrapping_mul(0x9E37_79B9);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x85EB_CA6B);
+    x ^= x >> 13;
+    (x >> 8) as f32 / 16_777_216.0
+}
+
 /// Project a hull point (metres) through the helm camera: the fore-aft nod is a
 /// true rotation about the mast foot (`sp`/`cp` its sin/cos, shared with the
 /// rig), then a perspective divide from the eye. Returns the unswayed screen
@@ -287,6 +298,9 @@ pub struct RigInput {
     /// The bow's lift above the hull's mean this frame (metres) — drives the deck's
     /// heave bob (`crate::ocean::deck_heave_px`).
     pub bow_lift: f32,
+    /// Units in the hold (sellable cargo plus reserved mission goods, i.e.
+    /// `hold_used`): the waist shows one lashed crate per unit.
+    pub cargo: i32,
 }
 
 /// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
@@ -390,7 +404,7 @@ impl ShipRenderer {
             vec2(pvx + rx + dx, pvy + ry + dy)
         };
 
-        let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w);
+        let pts = self.draw_deck(&sway, pitch_ang, &lume, rig.cargo, h, w);
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
         // The wheel last: it is the nearest thing on the ship, standing between
         // the eye and everything else.
@@ -407,6 +421,7 @@ impl ShipRenderer {
         sway: &impl Fn(f32, f32) -> Vec2,
         pitch_ang: f32,
         lume: &Lume,
+        cargo: i32,
         h: f32,
         w: f32,
     ) -> DeckPoints {
@@ -670,20 +685,79 @@ impl ShipRenderer {
         railing(false);
         companion_stairs();
 
-        // --- Deck cargo: lashed crates riding the waist, drawn far → near so
-        // nearer crates overlap those behind. Each is a flat-shaded box: side
-        // and near faces in shade, the lit top catching the sky; the far face is
-        // hidden, so it is never drawn. Drawn before the quarterdeck floor, so
-        // a crate reaching into the wedge the platform edge masks is rightly
-        // covered by it.
+        // --- Deck cargo: lashed crates riding the waist, one per unit in the
+        // hold (`cargo`), so the deck visibly fills as goods are bought and
+        // clears as they sell. Slots fill from the quarterdeck break forward
+        // toward the bow (the slots nearest the helm are stowed first); sizes
+        // and offsets jitter by a per-slot hash (`slot_rand`), so the pile
+        // reads as stowed by hand yet never shifts between frames. A first
+        // pass lays one crate per slot with some rolling a second stacked on
+        // top straight away; a second pass returns aft to top up the slots
+        // left single, so a full hold buries the waist two crates deep. The
+        // sequence is fixed and only ever *extended* by more cargo: crates
+        // already stowed never move when the count changes.
+        // Drawn far → near so nearer crates overlap those behind. Each is a
+        // flat-shaded box: side and near faces in shade, the lit top catching
+        // the sky; the far face is hidden, so it is never drawn. Drawn before
+        // the quarterdeck floor, so a crate reaching into the wedge the
+        // platform edge masks is rightly covered by it.
+        let target = cargo.max(0) as usize;
+        // Fill-order slots: (hash key, centre x, centre z). Rows march from
+        // just short of the break toward the bow; the columns are shuffled
+        // per row so the pile doesn't fill in tidy stripes.
+        let cols = [-2.4f32, -1.2, 0.0, 1.2]; // clear of the stairs at x 2.0
+        let mut slots: Vec<(u32, f32, f32)> = Vec::new();
+        let mut zrow = 4.2f32;
+        let mut row = 0u32;
+        while zrow > -6.0 {
+            let spin = (slot_rand(row.wrapping_mul(31).wrapping_add(7)) * cols.len() as f32)
+                as usize;
+            for c in 0..cols.len() {
+                let k = row * cols.len() as u32 + c as u32;
+                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
+                let x = cols[(c + spin) % cols.len()] + 0.20 * (j(0) - 0.5);
+                let z = zrow + 0.20 * (j(1) - 0.5);
+                // The mast wants clear deck around its foot.
+                if x.abs() < 0.7 && z.abs() < 1.1 {
+                    continue;
+                }
+                slots.push((k, x, z));
+            }
+            zrow -= 1.1;
+            row += 1;
+        }
         // (centre x, centre z, half-width, half-depth, height, base lift) metres
-        let crates: [(f32, f32, f32, f32, f32, f32); 5] = [
-            (-1.5, 0.9, 0.65, 0.55, 0.85, 0.0),
-            (-1.4, 0.9, 0.50, 0.45, 0.60, 0.85), // stacked on the first
-            (1.1, 1.9, 0.70, 0.60, 0.95, 0.0), // inboard of the stairs' run
-            (0.9, -0.4, 0.50, 0.40, 0.60, 0.0),
-            (-2.1, 2.3, 0.75, 0.60, 1.00, 0.0),
-        ];
+        let mut crates: Vec<(f32, f32, f32, f32, f32, f32)> = Vec::with_capacity(target);
+        for pass in 0..2 {
+            for &(k, x, z) in &slots {
+                if crates.len() >= target {
+                    break;
+                }
+                let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
+                let (hw_, hd) = (0.40 + 0.16 * j(2), 0.35 + 0.15 * j(3));
+                let ht = 0.55 + 0.40 * j(4);
+                let base = station_at(z).1; // the deck rises toward the bow
+                let stacked_early = j(5) < 0.38;
+                // The stacked crate jitters only *toward* the eye (never aft of
+                // its base), so the far-to-near sort always draws it after.
+                let top = (
+                    x + 0.12 * (j(6) - 0.5),
+                    z + 0.06 * j(7),
+                    hw_ * (0.60 + 0.30 * j(8)),
+                    hd * 0.8,
+                    0.45 + 0.25 * j(9),
+                    base + ht,
+                );
+                if pass == 0 {
+                    crates.push((x, z, hw_, hd, ht, base));
+                    if stacked_early && crates.len() < target {
+                        crates.push(top);
+                    }
+                } else if !stacked_early {
+                    crates.push(top);
+                }
+            }
+        }
         let mut idx: Vec<usize> = (0..crates.len()).collect();
         idx.sort_by(|&a, &b| {
             // Far (small z) first; a stacked crate (greater lift) over its base.

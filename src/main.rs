@@ -1612,6 +1612,8 @@ async fn run_game(
             turn: helm.turn,
             wind_rel,
             bow_lift,
+            // The whole laden hold, so reserved mission goods show on deck too.
+            cargo: gs.hold_used(),
         };
         // --- Bow spray ---------------------------------------------------------
         // Foam torn off the bow, drawn *before* the deck so the hull occludes the
