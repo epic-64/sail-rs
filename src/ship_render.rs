@@ -56,7 +56,7 @@ const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
 const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
 const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
-// Tarred standing rigging (shrouds + ratlines).
+// Tarred rigging (the forestay and the sheets working the sail).
 const ROPE: [f32; 3] = [74.0, 60.0, 44.0];
 // Kept darker than the deck planks so the rim reads against them.
 const WHEEL_C: [f32; 3] = [104.0, 74.0, 44.0];
@@ -655,11 +655,11 @@ impl ShipRenderer {
             draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
         }
 
-        // --- Shrouds: tarred ropes fanning from the hounds (just below the
-        // masthead) down to the railing on each side, braced with ratline rungs
-        // so they read as the ladder the crew climbs. Drawn last, over the sail
-        // and mast: standing rigging stands nearest the viewer. The tops run off
-        // the top of the screen, so mostly only the lower fan is in view.
+        // --- Sheets: the two ropes working the sail, one from each clew (the
+        // foot's free corners) hauled aft to the railing well astern. The clew
+        // end rides the same brace/belly/luff transform as the cloth's own
+        // panels, so the ropes lead wherever the sail swings and tremble with
+        // it when it flogs. Drawn last, nearest the viewer.
         {
             // Recompute the deck's side geometry (matches draw_deck) so the feet
             // sit on the railing as the hull nods.
@@ -679,29 +679,23 @@ impl ShipRenderer {
                 sway(cx + side * hw, cap - rail_h * (0.35 + 0.7 * v) * 0.9)
             };
             let thick = (h * 0.0028).max(1.0);
-            // Fore-aft positions the shrouds land on the rail, set well abaft the
-            // mast (which steps in around v ≈ 0.13) so the fan leans out to the
-            // sides of the view and frames the sail instead of crossing it.
-            let feet_v = [0.40f32, 0.58, 0.76];
+            let sag = h * 0.035; // the rope's own weight bows the run a little
+            let segs = 8;
+            // The cloth's true outer edge: the outermost panel's strip reaches
+            // past u = 0.5 by the overlap's half-width (see half_strip).
+            let edge_u = 0.5 + (PANEL_OVERLAP - 1.0) * 0.5 / SAIL_PANELS as f32;
             for side in [-1.0f32, 1.0] {
-                // The masthead: all shrouds on a side gather at the very top.
-                let hounds = project(side * w * 0.011, mast_top, 0.0);
-                let feet: Vec<Vec2> = feet_v.iter().map(|&v| rail_top(side, v)).collect();
-                for &foot in &feet {
-                    draw_line(hounds.x, hounds.y, foot.x, foot.y, thick, rgba(ROPE, lit, 1.0));
-                }
-                // Ratline rungs: short ropes lacing adjacent shrouds at a few
-                // heights, spaced wider toward the deck (perspective). Each rung
-                // meets its neighbouring shroud at the *same* screen height, so it
-                // lies level (facing the horizon) rather than raking up the mast.
-                for &f in &[0.5f32, 0.7, 0.88] {
-                    for pair in feet.windows(2) {
-                        let a = hounds.lerp(pair[0], f);
-                        let span = pair[1].y - hounds.y;
-                        let tb = if span.abs() > 0.01 { (a.y - hounds.y) / span } else { f };
-                        let b = hounds.lerp(pair[1], tb.clamp(0.0, 1.0));
-                        draw_line(a.x, a.y, b.x, b.y, thick * 0.7, rgba(ROPE, lit * 0.92, 1.0));
-                    }
+                let u = side * edge_u;
+                let (kx, kz) = braced(u, panel_z(u, 1.0));
+                let clew = project(kx, sail_bot, kz);
+                let foot = rail_top(side, 0.74); // belayed well astern
+                let mut prev = clew;
+                for i in 1..=segs {
+                    let t = i as f32 / segs as f32;
+                    let mut p = clew.lerp(foot, t);
+                    p.y += sag * (t * std::f32::consts::PI).sin();
+                    draw_line(prev.x, prev.y, p.x, p.y, thick, rgba(ROPE, lit, 1.0));
+                    prev = p;
                 }
             }
         }
