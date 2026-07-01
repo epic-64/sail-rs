@@ -1030,10 +1030,13 @@ fn page_ledger(p: &Page, gs: &GameState) {
     draw_line(p.x, y, p.x + p.col_w, y, px(1.0), dim_ink());
     y += lh * 0.8;
 
-    // Salvage recovered from the swell (count and the gold it fetched).
+    // Salvage recovered from the swell (count and the gold it fetched), and
+    // what the sea took back off the deck.
     row("Flotsam recovered", &format!("{}", st.flotsam_collected), p.x, y, p.col_w, fs);
     y += lh;
     row("Salvage gold", &format!("{} g", st.flotsam_gold), p.x, y, p.col_w, fs);
+    y += lh;
+    row("Cargo lost overboard", &format!("{}", st.cargo_lost_overboard), p.x, y, p.col_w, fs);
 }
 
 /// **The Wager Book** — the captain's racing record: wagers won, wagers lost, and

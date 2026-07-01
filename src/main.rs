@@ -702,6 +702,11 @@ async fn run_game(
     let mut salvage_flash: f32 = 0.0;
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
+    // Cargo the sea takes off the deck (see ship_render's cargo physics): the
+    // loss comes off the hold (`GameState::lose_cargo`) and a red toast says so.
+    let mut overboard_flash: f32 = 0.0;
+    let mut overboard_msg = String::new();
+    const OVERBOARD_FLASH_TIME: f32 = 2.4;
     // A Dolphin's Draught speed burst running down (seconds left): while it lasts the
     // ship is driven up to its top speed plus `DOLPHIN_BURST_KNOTS`, regardless of wind
     // or load (so even a bad point of sail reaches it), scaled by how much sail is set
@@ -1661,6 +1666,23 @@ async fn run_game(
                 w,
                 h,
             );
+
+            // The sea's toll: crates the deck physics carried over the rail
+            // come off the hold — ordinary goods simply gone, contract goods
+            // tallied against their mission's deposit.
+            let washed = ship.cargo_washed_overboard();
+            if washed > 0 {
+                let (goods, contract) = gs.lose_cargo(washed);
+                let n = goods + contract;
+                if n > 0 {
+                    overboard_flash = OVERBOARD_FLASH_TIME;
+                    overboard_msg = if n == 1 {
+                        "A crate washed overboard!".to_string()
+                    } else {
+                        format!("{n} crates washed overboard!")
+                    };
+                }
+            }
         }
 
         // --- Storm rain --------------------------------------------------------
@@ -1812,6 +1834,25 @@ async fn run_game(
                 Color::new(0.0, 0.0, 0.0, 0.5 * p),
             );
             draw_text(&salvage_msg, tx, ty, fs as f32, Color::new(1.0, 0.9, 0.5, p));
+        }
+
+        // Overboard toast: a red note over the deck when the sea takes cargo,
+        // sitting below the salvage line so the two never collide.
+        overboard_flash = (overboard_flash - dt).max(0.0);
+        if overboard_flash > 0.0 && !harbor.is_open() && !log_open {
+            let p = overboard_flash / OVERBOARD_FLASH_TIME; // 1 → 0 as it fades
+            let fs = px(30.0) as u16;
+            let dims = measure_text(&overboard_msg, None, fs, 1.0);
+            let tx = w * 0.5 - dims.width / 2.0;
+            let ty = h * 0.40 - (1.0 - p) * px(36.0); // drifts upward as it fades
+            draw_text(
+                &overboard_msg,
+                tx + px(1.0),
+                ty + px(1.0),
+                fs as f32,
+                Color::new(0.0, 0.0, 0.0, 0.5 * p),
+            );
+            draw_text(&overboard_msg, tx, ty, fs as f32, Color::new(1.0, 0.55, 0.4, p));
         }
 
         // Wind-shift toast: a cool note announcing the breeze has turned, held then

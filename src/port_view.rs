@@ -1526,19 +1526,22 @@ impl PortScreen {
             HitEffect::Select { focus, column: None, activate: false },
         );
         // The haulage units jiggle red when accepting would overflow the hold.
+        // A contract that lost cargo overboard reads "6 of 8", so the shortfall
+        // is visible before the docked deposit explains itself.
         let (udx, ured) = self.flash_of(FlashTarget::Units(m.id)).unwrap_or((0.0, 0.0));
-        draw_text(
-            format!("{} {}", m.quantity, m.good.label()),
-            x + udx,
-            ry,
-            fs_body() as f32,
-            flash_ink(ured),
-        );
+        let units = if m.lost > 0 {
+            format!("{} of {} {}", m.remaining(), m.quantity, m.good.label())
+        } else {
+            format!("{} {}", m.quantity, m.good.label())
+        };
+        draw_text(units, x + udx, ry, fs_body() as f32, flash_ink(ured));
         draw_text(to_text, x + w * CON_TO_X, ry, fs_body() as f32, ink());
         if show_money {
             // The deposit jiggles red when the purse can't cover the buy-in.
+            // Shown net of any dock for lost cargo, so the row reads what the
+            // captain will actually be handed back.
             right_text_flash(
-                &m.deposit.to_string(),
+                &(m.deposit - m.deposit_docked()).to_string(),
                 x + w * CON_DEP_R,
                 ry,
                 fs_body(),

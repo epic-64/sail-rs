@@ -102,7 +102,7 @@ impl Save {
             &mut o,
             "stats",
             &format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 s.contracts_fulfilled,
                 s.contract_earnings,
                 s.races_won,
@@ -116,7 +116,8 @@ impl Save {
                 s.hull_repairs,
                 s.upgrades_bought,
                 s.log_opened,
-                s.sails_fully_opened
+                s.sails_fully_opened,
+                s.cargo_lost_overboard
             ),
         );
         // Tavern wares (see `crate::tavern`): the owned set as a list of slot indices,
@@ -153,14 +154,15 @@ impl Save {
                 &mut o,
                 "mission",
                 &format!(
-                    "{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{}",
                     m.id,
                     m.good.index(),
                     m.quantity,
                     m.origin_id,
                     m.target_id,
                     m.reward,
-                    m.deposit
+                    m.deposit,
+                    m.lost
                 ),
             );
         }
@@ -446,10 +448,12 @@ fn parse_kin(v: &str) -> Option<Kinematics> {
     })
 }
 
-/// Parse a `mission=` line's seven comma-separated fields.
+/// Parse a `mission=` line's comma-separated fields. The trailing `lost` tally
+/// is a later addition: a seven-field line from an older save loads with
+/// nothing lost.
 fn parse_mission(v: &str) -> Option<Mission> {
     let p: Vec<&str> = v.split(',').collect();
-    if p.len() != 7 {
+    if p.len() < 7 || p.len() > 8 {
         return None;
     }
     let good = *Good::ALL.get(p[1].parse::<usize>().ok()?)?;
@@ -461,6 +465,10 @@ fn parse_mission(v: &str) -> Option<Mission> {
         target_id: p[4].parse().ok()?,
         reward: p[5].parse().ok()?,
         deposit: p[6].parse().ok()?,
+        lost: match p.get(7) {
+            Some(s) => s.parse().ok()?,
+            None => 0,
+        },
     })
 }
 
@@ -487,6 +495,7 @@ fn parse_stats(v: &str) -> Stats {
         upgrades_bought: field(11).parse().unwrap_or(0),
         log_opened: field(12).parse().unwrap_or(0),
         sails_fully_opened: field(13).parse().unwrap_or(0),
+        cargo_lost_overboard: field(14).parse().unwrap_or(0),
     }
 }
 
@@ -633,6 +642,7 @@ mod tests {
             target_id: 9,
             reward: 300,
             deposit: 264,
+            lost: 2,
         });
         gs.race = Some(Race {
             origin_id: 7,
@@ -655,6 +665,7 @@ mod tests {
             upgrades_bought: 5,
             log_opened: 9,
             sails_fully_opened: 7,
+            cargo_lost_overboard: 3,
         };
         // Own a couple of wares, one of them an active used on day 5.
         gs.items.owned[SpecialItem::WorldMap.index()] = true;

@@ -209,6 +209,15 @@ const CRATE_STOP: f32 = 0.06; // m/s under which a sliding crate settles
 const RESTOW_RATE: f32 = 0.04; // 1/s the crew ease shifted cargo back to stowage in a calm
 const WALL_GAP: f32 = 0.12; // clearance kept off the bulwark's inboard face
 const MAST_HW: f32 = 0.25; // the mast foot's half-extent crates shove against
+// A crate slammed into the bulwark hard enough carries clean over the rail and
+// is lost to the sea: the toll for keeping way on through a storm or hauling
+// the wheel over at full speed. The impact speed needed scales with each
+// crate's grip, and a cooldown spaces the losses out (a reckless helm bleeds
+// cargo crate by crate rather than dumping the whole deck in one roll).
+const OVERBOARD_SPEED: f32 = 2.8; // m/s into the wall that carries the rail, ×grip
+const OVERBOARD_POP: f32 = 2.2; // m/s upward as the crate tips over the cap rail
+const OVERBOARD_COOLDOWN: f32 = 2.0; // s between crates going over
+const SINK_Y: f32 = -1.6; // m below the deck at which a floater is struck from the books
 
 /// One crate of deck cargo: its stowage slot, its live pose and motion, and the
 /// per-crate jitter that keeps the pile from letting go all at once. Positions
@@ -237,6 +246,12 @@ struct DeckCrate {
     loose: bool,
     /// Mid-air, tumbling off a stack.
     fall: bool,
+    /// Carried over the rail: ballistic outside the hull, fenced by nothing,
+    /// bound for the sea.
+    over: bool,
+    /// Sunk from view: struck from the books, skipped by physics and drawing
+    /// until the next re-stow rebuilds the pile.
+    gone: bool,
 }
 
 /// The scene light the ship is shaded by this frame: the same coloured
@@ -387,8 +402,16 @@ pub struct ShipRenderer {
     /// The deck cargo's live state, stepped by `step_cargo` each frame and
     /// rebuilt (re-stowed) whenever the hold's unit count changes.
     crates: Vec<DeckCrate>,
-    /// The hold count `crates` was built for, to notice a change.
+    /// The hold count the live crates represent, to notice an outside change
+    /// (a trade at port re-stows the deck). Kept in step with overboard losses
+    /// by `cargo_washed_overboard`, so a loss the game has been told about
+    /// does *not* re-stow the pile mid-storm.
     stowed: i32,
+    /// Crates lost over the rail since the game last collected them
+    /// (see `cargo_washed_overboard`).
+    washed: i32,
+    /// Seconds before the sea may take another crate (see OVERBOARD_COOLDOWN).
+    over_cooldown: f32,
 }
 
 /// Even-odd ray cast: is point `p` inside the (possibly non-convex) polygon `poly`?
@@ -422,7 +445,20 @@ impl ShipRenderer {
             deck_silhouette: Vec::new(),
             crates: Vec::new(),
             stowed: -1,
+            washed: 0,
+            over_cooldown: 0.0,
         }
+    }
+
+    /// Crates lost over the rail since the last call: the game applies them to
+    /// the hold (see `GameState::lose_cargo`). Collecting them also squares
+    /// `stowed`, so the already-reported loss doesn't read as an outside cargo
+    /// change and re-stow the deck mid-storm.
+    pub fn cargo_washed_overboard(&mut self) -> i32 {
+        let n = self.washed;
+        self.washed = 0;
+        self.stowed -= n;
+        n
     }
 
     /// Lay out the deck cargo afresh for `target` hold units: one crate per
@@ -479,6 +515,8 @@ impl ShipRenderer {
                 base: None,
                 loose: false,
                 fall: false,
+                over: false,
+                gone: false,
             }
         };
         // The pass-0 crate of each slot, for pass 1 to stack on.
@@ -553,8 +591,12 @@ impl ShipRenderer {
             - SLAM_KICK * clamp(rig.slam, 0.0, 1.0);
         let field = (ax * ax + az * az).sqrt();
 
+        self.over_cooldown = (self.over_cooldown - dt).max(0.0);
         let prev: Vec<(f32, f32)> = self.crates.iter().map(|c| (c.x, c.z)).collect();
         for i in 0..n {
+            if self.crates[i].gone {
+                continue;
+            }
             // A base is always a lower index, so it has already moved this
             // frame; copy what its rider needs before borrowing mutably.
             let carried = self.crates[i].base.map(|b| {
@@ -572,12 +614,23 @@ impl ShipRenderer {
             let hold =
                 CRATE_MU_S * c.grip * if c.base.is_some() { TOP_GRIP } else { 1.0 } * g_eff;
             if c.fall {
-                // Tumbling off a stack: ballistic to the deck, slewing as it goes.
+                // Tumbling: ballistic, slewing as it goes.
                 c.vy -= CRATE_G * dt;
                 c.y += c.vy * dt;
                 c.x += c.vx * dt;
                 c.z += c.vz * dt;
                 c.yaw += c.spin * 2.5 * dt;
+                if c.over {
+                    // Past the rail there is only the sea: the ship sails on
+                    // underneath, so the crate sweeps aft relative to the deck,
+                    // and is struck from the books once it sinks from view.
+                    c.vz += rig.speed * 0.5 * dt;
+                    if c.y < SINK_Y {
+                        c.gone = true;
+                        self.washed += 1;
+                    }
+                    continue;
+                }
                 let deck = station_at(c.z).1;
                 if c.y <= deck {
                     c.y = deck;
@@ -708,14 +761,20 @@ impl ShipRenderer {
 
         // --- Fences: the woodwork a sliding crate fetches up against ----------
         // Everything not riding a stack is fenced, a tumbling crate included
-        // (it may be mid-air, but the bulwarks still stand in its way). Last,
-        // so nothing a slide or a shove did this frame leaves a crate outside
-        // the hull. A crate stopped short flings the speed it lost into any
-        // crate riding it (inertia), collected and applied after the borrow.
+        // (it may be mid-air, but the bulwarks still stand in its way) — only a
+        // crate already carried over the rail is past fencing. Last, so nothing
+        // a slide or a shove did this frame leaves a crate outside the hull. A
+        // crate stopped short flings the speed it lost into any crate riding it
+        // (inertia); one carried overboard spills its riders where it stood.
+        // Both are collected and applied after the borrow ends.
         let mut kicks: Vec<(usize, f32, f32)> = Vec::new();
+        let mut spills: Vec<(usize, f32, f32)> = Vec::new();
         for i in 0..n {
-            if self.crates[i].base.is_some() {
-                continue;
+            {
+                let c = &self.crates[i];
+                if c.base.is_some() || c.gone || c.over {
+                    continue;
+                }
             }
             let c = &mut self.crates[i];
             let mut kick = (0.0f32, 0.0f32);
@@ -723,6 +782,17 @@ impl ShipRenderer {
             let limit = station_at(c.z).0 - WALL_GAP - c.hw;
             if c.x.abs() > limit {
                 let s = c.x.signum();
+                // Slammed in hard enough, the crate carries the rail instead
+                // of fetching up against the wall: over it goes.
+                if c.vx * s > OVERBOARD_SPEED * c.grip && self.over_cooldown <= 0.0 {
+                    self.over_cooldown = OVERBOARD_COOLDOWN;
+                    c.over = true;
+                    c.fall = true;
+                    c.loose = true;
+                    c.vy = OVERBOARD_POP;
+                    spills.push((i, c.vx, c.vz));
+                    continue;
+                }
                 c.x = s * limit;
                 if c.vx * s > 0.0 {
                     kick.0 = c.vx;
@@ -777,6 +847,22 @@ impl ShipRenderer {
                     c.loose = true;
                     c.vx = kx;
                     c.vz = kz;
+                }
+            }
+        }
+        // A crate riding one that went over the rail is left mid-air where its
+        // base was: it tumbles to the deck with the base's last motion (and may
+        // well follow it over next).
+        for &(b, vx, vz) in &spills {
+            for i in 0..n {
+                let c = &mut self.crates[i];
+                if c.base == Some(b) {
+                    c.base = None;
+                    c.loose = true;
+                    c.fall = true;
+                    c.vx = vx;
+                    c.vz = vz;
+                    c.vy = 0.0;
                 }
             }
         }
@@ -1136,6 +1222,9 @@ impl ShipRenderer {
         const SIDE_N: [(f32, f32); 4] = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)];
         for &k in &idx {
             let c = &self.crates[k];
+            if c.gone {
+                continue;
+            }
             let (ys, yc) = c.yaw.sin_cos();
             let plan = |sx: f32, sz: f32| {
                 let (ox, oz) = (sx * c.hw, sz * c.hd);
@@ -1791,8 +1880,8 @@ mod tests {
             step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
         }
         for c in &r.crates {
-            if c.base.is_some() {
-                continue; // riding a stack: fenced through its base
+            if c.base.is_some() || c.over || c.gone {
+                continue; // riding a stack (fenced through its base), or lost to the sea
             }
             let (b, d, _) = station_at(c.z);
             assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
@@ -1803,6 +1892,42 @@ mod tests {
                 assert!(c.x + c.hw <= 2.0 + 1e-3, "crate inside the stairs");
             }
         }
+        // The books stay square: live crates plus the reported losses cover
+        // every unit the hold started with.
+        let washed = r.cargo_washed_overboard();
+        let live = r.crates.iter().filter(|c| !c.gone).count() as i32;
+        assert_eq!(live + washed, 64);
+    }
+
+    /// Keeping full way on through a storm with the wheel hard over is exactly
+    /// the recklessness that puts cargo over the rail — but as a drip, one
+    /// crate every few seconds, never the whole deck in one roll.
+    #[test]
+    fn reckless_storm_turn_washes_cargo_overboard() {
+        let mut r = ShipRenderer::new();
+        let mut input = rig(24, 20.0, crate::sailing::MAX_YAW_RATE, 0.0);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0f32;
+        while t < 20.0 {
+            let roll = 0.080 * (t * 0.9).sin();
+            input.slam = if t % 4.0 < 0.5 { 0.35 } else { 0.0 };
+            r.step_cargo(&input, roll, -0.02, dt);
+            t += dt;
+        }
+        let washed = r.cargo_washed_overboard();
+        assert!(washed > 0, "a reckless storm turn lost no cargo");
+        assert!(washed < 24, "the whole deck emptied at once (lost {washed})");
+        let live = r.crates.iter().filter(|c| !c.gone).count() as i32;
+        assert_eq!(live + washed, 24);
+        assert_eq!(r.stowed, 24 - washed);
+        // With the loss collected, the same (reduced) hold count does not
+        // re-stow the deck: the pile stays where the storm left it.
+        input.cargo = 24 - washed;
+        input.slam = 0.0;
+        let live_before: Vec<bool> = r.crates.iter().map(|c| c.gone).collect();
+        r.step_cargo(&input, 0.0, 0.0, dt);
+        assert_eq!(live_before, r.crates.iter().map(|c| c.gone).collect::<Vec<bool>>());
     }
 
     /// Once the violence ends the pile settles: nothing keeps sliding, and
@@ -1816,7 +1941,10 @@ mod tests {
         let calm = rig(24, 5.0, 0.0, 0.0);
         step_for(&mut r, &calm, 0.0, 0.0, 5.0); // let it settle
         let settled = poses(&r);
-        assert!(r.crates.iter().all(|c| !c.loose && !c.fall), "still sliding in a calm");
+        assert!(
+            r.crates.iter().filter(|c| !c.gone).all(|c| !c.loose && !c.fall),
+            "still sliding in a calm"
+        );
         // Ten more calm seconds: everything eases toward home, nothing runs away.
         step_for(&mut r, &calm, 0.0, 0.0, 10.0);
         let dist_home = |p: &[(f32, f32)]| -> f32 {

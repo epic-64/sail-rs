@@ -28,6 +28,30 @@ pub struct Mission {
     pub target_id: i32,
     pub reward: i32,
     pub deposit: i32,
+    /// Units washed overboard in transit (see [`GameState::lose_cargo`]): gone
+    /// from the hold, and docked from the returned deposit on delivery.
+    pub lost: i32,
+}
+
+impl Mission {
+    /// Units still riding in the hold: the contract's quantity less what the
+    /// sea took.
+    pub fn remaining(&self) -> i32 {
+        self.quantity - self.lost
+    }
+
+    /// The share of the deposit the shipper keeps for cargo lost in transit,
+    /// in proportion to the loss and rounded against the captain (whole coins
+    /// stay with the shipper). Zero while nothing has gone overboard. The
+    /// *reward* is untouched: the shipper pays for the passage made, but the
+    /// surety covers the goods that never arrive.
+    pub fn deposit_docked(&self) -> i32 {
+        if self.lost <= 0 || self.quantity <= 0 {
+            return 0;
+        }
+        let dock = self.deposit as i64 * self.lost as i64;
+        ((dock + self.quantity as i64 - 1) / self.quantity as i64) as i32
+    }
 }
 
 /// How many contracts a port offers at once (`Missions.perPort`).
@@ -192,6 +216,7 @@ pub fn generate(origin: &Island, world: &World) -> Vec<Mission> {
             target_id: target.id,
             reward,
             deposit,
+            lost: 0,
         });
     }
     // Present the board closest-first, so it reads top-down from the short, light
@@ -319,6 +344,72 @@ mod tests {
         gs.active_missions = vec![contract];
         gs.location = Location::Docked(contract.origin_id);
         assert_eq!(gs.deliver(&world, contract.id), Err(TradeError::NoDelivery));
+    }
+
+    #[test]
+    fn lost_cargo_docks_the_deposit_but_not_the_reward() {
+        let world = two_port_world();
+        let mut gs = flush_state();
+        let mut contract = offered_at(&gs, &world)[0];
+        contract.lost = contract.quantity / 2;
+        let docked = contract.deposit_docked();
+        // Proportional to the loss, rounded against the captain.
+        let owed = contract.deposit as i64 * contract.lost as i64;
+        assert_eq!(docked as i64, (owed + contract.quantity as i64 - 1) / contract.quantity as i64);
+        gs.active_missions = vec![contract];
+        gs.location = Location::Docked(contract.target_id);
+        let gold_before = gs.gold;
+        gs.deliver(&world, contract.id).unwrap();
+        assert_eq!(gs.gold, gold_before + contract.deposit - docked + contract.reward);
+    }
+
+    #[test]
+    fn losing_every_unit_forfeits_the_whole_deposit() {
+        let world = two_port_world();
+        let mut gs = flush_state();
+        let mut contract = offered_at(&gs, &world)[0];
+        contract.lost = contract.quantity;
+        assert_eq!(contract.deposit_docked(), contract.deposit);
+        gs.active_missions = vec![contract];
+        gs.location = Location::Docked(contract.target_id);
+        let gold_before = gs.gold;
+        gs.deliver(&world, contract.id).unwrap();
+        assert_eq!(gs.gold, gold_before + contract.reward);
+    }
+
+    #[test]
+    fn lose_cargo_takes_from_the_biggest_pool_and_frees_hold() {
+        let world = two_port_world();
+        let mut gs = flush_state();
+        let contract = offered_at(&gs, &world)[0]; // carries at least 5 units
+        gs.active_missions = vec![contract];
+        gs.cargo[Good::Rum.index()] = 2;
+        let hold_before = gs.hold_used();
+        let (goods, mission) = gs.lose_cargo(3);
+        // The contract pool out-counts the two rum, so it pays the whole toll.
+        assert_eq!((goods, mission), (0, 3));
+        assert_eq!(gs.active_missions[0].lost, 3);
+        assert_eq!(gs.hold_used(), hold_before - 3);
+        assert_eq!(gs.stats.cargo_lost_overboard, 3);
+    }
+
+    #[test]
+    fn lose_cargo_stops_at_an_empty_hold() {
+        let mut gs = flush_state();
+        assert_eq!(gs.lose_cargo(5), (0, 0));
+        assert_eq!(gs.stats.cargo_lost_overboard, 0);
+    }
+
+    #[test]
+    fn abandon_returns_only_the_units_still_aboard() {
+        let world = two_port_world();
+        let mut gs = flush_state();
+        let mut contract = offered_at(&gs, &world)[0];
+        contract.lost = 2;
+        gs.cargo = [0; 8];
+        gs.active_missions = vec![contract];
+        gs.abandon(&world, contract.id).unwrap();
+        assert_eq!(gs.quantity_of(contract.good), contract.quantity - 2);
     }
 
     #[test]
