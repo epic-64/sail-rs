@@ -19,6 +19,11 @@
 //! wind's bearing relative to the bow (`wind_rel`), and the sail bellies by the
 //! same `Wind::factor` curve the physics uses, so it luffs exactly when the ship
 //! is in irons.
+//!
+//! The whole assembly is lit by the scene's light ([`ShipLight`]): the coloured
+//! key/ambient pair the islands and sea take, shaded per face against where the
+//! sun or moon actually stands, so the deck reddens at dusk, cools under the
+//! moon, drains to slate in a gale and flashes cold under lightning.
 
 use macroquad::prelude::*;
 
@@ -65,6 +70,93 @@ const CRATE_TOP: [f32; 3] = [182.0, 148.0, 96.0];
 const CRATE_MID: [f32; 3] = [150.0, 116.0, 70.0];
 const CRATE_DK: [f32; 3] = [108.0, 80.0, 46.0];
 
+/// The scene light the ship is shaded by this frame: the same coloured
+/// key/ambient pair the islands and sea take (`OceanRenderer::scene_light`,
+/// already storm-blended, so a gale drains the deck to slate with the water),
+/// plus where the key light stands, so the woodwork shades directionally as the
+/// sun arcs over and the ship turns beneath it.
+pub struct ShipLight {
+    /// Key light multiplier (sun by day, moon by night), brightness folded in.
+    pub key: (f32, f32, f32),
+    /// Ambient sky-fill multiplier, washing the shadowed faces.
+    pub ambient: (f32, f32, f32),
+    /// The key light's bearing relative to the bow (0 = dead ahead, + = starboard).
+    pub light_rel: f32,
+    /// Sine of the key light's altitude (0 on the horizon, 1 overhead).
+    pub light_alt: f32,
+    /// This frame's lightning glare, [0,1] (`clouds::StormSky::flash`): a brief
+    /// cold flash thrown over the woodwork with the one lighting the sea.
+    pub flash: f32,
+}
+
+/// Share of a face's shading that is ambient fill; the rest follows the key
+/// light by the face's Lambert term. A touch above the islands' floor
+/// (`islands_render::AMBIENT`) so the near woodwork stays readable on a
+/// moonless deck.
+const AMBIENT_SHARE: f32 = 0.5;
+/// The cold blue-white a lightning strike throws over the deck, matched to the
+/// sea's `LIGHTNING_COL`, and how strongly the flash relights the wood.
+const FLASH_COL: [f32; 3] = [200.0, 216.0, 244.0];
+const FLASH_GAIN: f32 = 0.5;
+
+/// Per-frame shading context: the key light direction resolved into the rig's
+/// local frame (+x starboard, +y up, +z aft toward the viewer) plus the coloured
+/// key/ambient pair, applied Lambert-style per face. This is the ship's version
+/// of the islands' `IslandView::lit`, so deck, land and sea all sit in one light.
+struct Lume {
+    key: (f32, f32, f32),
+    ambient: (f32, f32, f32),
+    l: (f32, f32, f32),
+    flash: f32,
+}
+
+impl Lume {
+    fn new(light: &ShipLight) -> Self {
+        // Altitude arrives as its sine; the horizontal reach is the matching
+        // cosine, split across the bearing relative to the bow. The camera looks
+        // along the bow, so a light dead ahead shines *toward* the viewer (-z).
+        let horiz = (1.0 - light.light_alt * light.light_alt).max(0.0).sqrt();
+        Lume {
+            key: light.key,
+            ambient: light.ambient,
+            l: (
+                light.light_rel.sin() * horiz,
+                light.light_alt.max(0.0),
+                -light.light_rel.cos() * horiz,
+            ),
+            flash: clamp(light.flash, 0.0, 1.0),
+        }
+    }
+
+    /// Lambert term of a face normal (rig frame, roughly unit length): 0 turned
+    /// away from the key light, 1 face-on to it.
+    fn diff(&self, n: (f32, f32, f32)) -> f32 {
+        clamp(n.0 * self.l.0 + n.1 * self.l.1 + n.2 * self.l.2, 0.0, 1.0)
+    }
+
+    /// Shade a base colour by a diffuse term: ambient fill plus the key light by
+    /// `diff`, a material multiplier `mul` on top, and the lightning flash's cold
+    /// boost over everything (so a strike relights the rig against the dark).
+    fn col(&self, base: [f32; 3], diff: f32, mul: f32) -> Color {
+        let k = (1.0 - AMBIENT_SHARE) * diff;
+        let f = self.flash * FLASH_GAIN;
+        let ch = |b: f32, amb: f32, key: f32, fc: f32| {
+            b / 255.0 * ((amb * AMBIENT_SHARE + key * k) * mul + fc / 255.0 * f)
+        };
+        Color::new(
+            ch(base[0], self.ambient.0, self.key.0, FLASH_COL[0]),
+            ch(base[1], self.ambient.1, self.key.1, FLASH_COL[1]),
+            ch(base[2], self.ambient.2, self.key.2, FLASH_COL[2]),
+            1.0,
+        )
+    }
+
+    /// Shade a face directly by its normal.
+    fn face(&self, base: [f32; 3], n: (f32, f32, f32)) -> Color {
+        self.col(base, self.diff(n), 1.0)
+    }
+}
+
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
 /// bearing relative to the bow (0 = wind from dead astern, ±π = dead ahead).
 pub struct RigInput {
@@ -94,11 +186,6 @@ pub struct ShipRenderer {
     /// instead of painting over the planks. Empty while the deck isn't drawn
     /// (glancing astern), so it then covers nothing.
     deck_silhouette: Vec<Vec2>,
-}
-
-#[inline]
-fn rgba(c: [f32; 3], shade: f32, a: f32) -> Color {
-    Color::new(c[0] / 255.0 * shade, c[1] / 255.0 * shade, c[2] / 255.0 * shade, a)
 }
 
 /// Even-odd ray cast: is point `p` inside the (possibly non-convex) polygon `poly`?
@@ -141,16 +228,15 @@ impl ShipRenderer {
     }
 
     /// Advance the eased trim, then draw the deck and rig for this frame.
-    #[allow(clippy::too_many_arguments)] // per-frame rig + swell + camera inputs
     pub fn render(
         &mut self,
         rig: &RigInput,
         dt: f32,
         t: f32,
-        // How lit the deck is by the sky right now (1 = full noon, ~0.5 deep night),
-        // tracked continuously off the day/night clock so the ship dims with the sea.
-        day_lit: f32,
-        storm: f32,
+        // The hour's scene light (key + ambient, storm-blended) and where the key
+        // stands, so the deck shades with the sea and islands: warm-white at noon,
+        // blood-orange at dusk, dim cool-blue under the moon, slate in a gale.
+        light: &ShipLight,
         w: f32,
         h: f32,
     ) {
@@ -161,9 +247,7 @@ impl ShipRenderer {
         self.brace_angle += (target_brace - self.brace_angle) * clamp(BRACE_EASE * dt, 0.0, 1.0);
         self.set += (clamp(rig.set, 0.0, 1.0) - self.set) * clamp(SET_EASE * dt, 0.0, 1.0);
 
-        // The storm drains the deck toward slate, so it sits in the same light as the
-        // sea, on top of the clock's daylight already folded into `day_lit`.
-        let lit = day_lit * (1.0 - 0.35 * clamp(storm, 0.0, 1.0));
+        let lume = Lume::new(light);
 
         // --- Rigid sway shared by deck + rig -----------------------------------
         let m = rig.motion;
@@ -190,8 +274,8 @@ impl ShipRenderer {
             vec2(pvx + rx + dx, pvy + ry + dy)
         };
 
-        self.deck_silhouette = self.draw_deck(&sway, pitch_ang, lit, h, w);
-        self.draw_rig(&sway, rig, pitch_ang, lit, t, h, w);
+        self.deck_silhouette = self.draw_deck(&sway, pitch_ang, &lume, h, w);
+        self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w);
     }
 
     /// Deck floor, bulwarks and the ship's wheel — the static woodwork the camera
@@ -202,11 +286,16 @@ impl ShipRenderer {
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,
         pitch_ang: f32,
-        lit: f32,
+        lume: &Lume,
         h: f32,
         w: f32,
     ) -> Vec<Vec2> {
         let cx = w * 0.5;
+        // Face normals in the rig frame (+x starboard, +y up, +z aft): the deck
+        // plane tips a little aft toward the eye; a bulwark's inboard face leans
+        // in over the deck, so it takes the light from the *opposite* rail's side.
+        let n_deck = (0.0, 0.94, 0.34);
+        let n_wall = |side: f32| (-side * 0.72, 0.42, 0.55);
         // Far (toward the bow) and near (under the helm) edges of the deck plank.
         // The fore-aft nod tilts the plane about mid-deck: bow-up lifts the far edge
         // and settles the helm, so the deck rocks fore-and-aft through the swell
@@ -236,7 +325,7 @@ impl ShipRenderer {
             let c = sway(cx + u1 * near_hw, near_y);
             let d = sway(cx + u0 * near_hw, near_y);
             let tone = if i % 2 == 0 { DECK_A } else { DECK_B };
-            quad(a, b, c, d, rgba(tone, lit, 1.0));
+            quad(a, b, c, d, lume.face(tone, n_deck));
         }
 
         // Foredeck: the planking carries on past the far edge and pinches to the
@@ -250,7 +339,7 @@ impl ShipRenderer {
             let a = sway(cx + u0 * far_hw, far_y);
             let b = sway(cx + u1 * far_hw, far_y);
             let tone = if i % 2 == 0 { DECK_A } else { DECK_B };
-            draw_triangle(a, b, stem, rgba(tone, lit, 1.0));
+            draw_triangle(a, b, stem, lume.face(tone, n_deck));
         }
 
         // Bulwarks: one continuous planked wall up each side, running from the
@@ -277,7 +366,7 @@ impl ShipRenderer {
                 let b1 = sway(x1, y1);
                 let t1 = sway(x1, y1 - h1);
                 let t0 = sway(x0, y0 - h0);
-                quad(b0, b1, t1, t0, rgba(RAIL, 0.82 * lit, 1.0));
+                quad(b0, b1, t1, t0, lume.col(RAIL, lume.diff(n_wall(side)), 0.9));
                 // Strakes: seam lines along the inboard face.
                 for f in [0.34f32, 0.67] {
                     let s0 = sway(x0, y0 - h0 * f);
@@ -288,13 +377,13 @@ impl ShipRenderer {
                         s1.x,
                         s1.y,
                         (h * 0.0022).max(1.0),
-                        rgba(RAIL_DK, 0.9 * lit, 1.0),
+                        lume.col(RAIL_DK, lume.diff(n_wall(side)), 0.9),
                     );
                 }
                 // A thin cap board on top, flared a touch outboard.
                 let c0 = sway(cx + (x0 - cx) * f0, y0 - h0);
                 let c1 = sway(cx + (x1 - cx) * f1, y1 - h1);
-                quad(t0, t1, c1, c0, rgba(RAIL_DK, lit, 1.0));
+                quad(t0, t1, c1, c0, lume.face(RAIL_DK, (0.0, 0.9, 0.44)));
             }
         }
 
@@ -313,10 +402,12 @@ impl ShipRenderer {
             let t0 = sway(cx - tw, tip_y);
             let mb = sway(cx, base_y);
             let mt = sway(cx, tip_y);
-            draw_triangle(b0, mb, mt, rgba(SPAR, lit, 1.0));
-            draw_triangle(b0, mt, t0, rgba(SPAR, lit, 1.0));
-            draw_triangle(mb, b1, t1, rgba(SPAR_DK, lit, 1.0));
-            draw_triangle(mb, t1, mt, rgba(SPAR_DK, lit, 1.0));
+            let lit_l = lume.face(SPAR, (-0.66, 0.4, 0.64));
+            let lit_r = lume.face(SPAR_DK, (0.66, 0.4, 0.64));
+            draw_triangle(b0, mb, mt, lit_l);
+            draw_triangle(b0, mt, t0, lit_l);
+            draw_triangle(mb, b1, t1, lit_r);
+            draw_triangle(mb, t1, mt, lit_r);
         }
 
         // Open railing: stanchions standing along each topside, joined by a cap
@@ -366,7 +457,7 @@ impl ShipRenderer {
                     sway(x1, t1),
                     sway(x1, t1 + b1),
                     sway(x0, t0 + b0),
-                    rgba(RAIL_DK, lit, 1.0),
+                    lume.face(RAIL_DK, (0.0, 0.8, 0.6)),
                 );
             }
             // Stanchions: vertical posts from the cap up to the rail.
@@ -378,7 +469,7 @@ impl ShipRenderer {
                     sway(px + pw, py),
                     sway(px + pw, py - ph),
                     sway(px - pw, py - ph),
-                    rgba(RAIL, lit, 1.0),
+                    lume.face(RAIL, (0.0, 0.25, 0.97)),
                 );
             }
         }
@@ -417,10 +508,10 @@ impl ShipRenderer {
             let top = |x: f32, y: f32| sway(x, y - lift - ph);
             let (bfl, bfr, bnr, bnl) = (base(flx, fly), base(frx, fry), base(nrx, nry), base(nlx, nly));
             let (tfl, tfr, tnr, tnl) = (top(flx, fly), top(frx, fry), top(nrx, nry), top(nlx, nly));
-            quad(bnl, bfl, tfl, tnl, rgba(CRATE_DK, lit, 1.0)); // left side
-            quad(bfr, bnr, tnr, tfr, rgba(CRATE_DK, lit, 1.0)); // right side
-            quad(bnl, bnr, tnr, tnl, rgba(CRATE_MID, lit, 1.0)); // near face
-            quad(tfl, tfr, tnr, tnl, rgba(CRATE_TOP, lit, 1.0)); // lit top
+            quad(bnl, bfl, tfl, tnl, lume.face(CRATE_DK, (-0.92, 0.0, 0.4))); // left side
+            quad(bfr, bnr, tnr, tfr, lume.face(CRATE_DK, (0.92, 0.0, 0.4))); // right side
+            quad(bnl, bnr, tnr, tnl, lume.face(CRATE_MID, (0.0, 0.15, 0.99))); // near face
+            quad(tfl, tfr, tnr, tnl, lume.face(CRATE_TOP, (0.0, 0.97, 0.26))); // lit top
             // A batten across the near face so the box reads as planked.
             let nf = |f: f32| {
                 (
@@ -430,10 +521,10 @@ impl ShipRenderer {
             };
             let (lo_l, lo_r) = nf(0.42);
             let (hi_l, hi_r) = nf(0.52);
-            quad(lo_l, lo_r, hi_r, hi_l, rgba(CRATE_DK, lit, 1.0));
+            quad(lo_l, lo_r, hi_r, hi_l, lume.face(CRATE_DK, (0.0, 0.15, 0.99)));
         }
 
-        self.draw_wheel(sway, lit, h, w);
+        self.draw_wheel(sway, lume, h, w);
 
         // Outer silhouette for rain occlusion: the bow tip, then each cap rail's
         // top edge swept aft to the helm and down past the bottom of the screen, so
@@ -456,11 +547,15 @@ impl ShipRenderer {
 
     /// The ship's wheel at the helm, spun toward the rudder. A spoked ring with a
     /// hub, standing proud of the deck at the bottom-centre.
-    fn draw_wheel(&self, sway: &impl Fn(f32, f32) -> Vec2, lit: f32, h: f32, w: f32) {
+    fn draw_wheel(&self, sway: &impl Fn(f32, f32) -> Vec2, lume: &Lume, h: f32, w: f32) {
         let cx = w * 0.5;
         let cy = h * 0.99; // pulled back with the helm, half off the bottom edge
         let r = h * 0.12;
         let a = self.wheel_angle;
+        // The wheel stands upright facing the helmsman (aft), so its whole face
+        // shares one normal.
+        let rim_col = lume.face(WHEEL_C, (0.0, 0.2, 0.98));
+        let spoke_col = lume.face(WHEEL_DK, (0.0, 0.2, 0.98));
 
         // Rim: a ring approximated by a fan of short trapezoids.
         let seg = 24;
@@ -472,8 +567,8 @@ impl ShipRenderer {
             let p1o = sway(cx + t1.cos() * r, cy + t1.sin() * r);
             let p1i = sway(cx + t1.cos() * inner, cy + t1.sin() * inner);
             let p0i = sway(cx + t0.cos() * inner, cy + t0.sin() * inner);
-            draw_triangle(p0o, p1o, p1i, rgba(WHEEL_C, lit, 1.0));
-            draw_triangle(p0o, p1i, p0i, rgba(WHEEL_C, lit, 1.0));
+            draw_triangle(p0o, p1o, p1i, rim_col);
+            draw_triangle(p0o, p1i, p0i, rim_col);
         }
         // Spokes radiating past the rim into handles.
         for k in 0..8 {
@@ -488,12 +583,12 @@ impl ShipRenderer {
             let p1 = sway(cx + c * outer + nx * hw, cy + s * outer + ny * hw);
             let p2 = sway(cx + c * outer - nx * hw, cy + s * outer - ny * hw);
             let p3 = sway(cx + c * inner - nx * hw, cy + s * inner - ny * hw);
-            draw_triangle(p0, p1, p2, rgba(WHEEL_DK, lit, 1.0));
-            draw_triangle(p0, p2, p3, rgba(WHEEL_DK, lit, 1.0));
+            draw_triangle(p0, p1, p2, spoke_col);
+            draw_triangle(p0, p2, p3, spoke_col);
         }
         // Hub.
         let hub = sway(cx, cy);
-        draw_circle(hub.x, hub.y, r * 0.22, rgba(WHEEL_C, lit, 1.0));
+        draw_circle(hub.x, hub.y, r * 0.22, rim_col);
     }
 
     /// Mast, yard and the square sail — the articulating rig. The sail is built
@@ -507,11 +602,14 @@ impl ShipRenderer {
         sway: &impl Fn(f32, f32) -> Vec2,
         rig: &RigInput,
         pitch_ang: f32,
-        lit: f32,
+        lume: &Lume,
         t: f32,
         h: f32,
         w: f32,
     ) {
+        // Tarred rope is round and matte: no face to turn to the light, so it
+        // takes a fixed half-diffuse of the hour's colour everywhere.
+        let rope_col = lume.col(ROPE, 0.5, 1.0);
         let cx = w * 0.5;
         let foot_y = h * 0.82; // mast steps into the deck here (lowered with the deck)
         let mast_len = h * 0.82; // tall enough to tower off the top of the screen
@@ -588,7 +686,7 @@ impl ShipRenderer {
             let tip = sway(cx, stem_y - h * 0.115);
             let head = project(0.0, mast_top, 0.0);
             let thick = (h * 0.0028).max(1.0);
-            draw_line(head.x, head.y, tip.x, tip.y, thick, rgba(ROPE, lit, 1.0));
+            draw_line(head.x, head.y, tip.x, tip.y, thick, rope_col);
         }
 
         // --- Sail panels, a continuous mesh drawn back-to-front by depth -------
@@ -629,7 +727,16 @@ impl ShipRenderer {
             let belly_lit = 1.0 - 0.28 * fill * (2.0 * u).powi(2);
             let face = ((tr.x - tl.x).abs() / (sail_w / n as f32 + 1.0)).min(1.0);
             let shade = (0.55 + 0.45 * face) * belly_lit;
-            let col = rgba(SAIL_CLOTH, lit * shade, 1.0);
+            // Directional cloth: the braced plane's normal (the belly's edge
+            // falloff is already in `belly_lit`) against the key light, with a
+            // leak from the sky overhead. Canvas is translucent, so a back-lit
+            // sail still glows through at three-quarters strength rather than
+            // falling into flat shadow, and a small floor keeps a low sun from
+            // blacking the cloth out.
+            let toward = sb * lume.l.0 + cb * lume.l.2 + 0.35 * lume.l.1;
+            let through = if toward >= 0.0 { toward } else { -toward * 0.75 };
+            let cloth = 0.25 + 0.75 * through.min(1.0);
+            let col = lume.col(SAIL_CLOTH, cloth, shade);
             draw_triangle(tl, tr, br, col);
             draw_triangle(tl, br, bl, col);
         }
@@ -684,7 +791,7 @@ impl ShipRenderer {
         };
         let draw_sheet = |pts: &[Vec2]| {
             for w2 in pts.windows(2) {
-                draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, sheet_thick, rgba(ROPE, lit, 1.0));
+                draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, sheet_thick, rope_col);
             }
         };
         // The rope(s) whose clew lies abaft the mast plane, hidden by the spars.
@@ -704,8 +811,11 @@ impl ShipRenderer {
             let b = project(rx, sail_top + th, rz);
             let c = project(rx, sail_top - th, rz);
             let d = project(lx, sail_top - th, lz);
-            draw_triangle(a, b, c, rgba(SPAR, lit, 1.0));
-            draw_triangle(a, c, d, rgba(SPAR, lit, 1.0));
+            // The yard swings with the brace, so its lit face follows the sail's
+            // plane (plus a touch of sky from above).
+            let yard_col = lume.face(SPAR, (sb * 0.95, 0.3, cb * 0.95));
+            draw_triangle(a, b, c, yard_col);
+            draw_triangle(a, c, d, yard_col);
         }
 
         // --- Mast: a slightly tapered vertical post, two-tone for round form ----
@@ -719,11 +829,14 @@ impl ShipRenderer {
             let t0 = project(-tw, mast_top, 0.0);
             let mid0 = project(0.0, 0.0, 0.0);
             let mid1 = project(0.0, mast_top, 0.0);
-            // Left half lit, right half shaded.
-            draw_triangle(b0, mid0, mid1, rgba(SPAR, lit, 1.0));
-            draw_triangle(b0, mid1, t0, rgba(SPAR, lit, 1.0));
-            draw_triangle(mid0, b1, t1, rgba(SPAR_DK, lit, 1.0));
-            draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
+            // Two-tone halves for round form, each half turned to its own side so
+            // the shading flips as the light crosses the bow.
+            let lit_l = lume.face(SPAR, (-0.7, 0.15, 0.7));
+            let lit_r = lume.face(SPAR_DK, (0.7, 0.15, 0.7));
+            draw_triangle(b0, mid0, mid1, lit_l);
+            draw_triangle(b0, mid1, t0, lit_l);
+            draw_triangle(mid0, b1, t1, lit_r);
+            draw_triangle(mid0, t1, mid1, lit_r);
         }
 
         // The remaining sheet(s), their clews riding forward of the mast plane,

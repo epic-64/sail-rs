@@ -121,6 +121,11 @@ pub struct OceanRenderer {
     sky_horizon: [f32; 3],
     sky_zenith: [f32; 3],
 
+    // How fully night has fallen this frame (`palette::night_factor`), kept so
+    // `scene_light` can brighten the land and ship on the same long twilight
+    // window the painted sea palette uses.
+    night: f32,
+
     // Eased palette state.
     live: Palette,
     shown: Palette,
@@ -217,6 +222,7 @@ impl OceanRenderer {
             reflect_strength: 0.46,
             sky_horizon: [0.0; 3],
             sky_zenith: [0.0; 3],
+            night: 0.0,
             live,
             shown: live,
             prev_t: None,
@@ -241,6 +247,33 @@ impl OceanRenderer {
 
     fn live_col(&self, o: usize) -> [f32; 3] {
         [self.shown[o], self.shown[o + 1], self.shown[o + 2]]
+    }
+
+    /// The coloured light pair the scenery is shaded with this frame: an overall
+    /// brightness (never to full black, so a moonlit silhouette keeps a fifth of
+    /// its daylight and its shape still reads), split into a *key* light (hue from
+    /// the sea palette's sun-warmth channel) and an *ambient* sky fill (hue from
+    /// the mean of the sky dome). The land and deck thus redden at dusk and cool
+    /// under the moon with the sea and sky, instead of only dimming. Both feed off
+    /// the storm-blended live colours, so a gale drains the warmth toward pewter
+    /// along with everything else. Valid once `render` has eased this frame's
+    /// palette; the foreground ship reads the same pair (`main.rs`), so the deck
+    /// sits in the very light the islands take.
+    ///
+    /// Brightness follows the *painted* day, not the raw sun: the sea palette
+    /// holds its full dusk fire until the sun is well down and brightens ahead of
+    /// the sunrise (`palette::night_factor`'s long window), so the land and deck
+    /// track `1 - night` through the twilight or they'd fall to black against a
+    /// still-blazing sea. The active light's strength only takes over where it's
+    /// the brighter claim (a moonlit midnight lifting the floor).
+    pub fn scene_light(&self) -> ((f32, f32, f32), (f32, f32, f32)) {
+        let brightness = 0.22 + 0.78 * self.light_strength.max(1.0 - self.night);
+        let sky_mean = [
+            (self.sky_zenith[0] + self.sky_horizon[0]) * 0.5,
+            (self.sky_zenith[1] + self.sky_horizon[1]) * 0.5,
+            (self.sky_zenith[2] + self.sky_horizon[2]) * 0.5,
+        ];
+        crate::islands_render::island_light(brightness, self.p_sun, sky_mean)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -307,6 +340,7 @@ impl OceanRenderer {
         // The sun/moon disc is swallowed by a storm's overcast, so its mirror glitter
         // on the water has to go with it: fade the light-source reflection by the fury.
         self.light_source_vis = light_strength * (1.0 - clamp(storm, 0.0, 1.0));
+        self.night = clamp(night, 0.0, 1.0);
         self.lightning = clamp(lightning, 0.0, 1.0);
         // The strike's bearing across the view, so the flash below lights only the water
         // turned toward it (a pool on the strike's side, not a wash over the whole sea).
@@ -394,20 +428,9 @@ impl OceanRenderer {
         let ly = light_rel.cos() * light_horiz;
         let lz = light_alt;
 
-        // Day/night island lighting: an overall brightness (never to full black, so a
-        // moonlit silhouette keeps a fifth of its daylight and its shape still reads),
-        // split into a coloured key light (hue from the sea palette's sun-warmth
-        // channel) and an ambient sky fill (hue from the mean of the sky dome). The
-        // land thus reddens at dusk and cools under the moon with the sea and sky,
-        // instead of only dimming. Both feed off the storm-blended live colours, so a
-        // gale drains the warmth toward pewter along with everything else.
-        let brightness = 0.22 + 0.78 * light_strength;
-        let sky_mean = [
-            (self.sky_zenith[0] + self.sky_horizon[0]) * 0.5,
-            (self.sky_zenith[1] + self.sky_horizon[1]) * 0.5,
-            (self.sky_zenith[2] + self.sky_horizon[2]) * 0.5,
-        ];
-        let (key, ambient) = crate::islands_render::island_light(brightness, self.p_sun, sky_mean);
+        // Day/night island lighting: see `scene_light` (this frame's palette state
+        // was just eased above, so the pair is current).
+        let (key, ambient) = self.scene_light();
 
         // Island view: same camera, with the light in *world* space (chart x/y, z up)
         // so the landmass facets shade consistently as the ship turns and the sun moves.

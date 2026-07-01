@@ -53,7 +53,7 @@ use ocean_renderer::OceanRenderer;
 use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
-use ship_render::{RigInput, ShipRenderer};
+use ship_render::{RigInput, ShipLight, ShipRenderer};
 use tavern::SpecialItem;
 use clouds::StormSky;
 use rain::{Rain, RainInput};
@@ -1619,7 +1619,26 @@ async fn run_game(
                 h,
             );
 
-            ship.render(&rig, dt, t, day_lit, storm, w, h);
+            // The deck takes the same coloured key/ambient pair the islands and
+            // sea were just shaded with (storm-blended inside the renderer), plus
+            // where the key light stands relative to the bow, so the woodwork
+            // reddens at dusk, cools under the moon, drains to slate in a gale
+            // and shades side-to-side as the sun arcs over or the ship turns.
+            let (key, ambient) = renderer.scene_light();
+            ship.render(
+                &rig,
+                dt,
+                t,
+                &ShipLight {
+                    key,
+                    ambient,
+                    light_rel: wrap_angle(sky.light_az - view_heading),
+                    light_alt: sky.light_alt,
+                    flash: storm_sky.flash(),
+                },
+                w,
+                h,
+            );
         }
 
         // --- Storm rain --------------------------------------------------------
