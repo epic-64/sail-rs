@@ -282,17 +282,17 @@ pub fn render(
     // Concentric ring radii for the isle fittings, in design pixels (scaled by `s`).
     // Kept strictly increasing so the rings nest without overlapping, and the letter
     // ring clears the widest of them.
-    const SHIPYARD_RING: f32 = 4.5;
-    const MISSION_RING: f32 = 7.0;
-    const RACE_RING: f32 = 9.5;
-    const LETTER_DIST: f32 = 13.0;
+    const SHIPYARD_RING: f32 = 3.5;
+    const MISSION_RING: f32 = 5.5;
+    const RACE_RING: f32 = 7.5;
+    const LETTER_DIST: f32 = 11.0;
     // Every isle in view: a dot each (ports brighter). Its fittings (a shipyard, a
     // booked mission, a booked race) each add a concentric ring and a letter. The
     // rings are drawn smallest to largest so a larger one never hides a smaller
     // (blue shipyard inside yellow mission inside red race). Each letter sits the same
-    // distance from the isle but at its own angle so the three never collide: S
-    // straight above, M to the upper left, R to the upper right.
-    let fs = (13.0 * s).max(11.0);
+    // distance from the isle: a lone mark rides straight above, while two or more fan
+    // out to the sides so they never collide (angles picked by `LETTER_ANGLES`).
+    let fs = (11.0 * s).max(9.0);
     let letter = |x: f32, y: f32, glyph: &str, col: Color, ang_deg: f32| {
         let a = ang_deg.to_radians();
         let lx = x + LETTER_DIST * s * a.sin();
@@ -324,15 +324,26 @@ pub fn render(
         if is_race {
             draw_circle_lines(x, y, RACE_RING * s, 2.0, pal.race_mark);
         }
-        // Letters, each fixed distance from the isle at its own angle.
+        // Letters: gather whichever marks this isle carries, then fan them across the
+        // top by count. One mark sits dead centre above; two or more spread to the
+        // sides, symmetric about the top.
+        let mut marks: Vec<(&str, Color)> = Vec::new();
         if isle.is_shipyard {
-            letter(x, y, "S", pal.shipyard_ring, 0.0);
+            marks.push(("S", pal.shipyard_ring));
         }
         if is_mission {
-            letter(x, y, "M", pal.mission_mark, -50.0);
+            marks.push(("M", pal.mission_mark));
         }
         if is_race {
-            letter(x, y, "R", pal.race_mark, 50.0);
+            marks.push(("R", pal.race_mark));
+        }
+        let angles: &[f32] = match marks.len() {
+            0 | 1 => &[0.0],
+            2 => &[-35.0, 35.0],
+            _ => &[-52.0, 0.0, 52.0],
+        };
+        for (i, (glyph, col)) in marks.iter().enumerate() {
+            letter(x, y, glyph, *col, angles[i]);
         }
     }
 
@@ -805,7 +816,7 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
     // A ring round each shipyard, over the isles (the bearing lines no longer run through
     // them, but the harbours stay marked).
     for &(spx, spy) in &shipyards_xy {
-        draw_circle_lines(spx, spy, 4.0 * s, (1.2 * s).max(1.0), col);
+        draw_circle_lines(spx, spy, 3.2 * s, (1.2 * s).max(1.0), col);
     }
 
     // Sea-monsters to fill the open water, the way old charts crammed a kraken or a
