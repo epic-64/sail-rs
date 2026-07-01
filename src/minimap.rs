@@ -110,33 +110,13 @@ fn clip_segment(x0: f32, y0: f32, x1: f32, y1: f32, r: Rect) -> Option<(f32, f32
     Some((x0 + u0 * dx, y0 + u0 * dy, x0 + u1 * dx, y0 + u1 * dy))
 }
 
-/// Draw a dashed line from (x0,y0) to (x1,y1) — macroquad only draws solid lines,
-/// so we lay down `dash`-long segments separated by `gap`.
-#[allow(clippy::too_many_arguments)] // two endpoints + stroke style is inherent
-fn draw_dashed_line(x0: f32, y0: f32, x1: f32, y1: f32, thick: f32, dash: f32, gap: f32, color: Color) {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len <= 0.0 {
-        return;
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    let step = dash + gap;
-    let mut d = 0.0;
-    while d < len {
-        let a = d;
-        let b = (d + dash).min(len);
-        draw_line(x0 + ux * a, y0 + uy * a, x0 + ux * b, y0 + uy * b, thick, color);
-        d += step;
-    }
-}
-
 /// Paint the chart into the square `rect` (screen space). `mission_targets` mark
 /// the isles that hold an active contract's destination — a yellow ring with an
 /// "M" (empty until missions land); `race_targets` mark the booked race's mark —
-/// a red ring with an "R". `route`, if set, draws a dashed rhumb line between two
-/// world points (the docked port and a highlighted contract's or race's other
-/// port) so the captain can weigh a leg against the wind before taking it.
+/// a red ring with an "R". `route`, if set, draws a straight rhumb line between two
+/// world points (the docked port and a highlighted contract's or race's other port),
+/// ringing the target in brown, so the captain can weigh a leg against the wind before
+/// taking it.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     world: &World,
@@ -156,6 +136,9 @@ pub fn render(
     // where his opponent has got to and which way it's pointed. `None` off the
     // water (no race) and on the charts that don't track it (the log, the board).
     rival: Option<(Vec2, f32)>,
+    // The port the captain is docked at, ringed in brown as a "you are here" mark.
+    // `None` off the water (the HUD map and the log, where the ship isn't in port).
+    home: Option<Vec2>,
 ) {
     // Panel + frame. (Parchment's panel is opaque beige; the HUD's is dark glass.)
     if pal.panel.a > 0.0 {
@@ -165,6 +148,13 @@ pub fn render(
 
     let size = rect.w.min(rect.h);
     let s = size / 168.0; // scale every CSS-pixel constant off the original 168px map
+    // The isle marks (dots, rings, letters) and the route line size off `ms`, a scale
+    // capped just above `ui::scale`. On the corner minimap `s` already tracks
+    // `ui::scale`, so this leaves it untouched; the captain's-log chart is drawn ~2x
+    // larger, where an uncapped `s` would bloat the whole cluster (dots swallowing their
+    // own rings). Capping keeps the marks the same crisp absolute size on both charts.
+    // The rest of the chart (ship arrow, wind streaks) still tracks the full `s`.
+    let ms = s.min(1.2 * crate::ui::scale());
     let pad = 12.0 * s;
     let cx = rect.x + size / 2.0;
     let cy = rect.y + size / 2.0;
@@ -269,13 +259,27 @@ pub fn render(
         }
     }
 
-    // A dashed rhumb line between the docked port and the highlighted contract's
-    // other port, drawn under the island dots so the markers sit on top.
+    // The docked port, ringed brown as a "you are here" mark (drawn under the island
+    // dots so its own marker sits on top).
+    if let Some(h) = home {
+        let (hx, hy) = (sx(h), sy(h));
+        if rect.contains(vec2(hx, hy)) {
+            draw_circle_lines(hx, hy, SELECT_RING * ms, (1.6 * ms).max(1.2), pal.border);
+        }
+    }
+
+    // A straight rhumb line between the docked port and the highlighted contract's
+    // other port, drawn under the island dots so the markers sit on top, with a brown
+    // ring round the selected target so it reads as the picked destination.
     if let Some((from, to)) = route {
         if let Some((ax, ay, bx, by)) =
             clip_segment(sx(from), sy(from), sx(to), sy(to), rect)
         {
-            draw_dashed_line(ax, ay, bx, by, 1.6, 6.0 * s, 4.0 * s, pal.mission_mark);
+            draw_line(ax, ay, bx, by, (1.6 * ms).max(1.2), pal.mission_mark);
+        }
+        let (tx, ty) = (sx(to), sy(to));
+        if rect.contains(vec2(tx, ty)) {
+            draw_circle_lines(tx, ty, SELECT_RING * ms, (1.6 * ms).max(1.2), pal.border);
         }
     }
 
@@ -286,13 +290,9 @@ pub fn render(
     const MISSION_RING: f32 = 5.5;
     const RACE_RING: f32 = 7.5;
     const LETTER_DIST: f32 = 11.0;
-    // The isle dots, rings and letters size off `ms`, a scale capped just above
-    // `ui::scale`. On the corner minimap `s` already tracks `ui::scale`, so this leaves
-    // it untouched; the captain's-log chart is drawn ~2x larger, where an uncapped `s`
-    // would bloat the whole cluster (dots swallowing their own rings). Capping keeps
-    // the marks the same crisp absolute size on both charts. The rest of the chart (the
-    // ship arrow, wind streaks, route) still tracks the full `s`.
-    let ms = s.min(1.2 * crate::ui::scale());
+    // A brown ring marking the docked port and the selected target: sits just outside a
+    // mission ring so it reads as a highlight hugging the isle it points to.
+    const SELECT_RING: f32 = 7.0;
     // Every isle in view: a dot each (ports brighter). Its fittings (a shipyard, a
     // booked mission, a booked race) each add a concentric ring and a letter. The
     // rings are drawn smallest to largest so a larger one never hides a smaller

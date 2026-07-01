@@ -1848,6 +1848,7 @@ async fn run_game(
                 None,
                 &traders.positions(),
                 rival.map(|r| (r.pos, r.heading_rad)),
+                None,
             );
 
             // A beginner's checklist tucked under the chart (until its steps are all
