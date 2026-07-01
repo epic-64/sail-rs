@@ -279,24 +279,31 @@ pub fn render(
         }
     }
 
-    // Concentric ring radii for the isle fittings, in design pixels (scaled by `s`).
+    // Concentric ring radii for the isle fittings, in design pixels (scaled by `ms`).
     // Kept strictly increasing so the rings nest without overlapping, and the letter
     // ring clears the widest of them.
     const SHIPYARD_RING: f32 = 3.5;
     const MISSION_RING: f32 = 5.5;
     const RACE_RING: f32 = 7.5;
     const LETTER_DIST: f32 = 11.0;
+    // The isle dots, rings and letters size off `ms`, a scale capped just above
+    // `ui::scale`. On the corner minimap `s` already tracks `ui::scale`, so this leaves
+    // it untouched; the captain's-log chart is drawn ~2x larger, where an uncapped `s`
+    // would bloat the whole cluster (dots swallowing their own rings). Capping keeps
+    // the marks the same crisp absolute size on both charts. The rest of the chart (the
+    // ship arrow, wind streaks, route) still tracks the full `s`.
+    let ms = s.min(1.2 * crate::ui::scale());
     // Every isle in view: a dot each (ports brighter). Its fittings (a shipyard, a
     // booked mission, a booked race) each add a concentric ring and a letter. The
     // rings are drawn smallest to largest so a larger one never hides a smaller
     // (blue shipyard inside yellow mission inside red race). Each letter sits the same
     // distance from the isle: a lone mark rides straight above, while two or more fan
-    // out to the sides so they never collide (angles picked by `LETTER_ANGLES`).
-    let fs = (11.0 * s).max(9.0);
+    // out to the sides so they never collide (angles picked by count below).
+    let fs = (11.0 * ms).max(9.0);
     let letter = |x: f32, y: f32, glyph: &str, col: Color, ang_deg: f32| {
         let a = ang_deg.to_radians();
-        let lx = x + LETTER_DIST * s * a.sin();
-        let ly = y - LETTER_DIST * s * a.cos();
+        let lx = x + LETTER_DIST * ms * a.sin();
+        let ly = y - LETTER_DIST * ms * a.cos();
         let dims = measure_text(glyph, None, fs as u16, 1.0);
         draw_text(glyph, lx - dims.width / 2.0, ly + dims.offset_y / 2.0, fs, col);
     };
@@ -309,20 +316,20 @@ pub fn render(
         if !rect.contains(vec2(x, y)) {
             continue;
         }
-        let r = if isle.is_port { 3.2 } else { 2.4 } * s;
+        let r = if isle.is_port { 3.2 } else { 2.4 } * ms;
         draw_circle(x, y, r, if isle.is_port { pal.port } else { pal.land });
 
         let is_mission = mission_targets.contains(&isle.id);
         let is_race = race_targets.contains(&isle.id);
         // Rings, smallest first.
         if isle.is_shipyard {
-            draw_circle_lines(x, y, SHIPYARD_RING * s, 1.5, pal.shipyard_ring);
+            draw_circle_lines(x, y, SHIPYARD_RING * ms, 1.5, pal.shipyard_ring);
         }
         if is_mission {
-            draw_circle_lines(x, y, MISSION_RING * s, 2.0, pal.mission_mark);
+            draw_circle_lines(x, y, MISSION_RING * ms, 2.0, pal.mission_mark);
         }
         if is_race {
-            draw_circle_lines(x, y, RACE_RING * s, 2.0, pal.race_mark);
+            draw_circle_lines(x, y, RACE_RING * ms, 2.0, pal.race_mark);
         }
         // Letters: gather whichever marks this isle carries, then fan them across the
         // top by count. One mark sits dead centre above; two or more spread to the
