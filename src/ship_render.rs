@@ -627,6 +627,66 @@ impl ShipRenderer {
             draw_triangle(tl, br, bl, col);
         }
 
+        // --- Sheets: the two ropes working the sail, one from each clew (the
+        // foot's free corners) hauled aft to the railing well astern. The clew
+        // end rides the same brace/belly/luff transform as the cloth's own
+        // panels, so the ropes lead wherever the sail swings and tremble with
+        // it when it flogs. Braced hard on the wind a clew swings abaft the
+        // mast plane; that side's rope must hide behind the spars, so each
+        // rope draws before or after them by its clew's depth.
+        let sheet_thick = (h * 0.0028).max(1.0);
+        let sheets: Vec<(Vec<Vec2>, bool)> = {
+            // Recompute the deck's side geometry (matches draw_deck) so the feet
+            // sit on the railing as the hull nods.
+            let nod = pitch_ang * h * 0.72;
+            let far_y = h * 0.76 - nod;
+            let near_y = h * 1.22 + nod * 0.3;
+            let far_hw = w * 0.12;
+            let near_hw = w * 0.72;
+            let rail_h = h * 0.10;
+            // A point atop the railing cap at fore-aft fraction v (0=bow, 1=helm).
+            let rail_top = |side: f32, v: f32| -> Vec2 {
+                let hw = far_hw + (near_hw - far_hw) * v;
+                let cap_far = far_y - rail_h * 0.45;
+                let cap_near = near_y - rail_h * 1.6;
+                let cap = cap_far + (cap_near - cap_far) * v;
+                // Sit a touch above the cap, on the stanchion tops.
+                sway(cx + side * hw, cap - rail_h * (0.35 + 0.7 * v) * 0.9)
+            };
+            let sag = h * 0.035; // the rope's own weight bows the run a little
+            let segs = 8;
+            [-1.0f32, 1.0]
+                .iter()
+                .map(|&side| {
+                    // The clew: the sail mesh's outermost seam at the foot.
+                    let u = side * 0.5;
+                    let (kx, kz) = braced(u, panel_z(u, 1.0));
+                    let clew = project(kx, sail_bot, kz);
+                    let foot = rail_top(side, 0.74); // belayed well astern
+                    let pts: Vec<Vec2> = (0..=segs)
+                        .map(|i| {
+                            let t = i as f32 / segs as f32;
+                            let mut p = clew.lerp(foot, t);
+                            p.y += sag * (t * std::f32::consts::PI).sin();
+                            p
+                        })
+                        .collect();
+                    (pts, kz < 0.0)
+                })
+                .collect()
+        };
+        let draw_sheet = |pts: &[Vec2]| {
+            for w2 in pts.windows(2) {
+                draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, sheet_thick, rgba(ROPE, lit, 1.0));
+            }
+        };
+        // The rope(s) whose clew lies abaft the mast plane, hidden by the spars.
+        for (pts, behind) in &sheets {
+            if *behind {
+                draw_sheet(pts);
+            }
+        }
+
         // --- Yard: a spar along the braced across-axis at the sail's head -------
         // Drawn over the panels so it crosses ahead of the cloth it carries.
         {
@@ -659,46 +719,11 @@ impl ShipRenderer {
             draw_triangle(mid0, t1, mid1, rgba(SPAR_DK, lit, 1.0));
         }
 
-        // --- Sheets: the two ropes working the sail, one from each clew (the
-        // foot's free corners) hauled aft to the railing well astern. The clew
-        // end rides the same brace/belly/luff transform as the cloth's own
-        // panels, so the ropes lead wherever the sail swings and tremble with
-        // it when it flogs. Drawn last, nearest the viewer.
-        {
-            // Recompute the deck's side geometry (matches draw_deck) so the feet
-            // sit on the railing as the hull nods.
-            let nod = pitch_ang * h * 0.72;
-            let far_y = h * 0.76 - nod;
-            let near_y = h * 1.22 + nod * 0.3;
-            let far_hw = w * 0.12;
-            let near_hw = w * 0.72;
-            let rail_h = h * 0.10;
-            // A point atop the railing cap at fore-aft fraction v (0=bow, 1=helm).
-            let rail_top = |side: f32, v: f32| -> Vec2 {
-                let hw = far_hw + (near_hw - far_hw) * v;
-                let cap_far = far_y - rail_h * 0.45;
-                let cap_near = near_y - rail_h * 1.6;
-                let cap = cap_far + (cap_near - cap_far) * v;
-                // Sit a touch above the cap, on the stanchion tops.
-                sway(cx + side * hw, cap - rail_h * (0.35 + 0.7 * v) * 0.9)
-            };
-            let thick = (h * 0.0028).max(1.0);
-            let sag = h * 0.035; // the rope's own weight bows the run a little
-            let segs = 8;
-            for side in [-1.0f32, 1.0] {
-                // The clew: the sail mesh's outermost seam at the foot.
-                let u = side * 0.5;
-                let (kx, kz) = braced(u, panel_z(u, 1.0));
-                let clew = project(kx, sail_bot, kz);
-                let foot = rail_top(side, 0.74); // belayed well astern
-                let mut prev = clew;
-                for i in 1..=segs {
-                    let t = i as f32 / segs as f32;
-                    let mut p = clew.lerp(foot, t);
-                    p.y += sag * (t * std::f32::consts::PI).sin();
-                    draw_line(prev.x, prev.y, p.x, p.y, thick, rgba(ROPE, lit, 1.0));
-                    prev = p;
-                }
+        // The remaining sheet(s), their clews riding forward of the mast plane,
+        // drawn nearest so the rope leads over the spars toward the rail.
+        for (pts, behind) in &sheets {
+            if !*behind {
+                draw_sheet(pts);
             }
         }
     }
