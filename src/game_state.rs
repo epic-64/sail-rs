@@ -475,6 +475,9 @@ pub struct Stats {
     /// Whole metres sailed over the voyage, banked from [`GameState::wear_distance`]
     /// and shown as kilometres. Held as a float so short hops accumulate exactly.
     pub meters_traveled: f64,
+    /// Cargo units washed overboard by storms and wild turns over the voyage
+    /// (see [`GameState::lose_cargo`]).
+    pub cargo_lost_overboard: u32,
     /// Pieces of flotsam scooped from the swell over the voyage (see the salvage
     /// pickup in `main`).
     pub flotsam_collected: u32,
@@ -528,8 +531,9 @@ impl GameState {
         self.cargo.iter().sum()
     }
     /// Hold taken by mission goods in transit — they ride along until delivered.
+    /// Units already washed overboard no longer take up space (see [`Self::lose_cargo`]).
     pub fn mission_hold(&self) -> i32 {
-        self.active_missions.iter().map(|m| m.quantity).sum()
+        self.active_missions.iter().map(|m| m.remaining()).sum()
     }
     /// Hold space in use: ordinary cargo plus reserved mission cargo.
     pub fn hold_used(&self) -> i32 {
@@ -774,7 +778,9 @@ impl GameState {
     }
 
     /// Hand in a contract at its destination: return the deposit plus the reward
-    /// and free the hold the goods occupied. (`Missions.deliver`.)
+    /// and free the hold the goods occupied. (`Missions.deliver`.) Cargo lost
+    /// overboard in transit is docked from the returned deposit in proportion
+    /// (see [`Mission::deposit_docked`]); the reward is paid in full.
     pub fn deliver(&mut self, world: &World, mission_id: i32) -> Result<(), TradeError> {
         let isle_id = self.docked_island(world).ok_or(TradeError::NotDocked)?.id;
         let mission = self
@@ -783,7 +789,7 @@ impl GameState {
             .copied()
             .find(|m| m.id == mission_id && m.target_id == isle_id)
             .ok_or(TradeError::NoDelivery)?;
-        self.gold += mission.deposit + mission.reward;
+        self.gold += mission.deposit - mission.deposit_docked() + mission.reward;
         self.active_missions.retain(|m| m.id != mission.id);
         self.stats.contracts_fulfilled += 1;
         self.stats.contract_earnings += mission.reward as i64;
@@ -805,8 +811,43 @@ impl GameState {
             .find(|m| m.id == mission_id)
             .ok_or(TradeError::NoSuchMission)?;
         self.active_missions.retain(|m| m.id != mission.id);
-        self.cargo[mission.good.index()] += mission.quantity;
+        self.cargo[mission.good.index()] += mission.remaining();
         Ok(())
+    }
+
+    /// Wash `units` of hold cargo overboard — a storm's or a wild turn's toll
+    /// (the deck-cargo physics decides *when*; this decides *what*). Each unit
+    /// comes off the biggest pool aboard, ordinary goods and contract cargo
+    /// alike, so a mixed hold loses a mix. Ordinary goods are simply gone;
+    /// contract goods are tallied on their mission and docked from its returned
+    /// deposit at delivery (see [`Mission::deposit_docked`]). Returns the
+    /// (ordinary, contract) units actually lost — short of `units` only if the
+    /// hold ran dry first.
+    pub fn lose_cargo(&mut self, units: i32) -> (i32, i32) {
+        let (mut goods, mut contract) = (0, 0);
+        for _ in 0..units.max(0) {
+            let best_good = (0..self.cargo.len())
+                .max_by_key(|&g| self.cargo[g])
+                .unwrap_or(0);
+            let best_mission = (0..self.active_missions.len())
+                .max_by_key(|&m| self.active_missions[m].remaining());
+            let good_n = self.cargo[best_good];
+            let mission_n = best_mission
+                .map(|m| self.active_missions[m].remaining())
+                .unwrap_or(0);
+            if good_n <= 0 && mission_n <= 0 {
+                break;
+            }
+            if good_n >= mission_n {
+                self.cargo[best_good] -= 1;
+                goods += 1;
+            } else {
+                self.active_missions[best_mission.unwrap()].lost += 1;
+                contract += 1;
+            }
+        }
+        self.stats.cargo_lost_overboard += (goods + contract) as u32;
+        (goods, contract)
     }
 
     // --- Races (the logic of `shared.Race`) ----------------------------------
