@@ -34,7 +34,7 @@ const BELLY_DEPTH: f32 = 0.37; // deepest draft, as a fraction of sail width
 const FLAP_HZ: f32 = 1.6; // luff flutter rate
 const FLAP_WAVES: f32 = 1.6; // ripple crests across the sail at once
 const FLAP_DEPTH: f32 = 0.035; // deepest a flog throws a panel, fraction of width
-const BRACE_LIMIT: f32 = 1.4; // hard brace (~80°) reached by a beam wind
+const BRACE_LIMIT: f32 = 1.3; // hard brace (~75°) reached by a beam wind
 const BRACE_EASE: f32 = 2.5; // 1/s the crew haul the yard toward its trim
 const WHEEL_EASE: f32 = 5.0; // 1/s the wheel chases the rudder input
 const SET_EASE: f32 = 2.2; // 1/s the crew haul the canvas to its new set (furl/unfurl)
@@ -520,7 +520,7 @@ impl ShipRenderer {
         // top; the yard and sail stay pinned to `mast_len` below.
         let mast_top = mast_len + 3.0 * 27.0;
         let yard_y = mast_len * 0.90; // yard crosses near the masthead
-        let sail_w = w * 0.38;
+        let sail_w = w * 0.49;
         let sail_h = mast_len * 0.42;
 
         // The fore-aft nod tips the whole rig about its foot: bow-up rocks the
@@ -540,7 +540,14 @@ impl ShipRenderer {
         let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
         let set = self.set; // visually-eased set, so the canvas furls/unfurls smoothly
         let fill = draw_f * set; // belly amount
-        let luff = (1.0 - draw_f).powi(3) * set; // flog amount
+        // Flog amount by point of sail: full flogging in irons, easing to its
+        // weakest on the beam (the cleanest draw), then a lazy shiver building
+        // again toward a dead run, where the following wind lets the cloth
+        // slat. A small floor keeps the canvas alive at every angle.
+        let x = (rig.wind_rel.abs() / std::f32::consts::PI).clamp(0.0, 1.0); // 0 = dead run, 1 = in irons
+        let beam_dist = (2.0 * (x - 0.5)).abs(); // 0 on the beam, 1 at either extreme
+        let flog = if x > 0.5 { 0.06 + 0.94 * beam_dist * beam_dist } else { 0.06 + 0.24 * beam_dist * beam_dist };
+        let luff = flog * set;
         let furl = set.max(0.05); // a struck sail keeps a thin rolled sliver
         let brace = self.brace_angle;
         let (sb, cb) = brace.sin_cos();
