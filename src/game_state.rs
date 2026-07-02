@@ -712,12 +712,19 @@ impl GameState {
 
     /// Buy the tavern ware `item`. Requires being docked at the shipyard whose
     /// tavern stocks it, with the coin to spare and the ware not already owned.
-    pub fn buy_item(&mut self, world: &World, item: SpecialItem) -> Result<(), TradeError> {
+    /// `dev_wares` widens the home tavern's stock to the whole catalogue (the
+    /// "banana" cheat, see [`tavern::items_at`]).
+    pub fn buy_item(
+        &mut self,
+        world: &World,
+        item: SpecialItem,
+        dev_wares: bool,
+    ) -> Result<(), TradeError> {
         let isle = self.docked_island(world).ok_or(TradeError::NotDocked)?;
         if !isle.is_shipyard {
             return Err(TradeError::NoShipyard);
         }
-        if tavern::item_at(world, isle.id) != Some(item) {
+        if !tavern::items_at(world, isle.id, dev_wares).contains(&item) {
             return Err(TradeError::NotSoldHere);
         }
         if self.owns(item) {

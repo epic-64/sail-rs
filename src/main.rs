@@ -951,7 +951,12 @@ async fn run_game(
                 let set_sail = harbor
                     .screen
                     .as_mut()
-                    .map(|s| s.handle_input(&mut gs, &world, &market, sounds, &touch))
+                    .map(|s| {
+                        // Keep the board's dev stock in step with the cheat (the home
+                        // tavern lays out every ware while it's live).
+                        s.dev_wares = dev_mode;
+                        s.handle_input(&mut gs, &world, &market, sounds, &touch)
+                    })
                     .unwrap_or(true);
                 if set_sail {
                     harbor.set_sail(&mut gs);
