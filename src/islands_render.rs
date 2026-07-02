@@ -490,7 +490,9 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         // each house, the watchtower carrying a brighter beacon. Drawn over the
         // building it belongs to, so it rides the island's depth slot and a nearer
         // wave band paints over it like the rest of the isle.
-        if isle.is_port && v.lamp > 0.01 {
+        // A campfire or lava vent glows on any isle; windows and beacons only in a port.
+        let glows = matches!(f.kind, FeatureKind::Campfire | FeatureKind::LavaVent);
+        if v.lamp > 0.01 && (isle.is_port || glows) {
             draw_window_light(f.kind, fi, fx, fy, h_px, feat_alpha, v.lamp, v.t);
         }
     }
@@ -518,17 +520,39 @@ fn draw_window_light(
     lamp: f32,
     t: f32,
 ) {
+    if h_px < 3.0 {
+        return;
+    }
+    // A campfire or lava vent burns regardless of any settlement: a fixed warm/red
+    // glow low on the feature, flickering rather than the steady scatter of windows.
+    if let Some((col, frac_up, big)) = match kind {
+        FeatureKind::Campfire => Some(([255.0, 150.0, 62.0], 0.24, 1.6)),
+        FeatureKind::LavaVent => Some(([255.0, 92.0, 44.0], 0.16, 1.3)),
+        _ => None,
+    } {
+        let flick = 0.7 + 0.3 * (t * 8.0 + idx as f32 * 1.7).sin();
+        let a = clamp(lamp * alpha * flick, 0.0, 1.0);
+        if a <= 0.01 {
+            return;
+        }
+        let ly = fy - h_px * frac_up;
+        let sz = (h_px * 0.16 * big).clamp(1.0, h_px * 0.6);
+        let core = Color::new(col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a);
+        let halo = Color::new(col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a * 0.30);
+        draw_circle(fx, ly, sz * 2.4, halo);
+        draw_circle(fx, ly, sz, core);
+        return;
+    }
     // Where up the building the light sits, the share of houses that are lit, and a
-    // size multiplier. The watchtower is always lit and brighter (a harbour beacon).
+    // size multiplier. The watchtower and lighthouse are always lit and brighter (a
+    // harbour beacon).
     let (frac_up, gate, big) = match kind {
         FeatureKind::Hut => (0.42, 0.78, 1.0),
         FeatureKind::Cottage => (0.40, 0.82, 1.05),
         FeatureKind::Tower => (0.90, 1.0, 1.7),
+        FeatureKind::Lighthouse => (0.82, 1.0, 1.9),
         _ => return,
     };
-    if h_px < 3.0 {
-        return;
-    }
     let n = idx as f32;
     let h1 = lamp_hash(n + 0.5);
     if h1 > gate {
@@ -575,6 +599,17 @@ fn feature_aspect(kind: FeatureKind) -> f32 {
         FeatureKind::Dock => 2.6,
         FeatureKind::Flag => 0.6,
         FeatureKind::Shipwreck => 1.9,
+        FeatureKind::DeadTree => 0.7,
+        FeatureKind::FlowerPatch => 1.8,
+        FeatureKind::Reeds => 1.2,
+        FeatureKind::Cactus => 0.7,
+        FeatureKind::FallenLog => 2.4,
+        FeatureKind::Cairn => 1.1,
+        FeatureKind::StoneArch => 1.3,
+        FeatureKind::LavaVent => 1.6,
+        FeatureKind::Campfire => 1.4,
+        FeatureKind::Windmill => 1.0,
+        FeatureKind::Lighthouse => 0.55,
     }
 }
 
@@ -623,6 +658,22 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
     const POLE: [f32; 3] = [82.0, 72.0, 60.0];
     const WRECK: [f32; 3] = [74.0, 56.0, 42.0];
     const WRECK_DK: [f32; 3] = [52.0, 40.0, 30.0];
+    const SNAG: [f32; 3] = [122.0, 108.0, 90.0];
+    const SNAG_DK: [f32; 3] = [92.0, 80.0, 66.0];
+    const MEADOW: [f32; 3] = [78.0, 148.0, 78.0];
+    const BLOOM_A: [f32; 3] = [236.0, 108.0, 150.0]; // pink
+    const BLOOM_B: [f32; 3] = [246.0, 214.0, 96.0]; // yellow
+    const BLOOM_C: [f32; 3] = [232.0, 236.0, 244.0]; // white
+    const REED: [f32; 3] = [150.0, 158.0, 92.0];
+    const REED_DK: [f32; 3] = [118.0, 128.0, 70.0];
+    const CACTUS: [f32; 3] = [86.0, 132.0, 78.0];
+    const CACTUS_DK: [f32; 3] = [62.0, 102.0, 60.0];
+    const MOSS: [f32; 3] = [78.0, 128.0, 72.0];
+    const BASALT: [f32; 3] = [72.0, 66.0, 66.0];
+    const BASALT_DK: [f32; 3] = [48.0, 44.0, 44.0];
+    const EMBER: [f32; 3] = [236.0, 96.0, 42.0];
+    const FLAME: [f32; 3] = [242.0, 132.0, 46.0];
+    const FLAME_HOT: [f32; 3] = [252.0, 214.0, 96.0];
 
     match kind {
         FeatureKind::Tree => {
@@ -707,6 +758,103 @@ fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f3
             tri((-0.5, 0.1), (0.45, 0.0), (0.5, 0.5), rgba(WRECK, alpha));
             tri((-0.5, 0.1), (0.5, 0.5), (-0.34, 0.55), rgba(WRECK_DK, alpha));
             quad(0.02, 0.45, 0.14, 1.0, rgba(WOOD_DK, alpha));
+        }
+        FeatureKind::DeadTree => {
+            // A bare grey snag: a leaning trunk with a few broken branches.
+            quad(-0.06, 0.0, 0.06, 0.72, rgba(SNAG, alpha));
+            tri((0.02, 0.5), (0.34, 0.86), (0.06, 0.58), rgba(SNAG, alpha));
+            tri((-0.02, 0.6), (-0.3, 0.9), (-0.06, 0.68), rgba(SNAG_DK, alpha));
+            tri((0.0, 0.68), (0.16, 1.0), (0.0, 0.8), rgba(SNAG_DK, alpha));
+        }
+        FeatureKind::FlowerPatch => {
+            // A low green cushion dotted with bright blooms.
+            tri((-0.5, 0.0), (0.5, 0.0), (-0.14, 0.6), rgba(MEADOW, alpha));
+            tri((0.5, 0.0), (0.14, 0.6), (-0.14, 0.6), rgba(MEADOW, alpha));
+            let dot = |x: f32, y: f32, c: [f32; 3]| {
+                tri((x - 0.09, y), (x + 0.09, y), (x, y + 0.28), rgba(c, alpha));
+            };
+            dot(-0.28, 0.28, BLOOM_A);
+            dot(0.0, 0.42, BLOOM_B);
+            dot(0.3, 0.24, BLOOM_C);
+            dot(0.12, 0.14, BLOOM_A);
+        }
+        FeatureKind::Reeds => {
+            // Tall thin blades leaning off the vertical.
+            tri((-0.42, 0.0), (-0.24, 0.0), (-0.4, 1.0), rgba(REED, alpha));
+            tri((-0.12, 0.0), (0.06, 0.0), (0.14, 1.05), rgba(REED_DK, alpha));
+            tri((0.18, 0.0), (0.36, 0.0), (0.4, 0.9), rgba(REED, alpha));
+            tri((-0.02, 0.0), (0.14, 0.0), (-0.1, 0.85), rgba(REED_DK, alpha));
+        }
+        FeatureKind::Cactus => {
+            // A ribbed column with two upturned arms.
+            quad(-0.14, 0.0, 0.14, 1.0, rgba(CACTUS, alpha));
+            quad(0.02, 0.0, 0.14, 1.0, rgba(CACTUS_DK, alpha));
+            quad(-0.36, 0.36, -0.14, 0.5, rgba(CACTUS, alpha));
+            quad(-0.36, 0.36, -0.24, 0.74, rgba(CACTUS_DK, alpha));
+            quad(0.14, 0.46, 0.36, 0.6, rgba(CACTUS, alpha));
+            quad(0.26, 0.46, 0.36, 0.82, rgba(CACTUS_DK, alpha));
+        }
+        FeatureKind::FallenLog => {
+            // A mossy trunk lying on its side, one end-face turned to us.
+            quad(-0.5, 0.08, 0.42, 0.44, rgba(WOOD, alpha));
+            quad(-0.5, 0.34, 0.42, 0.46, rgba(MOSS, alpha)); // moss along the top
+            quad(0.36, 0.06, 0.5, 0.46, rgba(WOOD_DK, alpha)); // end cap
+        }
+        FeatureKind::Cairn => {
+            // A pile of balanced stones, wide at the base and tapering up.
+            quad(-0.4, 0.0, 0.4, 0.3, rgba(ROCK, alpha));
+            quad(0.08, 0.0, 0.4, 0.3, rgba(ROCK_DK, alpha));
+            quad(-0.3, 0.28, 0.3, 0.56, rgba(ROCK, alpha));
+            quad(0.04, 0.28, 0.3, 0.56, rgba(ROCK_DK, alpha));
+            quad(-0.18, 0.54, 0.18, 0.82, rgba(ROCK, alpha));
+            tri((-0.14, 0.8), (0.14, 0.8), (0.0, 1.0), rgba(ROCK_DK, alpha));
+        }
+        FeatureKind::StoneArch => {
+            // Two weathered legs bridged by a heavy lintel.
+            quad(-0.5, 0.0, -0.28, 0.82, rgba(STONE, alpha));
+            quad(-0.5, 0.0, -0.4, 0.82, rgba(STONE_DK, alpha));
+            quad(0.28, 0.0, 0.5, 0.82, rgba(STONE, alpha));
+            quad(0.4, 0.0, 0.5, 0.82, rgba(STONE_DK, alpha));
+            quad(-0.5, 0.8, 0.5, 1.0, rgba(STONE, alpha));
+            quad(-0.5, 0.92, 0.5, 1.0, rgba(STONE_DK, alpha));
+        }
+        FeatureKind::LavaVent => {
+            // A dark basalt mound split by a glowing fissure (its light is the ember
+            // glow drawn over the top; see `draw_window_light`).
+            tri((-0.5, 0.0), (0.5, 0.0), (0.16, 0.62), rgba(BASALT, alpha));
+            tri((-0.5, 0.0), (0.16, 0.62), (-0.24, 0.5), rgba(BASALT_DK, alpha));
+            tri((-0.05, 0.06), (0.07, 0.06), (0.02, 0.56), rgba(EMBER, alpha));
+        }
+        FeatureKind::Campfire => {
+            // Crossed logs in a ring of stones under a flame (glow drawn over the top).
+            quad(-0.42, 0.0, 0.42, 0.16, rgba(ROCK_DK, alpha));
+            tri((-0.4, 0.04), (0.4, 0.22), (0.34, 0.04), rgba(WOOD_DK, alpha));
+            tri((0.4, 0.04), (-0.4, 0.22), (-0.34, 0.04), rgba(WOOD, alpha));
+            tri((-0.18, 0.14), (0.18, 0.14), (0.0, 0.9), rgba(FLAME, alpha));
+            tri((-0.09, 0.14), (0.09, 0.14), (0.0, 0.62), rgba(FLAME_HOT, alpha));
+        }
+        FeatureKind::Windmill => {
+            // A tapered tower with a cap and four spread sails.
+            tri((-0.22, 0.0), (0.22, 0.0), (0.14, 0.7), rgba(WALL, alpha));
+            tri((-0.22, 0.0), (0.14, 0.7), (-0.14, 0.7), rgba(WALL, alpha));
+            tri((0.0, 0.0), (0.22, 0.0), (0.14, 0.7), rgba(WALL_DK, alpha));
+            tri((-0.2, 0.66), (0.2, 0.66), (0.0, 0.86), rgba(ROOF, alpha));
+            // Sails, an X centred on the hub.
+            tri((0.0, 0.72), (0.46, 0.98), (0.38, 0.86), rgba(WOOD, alpha));
+            tri((0.0, 0.72), (-0.46, 0.98), (-0.38, 0.86), rgba(WOOD, alpha));
+            tri((0.0, 0.72), (0.46, 0.46), (0.38, 0.58), rgba(WOOD_DK, alpha));
+            tri((0.0, 0.72), (-0.46, 0.46), (-0.38, 0.58), rgba(WOOD_DK, alpha));
+        }
+        FeatureKind::Lighthouse => {
+            // A tapered tower banded red and white under a lantern room (lit after
+            // dusk; the beacon is the window light drawn over the top).
+            tri((-0.3, 0.0), (0.3, 0.0), (0.18, 0.72), rgba(WALL, alpha));
+            tri((-0.3, 0.0), (0.18, 0.72), (-0.18, 0.72), rgba(WALL, alpha));
+            tri((0.02, 0.0), (0.3, 0.0), (0.18, 0.72), rgba(WALL_DK, alpha));
+            quad(-0.27, 0.18, 0.27, 0.3, rgba(ROOF, alpha)); // red band
+            quad(-0.22, 0.46, 0.22, 0.56, rgba(ROOF, alpha)); // red band
+            quad(-0.17, 0.72, 0.17, 0.9, rgba(STONE_DK, alpha)); // lantern room
+            tri((-0.2, 0.88), (0.2, 0.88), (0.0, 1.0), rgba(ROOF_DK, alpha)); // cap
         }
     }
 }
