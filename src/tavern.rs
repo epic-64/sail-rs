@@ -177,6 +177,17 @@ pub fn item_at(world: &World, id: i32) -> Option<SpecialItem> {
     Some(WARES[pos % WARES.len()])
 }
 
+/// The wares laid out at island `id`'s tavern: normally just [`item_at`]'s single
+/// curio, but with the dev cheat live (`all`, the "banana" unlock in `main`) the
+/// home tavern stocks the whole catalogue, so a tester can kit up without the
+/// grand tour.
+pub fn items_at(world: &World, id: i32, all: bool) -> Vec<SpecialItem> {
+    if all && Some(id) == home_shipyard_id(world) {
+        return SpecialItem::ALL.to_vec();
+    }
+    item_at(world, id).into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +217,23 @@ mod tests {
             }
         }
         assert_eq!(maps, 1, "exactly one tavern sells the world map");
+    }
+
+    #[test]
+    fn dev_mode_widens_only_the_home_stock_to_the_catalogue() {
+        let world = crate::world::generate(1);
+        let home = home_shipyard_id(&world).expect("a world has a home shipyard");
+        assert_eq!(items_at(&world, home, true), SpecialItem::ALL.to_vec());
+        for isle in &world.islands {
+            if isle.id == home {
+                continue;
+            }
+            // Everywhere else, dev mode changes nothing.
+            assert_eq!(
+                items_at(&world, isle.id, true),
+                items_at(&world, isle.id, false)
+            );
+        }
     }
 
     #[test]

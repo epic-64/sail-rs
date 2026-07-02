@@ -134,8 +134,9 @@ enum Focus {
     Manifest(i32),
     RaceTarget(i32),
     RaceWithdraw,
-    /// The tavern's special ware (one per shipyard; resolved via [`tavern::item_at`]).
-    TavernItem,
+    /// A tavern ware, by index into the port's stock (see [`tavern::items_at`]:
+    /// one curio normally, the whole catalogue at the home tavern in dev mode).
+    TavernItem(usize),
 }
 
 /// A constraint that an invalid action just bumped against, so the board can
@@ -152,7 +153,7 @@ enum FlashTarget {
     Tier(i32),     // a rival port's hull requirement (hull not sturdy enough)
     UpgradeCost(UpgradeKind), // a fitting's price (can't cover the refit)
     RepairCost,    // the drydock repair price (can't cover any mending)
-    ItemCost,      // the tavern ware's price (can't cover the buy)
+    ItemCost(usize), // a tavern ware's price, by stock index (can't cover the buy)
 }
 
 /// A live red-jiggle on one constraint, started at `start` (seconds, `get_time`).
@@ -188,6 +189,10 @@ pub struct PortScreen {
     tab: Tab,
     focus: Focus,
     column: usize, // commodity action column: 0 Buy · 1 Fill · 2 Dump · 3 Sell
+    /// Dev-mode stock (the "banana" cheat, see `main`): the home tavern lays out
+    /// every ware. Refreshed each frame by `main` so the cheat toggling mid-visit
+    /// takes effect.
+    pub dev_wares: bool,
     /// Constraints currently flashing from a rejected action (see [`FlashTarget`]).
     flashes: Vec<Flash>,
     /// Tappable regions from the last `render`, consumed by touch in `handle_input`.
@@ -323,6 +328,7 @@ impl PortScreen {
             tab: Tab::Market,
             focus: Focus::TabBar,
             column: 0,
+            dev_wares: false,
             flashes: Vec::new(),
             hits: RefCell::new(Vec::new()),
         }
@@ -417,16 +423,13 @@ impl PortScreen {
                         .collect()
                 }
             }
-            // One ware per tavern; the row is focusable whether or not it's owned (so
-            // the captain can read it either way), and is absent only at a port with
-            // no tavern at all.
-            Tab::Tavern => {
-                if tavern::item_at(world, self.island_id).is_some() {
-                    vec![Focus::TavernItem]
-                } else {
-                    Vec::new()
-                }
-            }
+            // A row per ware on offer (one normally, the whole catalogue at the home
+            // tavern in dev mode); each is focusable whether or not it's owned (so
+            // the captain can read it either way), and the list is empty only at a
+            // port with no tavern at all.
+            Tab::Tavern => (0..tavern::items_at(world, self.island_id, self.dev_wares).len())
+                .map(Focus::TavernItem)
+                .collect(),
         }
     }
 
@@ -630,22 +633,24 @@ impl PortScreen {
                 }
                 Err(_) => sounds.invalid(),
             },
-            // Buy the tavern's one ware (resolved from the port). A short purse jiggles
-            // the price and the header gold; an already-owned ware just no-ops.
-            Focus::TavernItem => {
-                let Some(item) = tavern::item_at(world, self.island_id) else {
+            // Buy a tavern ware (resolved from the port's stock). A short purse
+            // jiggles the price and the header gold; an already-owned ware just
+            // no-ops.
+            Focus::TavernItem(i) => {
+                let Some(&item) = tavern::items_at(world, self.island_id, self.dev_wares).get(i)
+                else {
                     return;
                 };
                 // Already in the kit: nothing to buy, so don't buzz at the captain.
                 if gs.owns(item) {
                     return;
                 }
-                match gs.buy_item(world, item) {
+                match gs.buy_item(world, item, self.dev_wares) {
                     Ok(()) => sounds.trade_bulk(),
                     Err(e) => {
                         sounds.invalid();
                         if e == TradeError::NotEnoughGold {
-                            self.flash(FlashTarget::ItemCost);
+                            self.flash(FlashTarget::ItemCost(i));
                             self.flash(FlashTarget::Gold);
                         }
                     }
@@ -1280,27 +1285,28 @@ impl PortScreen {
         }
     }
 
-    /// The Tavern board: the shipyard tavern's one special ware. Shows its name,
-    /// what it does, and a price + Buy chip; once owned, it reads as in the kit, and
-    /// an active ware spells out its helm key and once-a-day recharge.
+    /// The Tavern board: the shipyard tavern's special wares (one curio normally;
+    /// in dev mode the home tavern lays out the whole catalogue). Each shows its
+    /// name, what it does, and a price + Buy chip; once owned, it reads as in the
+    /// kit, and an active ware spells out its helm key and once-a-day recharge.
     fn render_tavern(&self, gs: &GameState, world: &World, x: f32, y: f32, w: f32) {
         use style::*;
         crate::font::heading(|| draw_text("The Tavern", x, y, fs_heading() as f32, ink()));
         let mut ry = y + line_h(fs_heading());
 
-        let Some(item) = tavern::item_at(world, self.island_id) else {
+        let items = tavern::items_at(world, self.island_id, self.dev_wares);
+        if items.is_empty() {
             draw_text("This tavern has nothing for sale.", x, ry, fs_body() as f32, dim_ink());
             return;
-        };
+        }
 
-        // A line of flavour above the ware itself.
-        draw_text(
-            "The taverner keeps one curio behind the bar, sold but once.",
-            x,
-            ry,
-            fs_small() as f32,
-            dim_ink(),
-        );
+        // A line of flavour above the wares.
+        let flavour = if items.len() > 1 {
+            "The taverner has laid the whole catalogue on the bar (a dev-mode courtesy)."
+        } else {
+            "The taverner keeps one curio behind the bar, sold but once."
+        };
+        draw_text(flavour, x, ry, fs_small() as f32, dim_ink());
         ry += line_h(fs_small()) + gap();
 
         // Word-wrap a blurb into lines no wider than `w` at font size `fs`.
@@ -1321,72 +1327,77 @@ impl PortScreen {
             lines
         };
 
-        let owned = gs.owns(item);
-        let active = self.focus == Focus::TavernItem;
-        let blurb = wrap(item.blurb(), fs_small());
-        // A closing line for an owned active ware: while it's charged, its helm key; while
-        // it's spent, the keybind is hidden (it would do nothing) and only the recharge is
-        // noted. The daily charge comes back at sunrise.
-        let status: Option<String> = if owned && item.is_active() {
-            Some(if gs.item_ready(item) {
-                let key = item.key_hint().unwrap_or("");
-                format!("Press {key} at the helm to use. Recharges at sunrise.")
+        for (i, &item) in items.iter().enumerate() {
+            let owned = gs.owns(item);
+            let active = self.focus == Focus::TavernItem(i);
+            let blurb = wrap(item.blurb(), fs_small());
+            // A closing line for an owned active ware: while it's charged, its helm key;
+            // while it's spent, the keybind is hidden (it would do nothing) and only the
+            // recharge is noted. The daily charge comes back at sunrise.
+            let status: Option<String> = if owned && item.is_active() {
+                Some(if gs.item_ready(item) {
+                    let key = item.key_hint().unwrap_or("");
+                    format!("Press {key} at the helm to use. Recharges at sunrise.")
+                } else {
+                    "Spent for the day. Recharges at sunrise.".to_string()
+                })
             } else {
-                "Spent for the day. Recharges at sunrise.".to_string()
-            })
-        } else {
-            None
-        };
+                None
+            };
 
-        // The ware sits in one block: a title row (name left, price+chip right), the
-        // blurb, then the optional status line. Size the block so the focus highlight
-        // and the touch hit-region cover the whole thing.
-        let step = line_h(fs_body());
-        let blurb_h = blurb.len() as f32 * line_h(fs_small());
-        let status_h = if status.is_some() { line_h(fs_small()) } else { 0.0 };
-        let bh = step + blurb_h + status_h + gap();
-        if active {
-            draw_rectangle(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh, row_highlight());
-        }
-        self.record_hit(
-            Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
-            HitEffect::Select { focus: Focus::TavernItem, column: None, activate: false },
-        );
-
-        // Title row: ware name on the left.
-        let title_base = ry + step;
-        crate::font::heading(|| draw_text(item.name(), x, title_base, fs_heading() as f32, ink()));
-
-        // Right side of the title row: a Buy chip with the price, or an "In kit" tag.
-        let chip_x = x + w - chip_w();
-        if owned {
-            right_text("In your kit", x + w, title_base, fs_body());
-        } else {
-            let chip_top = ry + (step - chip_h()) / 2.0;
-            let chip_rect = Rect::new(chip_x, chip_top, chip_w(), chip_h());
-            button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, "Buy", active);
+            // The ware sits in one block: a title row (name left, price+chip right), the
+            // blurb, then the optional status line. Size the block so the focus highlight
+            // and the touch hit-region cover the whole thing.
+            let step = line_h(fs_body());
+            let blurb_h = blurb.len() as f32 * line_h(fs_small());
+            let status_h = if status.is_some() { line_h(fs_small()) } else { 0.0 };
+            let bh = step + blurb_h + status_h + gap();
+            if active {
+                draw_rectangle(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh, row_highlight());
+            }
             self.record_hit(
-                chip_rect,
-                HitEffect::Select { focus: Focus::TavernItem, column: None, activate: true },
+                Rect::new(x - row_pad_x(), ry, w + 2.0 * row_pad_x(), bh),
+                HitEffect::Select { focus: Focus::TavernItem(i), column: None, activate: false },
             );
-            // The price jiggles red (with the header gold) when the purse falls short.
-            right_text_flash(
-                &item.price().to_string(),
-                chip_x - chip_gap(),
-                chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO,
-                fs_body(),
-                self.flash_of(FlashTarget::ItemCost),
-            );
-        }
 
-        // The blurb, then the status line.
-        let mut by = title_base + line_h(fs_small());
-        for line in &blurb {
-            draw_text(line, x, by, fs_small() as f32, dim_ink());
-            by += line_h(fs_small());
-        }
-        if let Some(s) = status {
-            draw_text(&s, x, by, fs_small() as f32, ink());
+            // Title row: ware name on the left.
+            let title_base = ry + step;
+            crate::font::heading(|| {
+                draw_text(item.name(), x, title_base, fs_heading() as f32, ink())
+            });
+
+            // Right side of the title row: a Buy chip with the price, or an "In kit" tag.
+            let chip_x = x + w - chip_w();
+            if owned {
+                right_text("In your kit", x + w, title_base, fs_body());
+            } else {
+                let chip_top = ry + (step - chip_h()) / 2.0;
+                let chip_rect = Rect::new(chip_x, chip_top, chip_w(), chip_h());
+                button(chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h, "Buy", active);
+                self.record_hit(
+                    chip_rect,
+                    HitEffect::Select { focus: Focus::TavernItem(i), column: None, activate: true },
+                );
+                // The price jiggles red (with the header gold) when the purse falls short.
+                right_text_flash(
+                    &item.price().to_string(),
+                    chip_x - chip_gap(),
+                    chip_top + chip_h() / 2.0 + fs_body() as f32 * CAP_RATIO,
+                    fs_body(),
+                    self.flash_of(FlashTarget::ItemCost(i)),
+                );
+            }
+
+            // The blurb, then the status line.
+            let mut by = title_base + line_h(fs_small());
+            for line in &blurb {
+                draw_text(line, x, by, fs_small() as f32, dim_ink());
+                by += line_h(fs_small());
+            }
+            if let Some(s) = status {
+                draw_text(&s, x, by, fs_small() as f32, ink());
+            }
+            ry += bh + gap();
         }
     }
 
