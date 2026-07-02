@@ -507,6 +507,36 @@ async fn run_game(
             .collect()
     };
     let mut features = regen_features(feat_density_level);
+    // The deck chart's frame (see `ship_render::DeckChart`): the world's bounding
+    // box, mapping any position into [0,1] chart space (u east, v north). Isle
+    // plots are fixed, so they're taken once; the ship's pin goes through the
+    // same mapping each frame.
+    let chart_uv = {
+        let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+        let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
+        for i in &world.islands {
+            min_x = min_x.min(i.pos.x);
+            max_x = max_x.max(i.pos.x);
+            min_y = min_y.min(i.pos.y);
+            max_y = max_y.max(i.pos.y);
+        }
+        let (sx, sy) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+        move |p: Vec2| ((p.x - min_x) / sx, (p.y - min_y) / sy)
+    };
+    let chart_isles: Vec<(f32, f32, bool)> = world
+        .islands
+        .iter()
+        .map(|i| {
+            let (u, v) = chart_uv(i.pos);
+            (u, v, i.is_port)
+        })
+        .collect();
+    // `SAIL_CHART=1` forces the deck chart board on without owning the World
+    // Map (a native dev convenience, matching `SAIL_TOUCH`'s style).
+    #[cfg(not(target_arch = "wasm32"))]
+    let force_chart = std::env::var_os("SAIL_CHART").is_some();
+    #[cfg(target_arch = "wasm32")]
+    let force_chart = false;
     let home = world.cluster_at(Vec2::ZERO);
     let start_isle = home
         .island_ids
@@ -1628,6 +1658,12 @@ async fn run_game(
             speed: kin.speed(),
             yaw_rate: kin.yaw_rate,
             slam,
+            // The chart board by the wheel, aboard once the World Map is owned
+            // (or forced for dev testing, see `force_chart`).
+            chart: (gs.owns(SpecialItem::WorldMap) || force_chart).then(|| ship_render::DeckChart {
+                isles: &chart_isles,
+                ship: chart_uv(kin.pos),
+            }),
         };
         // --- Bow spray ---------------------------------------------------------
         // Foam torn off the bow, drawn *before* the deck so the hull occludes the
