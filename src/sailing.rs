@@ -11,6 +11,7 @@
 use std::f32::consts::PI;
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::isle_terrain::IsleTerrain;
 use crate::rng::Rng;
 use crate::world::Island;
 
@@ -321,18 +322,27 @@ pub fn step_debuffed(
 /// Metres of open water kept between the hull and an island's shore.
 pub const HULL_CLEARANCE: f32 = 8.0;
 
-/// Keep the hull out of every island's shore — and nothing more. A hard ring sits
-/// at `radius + HULL_CLEARANCE`: cross it and the ship is unstuck back to the ring
-/// with only her *inward* (shoreward) way cancelled, so sailing straight at a shore
-/// stops her dead at the beach (a "crash") while the along-shore (tangential) way is
-/// left untouched. There is **no** cushion or scrape — she keeps full speed grazing
-/// the coast, so the captain can zoom past a shore as close as she likes.
+/// Keep the hull out of every island's *visible shore*, and nothing more. The
+/// keep-out ring follows the lumpy coastline the renderer draws ([`IsleTerrain::
+/// coast_radius_toward`]) rather than the plain grounding circle, so the ship can
+/// sail deep into a bay and grounds only where a headland actually juts out.
+/// Cross the ring and she is unstuck back to it with only her *inward* (shoreward)
+/// way cancelled, so sailing straight at a shore stops her dead at the beach (a
+/// "crash") while the along-shore (tangential) way is left untouched. There is
+/// **no** cushion or scrape: she keeps full speed grazing the coast, so the
+/// captain can zoom past a shore as close as she likes.
 pub fn resolve_grounding(kin: Kinematics, islands: &[&Island]) -> Kinematics {
     let mut k = kin;
     for isle in islands {
-        let keep_out = isle.radius + HULL_CLEARANCE;
         let delta = k.pos - isle.pos;
         let d = delta.length();
+        // Cheap reject on the outer circle before building the terrain: nothing
+        // beyond `radius + clearance` can be grounded against whatever the coast.
+        if d >= isle.radius + HULL_CLEARANCE {
+            continue;
+        }
+        let shore = IsleTerrain::for_island(isle).coast_radius_toward(k.pos);
+        let keep_out = shore + HULL_CLEARANCE;
         if d >= keep_out {
             continue;
         }
@@ -458,5 +468,54 @@ mod tests {
         assert_eq!(NORTHERLY.point_of_sail(PI / 2.0), PointOfSail::BeamReach);
         assert_eq!(NORTHERLY.point_of_sail(135f32.to_radians()), PointOfSail::CloseHauled);
         assert_eq!(NORTHERLY.point_of_sail(PI), PointOfSail::IntoWind);
+    }
+
+    /// Grounding follows the visible shore, not the plain radius: the ship sails into a
+    /// bay (where the coast pulls in) untouched, but is stopped at a jutting headland.
+    #[test]
+    fn grounding_follows_the_shore_not_the_radius() {
+        use crate::world::IsleKind;
+        let isle = Island {
+            id: 5,
+            name: "Test".to_string(),
+            pos: Vec2::ZERO,
+            radius: 300.0,
+            height: 60.0,
+            terrain: IsleKind::Green,
+            is_port: false,
+            is_shipyard: false,
+        };
+        let terr = IsleTerrain::for_island(&isle);
+        // Find the deepest bay bearing and the furthest headland bearing.
+        let (mut bay_a, mut bay_r, mut head_a, mut head_r) = (0.0f32, f32::MAX, 0.0f32, 0.0f32);
+        for k in 0..1440 {
+            let a = k as f32 / 1440.0 * PI * 2.0;
+            let rc = terr.coast_radius(a);
+            if rc < bay_r {
+                bay_r = rc;
+                bay_a = a;
+            }
+            if rc > head_r {
+                head_r = rc;
+                head_a = a;
+            }
+        }
+        let at = |a: f32, dist: f32| Kinematics::still(Vec2::new(a.cos() * dist, a.sin() * dist), 0.0);
+        let list: [&Island; 1] = [&isle];
+
+        // In the bay, inside the plain radius but well outside the (pulled-in) shore:
+        // she is left where she is.
+        let in_bay = at(bay_a, bay_r + HULL_CLEARANCE + 30.0);
+        assert!(bay_r + HULL_CLEARANCE + 30.0 < isle.radius, "bay test must sit inside the plain radius");
+        let after = resolve_grounding(in_bay, &list);
+        assert!((after.pos - in_bay.pos).length() < 1e-3, "the bay is open water; she sails in");
+
+        // Standing inside a headland: she is unstuck out to that headland's shore ring.
+        let on_land = at(head_a, head_r - 20.0);
+        let after = resolve_grounding(on_land, &list);
+        assert!(
+            (after.pos.length() - (head_r + HULL_CLEARANCE)).abs() < 1e-3,
+            "grounded to the headland shore ring"
+        );
     }
 }

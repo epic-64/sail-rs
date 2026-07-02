@@ -11,6 +11,7 @@
 //! offset.
 
 use crate::geometry::Vec2;
+use crate::isle_terrain::IsleTerrain;
 use crate::rng::Rng;
 use crate::world::{Island, IsleKind};
 use std::f64::consts::TAU;
@@ -91,8 +92,23 @@ pub fn generate(seed: i64, isle: &Island, density: f32) -> Vec<IsleFeature> {
         );
         feats.extend(port_structures(&mut prng, isle, density));
     }
+    // Cull anything that fell in the water. With the lobed coastline a scatter point
+    // can land in a bay or out past a headland; a tree or house there would float on
+    // the sea beside the visible land. Keep only features on dry land (the same
+    // coastline the renderer draws and collision grounds against). Shore dwellers are
+    // exempt: a dock reaches out over the water and a wreck lies canted in the
+    // shallows, so both belong at the waterline.
+    let terrain = IsleTerrain::for_island(isle);
+    feats.retain(|f| {
+        matches!(f.kind, FeatureKind::Dock | FeatureKind::Shipwreck)
+            || terrain.on_land(isle.pos + f.offset, SHORE_INSET)
+    });
     feats
 }
+
+/// How far inside the shoreline (m) a placed feature must sit, so foliage and
+/// buildings stand clear on dry land rather than awash at the very waterline.
+const SHORE_INSET: f32 = 6.0;
 
 // --- per-terrain scatters ----------------------------------------------------
 

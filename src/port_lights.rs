@@ -90,7 +90,10 @@ pub fn build(
             continue;
         }
         let d = kin.pos.distance_to(isle.pos);
-        if d > MAX_VIEW || d < isle.radius {
+        // No inner cut on `d`: the town light is a point on the shore lighting the
+        // water, so it must keep burning as the ship sails right into the harbour bay
+        // (well inside the plain `radius`), not wink out on close approach.
+        if d > MAX_VIEW {
             continue;
         }
         let rel = wrap_angle(kin.pos.bearing_to(isle.pos) - kin.heading_rad);

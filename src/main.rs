@@ -16,6 +16,7 @@ mod game_state;
 mod geometry;
 mod guide;
 mod isle_features;
+mod isle_terrain;
 mod islands_render;
 mod minimap;
 mod mission;
@@ -1502,8 +1503,11 @@ async fn run_game(
                 // fills the view even when the *centre* lies well off the bow, so
                 // the off-axis limit must grow as `asin(radius/d)`. Otherwise a big
                 // isle sailed alongside pops out the moment its centre clears the FOV.
+                // No inner cut on `d`: grounding follows the lumpy shore, so the hull
+                // can sit well inside the plain `radius` (in a bay) with the isle still
+                // in full view; `paint_island` drops only the on-land degenerate case.
                 let ang_r = (i.radius / d).min(1.0).asin();
-                d <= MAX_VIEW && d >= i.radius && rel.abs() <= half_fov_h_view * 1.6 + ang_r
+                d <= MAX_VIEW && rel.abs() <= half_fov_h_view * 1.6 + ang_r
             })
             .map(|i| (i, features[i.id as usize].as_slice()))
             .collect();

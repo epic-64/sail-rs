@@ -117,7 +117,7 @@ impl World {
 
 // --- WorldGen constants (match Scala `WorldGen`) -----------------------------
 
-const EXTENT: f64 = 10400.0;
+const EXTENT: f64 = 13000.0;
 const GRID_COLS: usize = 5;
 const GRID_ROWS: usize = 5;
 const ISLES_PER_CLUSTER: i32 = (GRID_COLS * GRID_ROWS) as i32;
@@ -296,7 +296,7 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
         for c in 0..GRID_COLS {
             let jx = rng.between(0.15, 0.85);
             let jy = rng.between(0.15, 0.85);
-            let radius = rng.between(140.0, 235.0);
+            let radius = rng.between(200.0, 350.0);
             let relief = rng.between(0.28, 0.5);
             let terrain = *rng.pick(&TERRAINS);
             let port_roll = rng.next_f64();
@@ -306,16 +306,15 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
                 center.x + ((c as f64 + jx) * cell_w - EXTENT / 2.0) as f32,
                 center.y + ((r as f64 + jy) * cell_h - EXTENT / 2.0) as f32,
             );
-            // Summit elevation by terrain: green & jungle shores lie almost flat on
-            // the water (low beaches/atolls), while rocky and volcanic isles rear up
-            // into proper hills and cones.
-            // Islands are relatively flat by default: green/jungle are low cays a few
-            // metres proud of the water; rocky and volcanic rear up a little more into
-            // modest hills and cones, but nothing towering.
+            // Summit elevation by terrain, scaling with the isle's size (`radius`) and
+            // its `relief` roll: green & jungle roll gently into low, rounded downs,
+            // while rocky and volcanic rear up into proper hills, ridges and cones. The
+            // renderer then folds these summits into several distinct peaks (see
+            // `IsleTerrain`), so the height set here is the tallest massif, not one dome.
             let height = match terrain {
-                IsleKind::Green | IsleKind::Jungle => 5.0 + radius * relief * 0.10,
-                IsleKind::Rocky => 14.0 + radius * relief * 0.35,
-                IsleKind::Volcanic => 20.0 + radius * relief * 0.40,
+                IsleKind::Green | IsleKind::Jungle => 6.0 + radius * relief * 0.16,
+                IsleKind::Rocky => 16.0 + radius * relief * 0.52,
+                IsleKind::Volcanic => 22.0 + radius * relief * 0.58,
             };
             built.push(Island {
                 id: id_offset + idx,
