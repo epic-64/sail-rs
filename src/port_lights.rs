@@ -109,12 +109,16 @@ pub fn build(
         if burn <= 0.01 {
             continue;
         }
-        // Anchor the road on the port's watchtower beacon (its lighthouse) rather than
-        // the island centre, so the glitter trails from the light itself. Falls back to
-        // the centre if a port somehow has no tower.
+        // Anchor the road on the port's shore beacon rather than the island centre, so
+        // the glitter trails from the light itself: the lighthouse on the headland by
+        // preference, else the watchtower, else the centre if a port has neither.
         let src = features
             .get(isle.id as usize)
-            .and_then(|fs| fs.iter().find(|f| f.kind == FeatureKind::Tower))
+            .and_then(|fs| {
+                fs.iter()
+                    .find(|f| f.kind == FeatureKind::Lighthouse)
+                    .or_else(|| fs.iter().find(|f| f.kind == FeatureKind::Tower))
+            })
             .map(|f| isle.pos + f.offset)
             .unwrap_or(isle.pos);
         out.push(PortLight { pos: src, burn });
