@@ -1351,8 +1351,8 @@ async fn run_game(
         // Sample how the swell throws the hull this frame, then ease the parts that
         // should rock with the long swell rather than buzz with the chop.
         let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
-        // The bow's lift above the hull's mean (metres): the sea height where the bow
-        // parts the water, relative to the helm's heave. Drives the deck/camera heave
+        // The bow's lift above the hull's mean (metres): the sea height where the stem
+        // parts the water, relative to the eye's heave. Drives the deck/camera heave
         // bob, split between the two by `ocean::HEAVE_CAMERA_SHARE`.
         let bow_z = ocean::height(
             kin.pos + Vec2::from_heading(kin.heading_rad) * ocean::BOW_REACH,
