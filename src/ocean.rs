@@ -51,13 +51,17 @@ fn storm_blend(sea: f32) -> f32 {
 /// Used to normalise foam/lighting against the tallest possible wave.
 pub const MAX_AMPLITUDE: f32 = AMP[0] + AMP[1] + AMP[2] + AMP[3];
 
-// Hull half-dimensions (m) the sway samples the surface across.
-const HALF_LENGTH: f32 = 12.0;
+// Where the hull floats relative to the ship's world position. The first-person
+// eye stands *at* `pos` (the wave mesh marches from there; see `ocean_renderer`),
+// and the lofted hull runs from the transom just behind the eye to the stem far
+// ahead of it (`ship_render::CAM_AFT` and `STATIONS`). The sway must be sampled
+// under *that* hull: the old constants modelled a phantom hull centred on the eye,
+// which put every sample half a ship length astern of the ship the player sees,
+// so the felt pitch lagged the visible ride (bow-up on the crest, neutral riding
+// down the face, the dive arriving only at the trough).
+const CENTRE_AHEAD: f32 = 12.0; // hull midpoint, metres ahead of `pos` (the eye)
+const HALF_LENGTH: f32 = 13.0; // half the waterline the loft draws
 const HALF_BEAM: f32 = 4.0;
-// Where the helm — the first-person eye — sits aft of the hull's midpoint. The
-// view's heave is sampled here (not at the centre) so it crests and dips in step
-// with the observer rather than with a point a half-length ahead of them.
-const HELM_AFT: f32 = 9.0;
 
 // --- Deck / camera "ride" shaping (shared by main.rs and ship_render.rs) -------
 // The bow's answer to the swell is *shaped* before it drives the camera look and
@@ -81,9 +85,10 @@ pub fn pitch_response(pitch: f32) -> f32 {
     pitch * (PITCH_CLIMB + (PITCH_DIVE - PITCH_CLIMB) * dive)
 }
 
-/// Metres ahead of the hull centre the bow parts the water — where the bow's lift
-/// above the hull's mean (`bow_lift`) is sampled for the deck's heave bob.
-pub const BOW_REACH: f32 = 12.0;
+/// Metres ahead of the eye (`pos`) where the stem parts the water: the fore end of
+/// the drawn hull, where the bow's lift above the hull's mean (`bow_lift`) is
+/// sampled for the deck's heave bob and the frontal slam.
+pub const BOW_REACH: f32 = CENTRE_AHEAD + HALF_LENGTH;
 /// How the bow's heave is split between craning the *camera* and bobbing the deck.
 /// 0 = all deck (a violent slide); 1 = all camera (a level deck under a heaving
 /// horizon). `SailingView.heaveCameraShare`.
@@ -121,42 +126,46 @@ pub fn height(p: Vec2, t: f32, sea: f32) -> f32 {
     sea * acc
 }
 
-/// How the ship sways this frame: heave from the mean surface under the hull,
+/// How the ship sways this frame: heave from the mean surface at the eye (`pos`),
 /// pitch from the fore-aft slope, roll from the port-starboard slope, and yaw
-/// from the surface's twist along the hull.
+/// from the surface's twist along the hull, all sampled under the hull as drawn.
 pub fn ship_motion(pos: Vec2, heading: f32, t: f32, sea: f32) -> ShipMotion {
     let fwd = Vec2::from_heading(heading);
     let right = Vec2::new(heading.cos(), -heading.sin()); // 90° to starboard of the bow
 
-    let z_fore = height(pos + fwd * HALF_LENGTH, t, sea);
-    let z_aft = height(pos - fwd * HALF_LENGTH, t, sea);
-    let z_stbd = height(pos + right * HALF_BEAM, t, sea);
-    let z_port = height(pos - right * HALF_BEAM, t, sea);
+    // The rigid-body slopes are sampled about the *drawn* hull's midpoint, ahead
+    // of the eye (see `CENTRE_AHEAD`), so the deck answers the water the player
+    // sees under the bow, in phase with the visible ride.
+    let centre = pos + fwd * CENTRE_AHEAD;
+    let bow = centre + fwd * HALF_LENGTH;
+    let stern = centre - fwd * HALF_LENGTH;
+    let z_fore = height(bow, t, sea);
+    let z_aft = height(stern, t, sea);
+    let z_stbd = height(centre + right * HALF_BEAM, t, sea);
+    let z_port = height(centre - right * HALF_BEAM, t, sea);
 
-    // Heave at the helm, where the observer actually stands — averaged across the
-    // beam (the wheel is on the centreline, so roll lifts it none) for steadiness.
-    // Sampling it at the hull's midpoint made the crest peak, and the dip begin,
-    // while the helm a half-length astern was still climbing, so the view hung at
-    // the top and dipped late. Pitch and roll stay the hull's rigid slopes about
-    // its centre: the deck is a stiff body that tilts whole, not with the local
-    // water at the wheel.
-    let helm = pos - fwd * HELM_AFT;
+    // Heave at the eye itself, averaged across the beam (the wheel is on the
+    // centreline, so roll lifts it none) for steadiness. The wave mesh marches
+    // from the eye and projects the sea relative to this heave, so sampling it
+    // anywhere else adds a spurious bob to the near water. Pitch and roll stay
+    // the hull's rigid slopes about its centre: the deck is a stiff body that
+    // tilts whole, not with the local water at the wheel.
     let heave =
-        (height(helm + right * HALF_BEAM, t, sea) + height(helm - right * HALF_BEAM, t, sea)) / 2.0;
+        (height(pos + right * HALF_BEAM, t, sea) + height(pos - right * HALF_BEAM, t, sea)) / 2.0;
     let pitch = (z_fore - z_aft).atan2(2.0 * HALF_LENGTH);
     // Side buoyancy: water risen on one beam lifts that side and rolls the ship
-    // *away* from it — a crest on port heels her to starboard, and vice versa. This
+    // *away* from it (a crest on port heels her to starboard, and vice versa). This
     // matches the pitch convention above (the high side lifts, like a bow over a
     // crest); the earlier `z_stbd - z_port` rolled her *into* the swell, backwards.
     let roll = (z_port - z_stbd).atan2(2.0 * HALF_BEAM);
 
     // Yaw torque from the swell's twist: port-starboard slope at the bow vs the
     // stern; their difference slews the bow off course. Halved to keep it gentle.
-    let bow_roll = (height(pos + fwd * HALF_LENGTH + right * HALF_BEAM, t, sea)
-        - height(pos + fwd * HALF_LENGTH - right * HALF_BEAM, t, sea))
+    let bow_roll = (height(bow + right * HALF_BEAM, t, sea)
+        - height(bow - right * HALF_BEAM, t, sea))
     .atan2(2.0 * HALF_BEAM);
-    let stern_roll = (height(pos - fwd * HALF_LENGTH + right * HALF_BEAM, t, sea)
-        - height(pos - fwd * HALF_LENGTH - right * HALF_BEAM, t, sea))
+    let stern_roll = (height(stern + right * HALF_BEAM, t, sea)
+        - height(stern - right * HALF_BEAM, t, sea))
     .atan2(2.0 * HALF_BEAM);
     let yaw = (bow_roll - stern_roll) / 2.0;
 
