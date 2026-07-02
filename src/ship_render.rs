@@ -100,6 +100,12 @@ const STATIONS: [(f32, f32, f32, f32); 13] = [
 /// here, with the companion stairs drawn between them.
 const QDECK_BREAK: f32 = 5.0;
 
+/// The breast rail across the quarterdeck's forward edge: where it stands and
+/// how high its top rail rides off the platform. Shared by the rail itself and
+/// the deck chart clipped to it (see [`DeckChart`]).
+const BREAST_RAIL_Z: f32 = QDECK_BREAK + 0.1;
+const BREAST_RAIL_H: f32 = 0.85;
+
 /// Hull data (half-beam, deck height, bulwark height) interpolated at fore-aft
 /// z, for placing furniture and rope feet between stations.
 fn station_at(z: f32) -> (f32, f32, f32) {
@@ -177,6 +183,11 @@ const WHEEL_DK: [f32; 3] = [76.0, 52.0, 30.0];
 const CRATE_TOP: [f32; 3] = [182.0, 148.0, 96.0];
 const CRATE_MID: [f32; 3] = [150.0, 116.0, 70.0];
 const CRATE_DK: [f32; 3] = [108.0, 80.0, 46.0];
+// The deck chart: weathered parchment and its ink, kept close to the sail
+// cloth's warmth so the little board sits in the same palette.
+const CHART_PARCH: [f32; 3] = [216.0, 198.0, 158.0];
+const CHART_INK: [f32; 3] = [66.0, 50.0, 34.0];
+const CHART_PIN: [f32; 3] = [158.0, 42.0, 32.0];
 
 // --- Deck cargo physics --------------------------------------------------------
 // The crates are heavy and lashed: ordinary sailing never beats their static
@@ -360,9 +371,20 @@ impl Lume {
     }
 }
 
+/// The world chart pinned to the breast rail beside the wheel, once the
+/// captain owns the World Map ware: a keepsake miniature of the whole world,
+/// readable from the helm without opening the captain's log. Positions are
+/// normalized chart space, [0,1] on each axis (u east, v north).
+pub struct DeckChart<'a> {
+    /// Every isle's plot: (u, v, is_port).
+    pub isles: &'a [(f32, f32, bool)],
+    /// The ship's own plot in the same space: the "you are here" pin.
+    pub ship: (f32, f32),
+}
+
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
 /// bearing relative to the bow (0 = wind from dead astern, ±π = dead ahead).
-pub struct RigInput {
+pub struct RigInput<'a> {
     /// Hull sway this frame (roll/yaw already low-passed by the caller).
     pub motion: ShipMotion,
     /// Canvas set, 0 (furled) … 1 (full sail) — the chosen sail fraction.
@@ -384,6 +406,9 @@ pub struct RigInput {
     /// Frontal slam this frame, [0,1] (the spray's input): a plunge jolts the
     /// cargo forward and floats weight off the planks for a moment.
     pub slam: f32,
+    /// The world chart pinned by the wheel, `None` until the captain owns the
+    /// World Map ware (the board simply isn't aboard yet).
+    pub chart: Option<DeckChart<'a>>,
 }
 
 /// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
@@ -926,6 +951,11 @@ impl ShipRenderer {
         self.step_cargo(rig, roll, pitch_ang, dt);
         let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w);
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
+        // The chart board after the rig, so no rope paints across the parchment;
+        // it stands on the breast rail, nearer the eye than everything forward.
+        if let Some(chart) = &rig.chart {
+            self.draw_chart(&sway, chart, pitch_ang, &lume, h, w);
+        }
         // The wheel last: it is the nearest thing on the ship, standing between
         // the eye and everything else.
         self.draw_wheel(&sway, pitch_ang, &lume, h, w);
@@ -1281,9 +1311,9 @@ impl ShipRenderer {
         // open where the companion stairs come up. Drawn after the crates,
         // since it stands nearer the eye than everything forward of the break.
         {
-            let brk = QDECK_BREAK + 0.1; // just aft of the quarterdeck break
+            let brk = BREAST_RAIL_Z; // just aft of the quarterdeck break
             let (_, qd_y, _) = station_at(brk);
-            let rail_y = qd_y + 0.85; // waist-high off the platform
+            let rail_y = qd_y + BREAST_RAIL_H; // waist-high off the platform
             let (rail_l, rail_r) = (-3.25f32, 1.6); // port bulwark → the stair head
             let posts = 6;
             for i in 0..posts {
@@ -1442,6 +1472,120 @@ impl ShipRenderer {
         }
         // Hub.
         draw_circle(hub.x, hub.y, r * 0.22, rim_col);
+    }
+
+    /// The world chart aboard: a small parchment board clipped to the breast
+    /// rail just port of the wheel, leaned like a chart desk so its face tips
+    /// up toward the helmsman's eye. Inked with the isles and a red pin for the
+    /// ship (see [`DeckChart`]), so the whole world is a glance away from the
+    /// helm without opening the captain's log.
+    fn draw_chart(
+        &self,
+        sway: &impl Fn(f32, f32) -> Vec2,
+        chart: &DeckChart,
+        pitch_ang: f32,
+        lume: &Lume,
+        h: f32,
+        w: f32,
+    ) {
+        // The board in metres: bottom edge resting on the breast rail's top,
+        // port of the wheel so it never blocks the view dead ahead; the top
+        // edge leans toward the bow so the face reads from above.
+        const XL: f32 = -2.4;
+        const XR: f32 = -1.45;
+        const BOARD_H: f32 = 0.68;
+        const LEAN: f32 = 0.5; // radians off vertical, top toward the bow
+
+        let (_, qd_y, _) = station_at(BREAST_RAIL_Z);
+        let y0 = qd_y + BREAST_RAIL_H - 0.04; // clipped onto the top rail board
+        let (ls, lc) = LEAN.sin_cos();
+        let (y1, z1) = (y0 + BOARD_H * lc, BREAST_RAIL_Z - BOARD_H * ls);
+
+        let (sp, cp) = pitch_ang.sin_cos();
+        let cam = |x: f32, y: f32, z: f32| {
+            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+        };
+        // Every corner must clear the near plane, or the board is off-screen.
+        let (Some((bl, s)), Some((br, _)), Some((tl, _)), Some((tr, _))) = (
+            cam(XL, y0, BREAST_RAIL_Z),
+            cam(XR, y0, BREAST_RAIL_Z),
+            cam(XL, y1, z1),
+            cam(XR, y1, z1),
+        ) else {
+            return;
+        };
+
+        // A point on the face by chart coordinates, bilinear across the
+        // projected corners: u west → east, v south → north (up the board).
+        let at = |u: f32, v: f32| -> Vec2 {
+            let bot = bl + (br - bl) * u;
+            let top = tl + (tr - tl) * u;
+            bot + (top - bot) * v
+        };
+        let quad = |a: Vec2, b: Vec2, c: Vec2, d: Vec2, col: Color| {
+            draw_triangle(a, b, c, col);
+            draw_triangle(a, c, d, col);
+        };
+
+        // One shade for the whole face: it tips up toward the aft sky.
+        let diff = lume.diff((0.0, ls, lc));
+        let parch = lume.col(CHART_PARCH, diff, 1.0);
+        let ink = lume.col(CHART_INK, diff, 1.0);
+        let frame_col = lume.col(RAIL_DK, diff, 0.9);
+        let faint = Color::new(ink.r, ink.g, ink.b, ink.a * 0.3);
+        let line_w = (0.012 * s).max(1.0);
+
+        // The wooden backing board, a whisker proud of the parchment all round,
+        // then the sheet itself and a sketched double border.
+        let f = 0.06;
+        quad(at(-f, -f), at(1.0 + f, -f), at(1.0 + f, 1.0 + f), at(-f, 1.0 + f), frame_col);
+        quad(at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0), parch);
+        let border = |inset: f32, col: Color| {
+            let pts = [
+                at(inset, inset),
+                at(1.0 - inset, inset),
+                at(1.0 - inset, 1.0 - inset),
+                at(inset, 1.0 - inset),
+            ];
+            for i in 0..4 {
+                let (a, b) = (pts[i], pts[(i + 1) % 4]);
+                draw_line(a.x, a.y, b.x, b.y, line_w, col);
+            }
+        };
+        border(0.035, ink);
+        // A faint graticule so the open sea reads as charted, not blank.
+        for t in [1.0 / 3.0, 2.0 / 3.0] {
+            let (a, b) = (at(t, 0.05), at(t, 0.95));
+            draw_line(a.x, a.y, b.x, b.y, line_w, faint);
+            let (a, b) = (at(0.05, t), at(0.95, t));
+            draw_line(a.x, a.y, b.x, b.y, line_w, faint);
+        }
+
+        // The isles, inked inside a margin so none kisses the border. Ports get
+        // the heavier blot, the rest a fleck.
+        let plot = |u: f32, v: f32| at(0.08 + u * 0.84, 0.08 + v * 0.84);
+        for &(u, v, is_port) in chart.isles {
+            let p = plot(u, v);
+            let r = if is_port { 0.020 * s } else { 0.013 * s };
+            draw_circle(p.x, p.y, r.max(1.0), ink);
+        }
+        // The ship's pin: a red-headed tack over the plots, ringed so it reads
+        // against a crowded archipelago.
+        let (su, sv) = chart.ship;
+        let p = plot(clamp(su, 0.0, 1.0), clamp(sv, 0.0, 1.0));
+        draw_circle_lines(p.x, p.y, (0.030 * s).max(2.0), line_w, ink);
+        draw_circle(p.x, p.y, (0.018 * s).max(1.5), lume.col(CHART_PIN, diff, 1.0));
+
+        // Two clips lashing the board to the rail, so it hangs rather than floats.
+        for u in [0.14f32, 0.86] {
+            quad(
+                at(u - 0.035, -0.10),
+                at(u + 0.035, -0.10),
+                at(u + 0.035, 0.05),
+                at(u - 0.035, 0.05),
+                lume.col(RAIL, diff, 0.9),
+            );
+        }
     }
 
     /// Mast, yard and the square sail: the articulating rig. The sail is built
@@ -1732,7 +1876,7 @@ impl ShipRenderer {
 mod tests {
     use super::*;
 
-    fn rig(cargo: i32, speed: f32, yaw_rate: f32, slam: f32) -> RigInput {
+    fn rig(cargo: i32, speed: f32, yaw_rate: f32, slam: f32) -> RigInput<'static> {
         RigInput {
             motion: ShipMotion::default(),
             set: 1.0,
@@ -1743,6 +1887,7 @@ mod tests {
             speed,
             yaw_rate,
             slam,
+            chart: None,
         }
     }
 
