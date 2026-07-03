@@ -59,7 +59,7 @@ use ocean_renderer::OceanRenderer;
 use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
-use ship_render::{RigInput, ShipLight, ShipRenderer};
+use ship_render::{RigInput, ShipLight, ShipRenderer, TrinketState};
 use sky::draw_sky;
 use tavern::SpecialItem;
 use clouds::StormSky;
@@ -1564,6 +1564,14 @@ async fn run_game(
                 // parchment before the fury peaks. The helmsman steers from
                 // memory until the weather lays down and the ink dries back in.
                 legibility: 1.0 - clamp((storm - 0.5) / 0.4, 0.0, 1.0),
+            }),
+            // The trinket rack by the wheel mirrors the helm item slots: which
+            // active wares are aboard, and which are spent for the day (see
+            // `ship_render::draw_trinkets`).
+            trinkets: std::array::from_fn(|slot| {
+                SpecialItem::from_active_slot(slot).map_or(TrinketState::default(), |it| {
+                    TrinketState { owned: gs.owns(it), ready: gs.item_ready(it) }
+                })
             }),
         };
         // --- Bow spray ---------------------------------------------------------

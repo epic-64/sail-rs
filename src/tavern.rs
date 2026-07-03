@@ -53,6 +53,11 @@ impl SpecialItem {
     /// How many wares there are; the inventory arrays are this wide.
     pub const COUNT: usize = Self::ALL.len();
 
+    /// How many helm slots there are for active wares: the width of the HUD's
+    /// item row and the deck trinket rack. Kept in step with [`Self::active_slot`]
+    /// by the round-trip test.
+    pub const ACTIVE_COUNT: usize = 3;
+
     /// This ware's slot in the inventory arrays / save (== its enum ordinal).
     #[inline]
     pub fn index(self) -> usize {
@@ -238,12 +243,18 @@ mod tests {
 
     #[test]
     fn active_slots_round_trip_to_distinct_keys() {
-        for slot in 0..3 {
+        for slot in 0..SpecialItem::ACTIVE_COUNT {
             let w = SpecialItem::from_active_slot(slot).expect("a ware per active slot");
             assert_eq!(w.active_slot(), Some(slot));
             assert!(w.is_active());
             assert!(w.key_hint().is_some());
         }
+        assert!(SpecialItem::from_active_slot(SpecialItem::ACTIVE_COUNT).is_none());
+        assert_eq!(
+            SpecialItem::ALL.iter().filter(|w| w.is_active()).count(),
+            SpecialItem::ACTIVE_COUNT,
+            "ACTIVE_COUNT matches the catalogue's active wares"
+        );
         assert!(!WorldMap.is_active());
         assert!(WorldMap.key_hint().is_none());
     }

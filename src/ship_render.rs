@@ -38,6 +38,7 @@ use macroquad::prelude::*;
 use crate::geometry::clamp;
 use crate::ocean::{deck_heave_px, pitch_response, ShipMotion, HEAVE_CAMERA_SHARE};
 use crate::sailing::wind_factor_rel;
+use crate::tavern::SpecialItem;
 
 use std::f32::consts::TAU;
 
@@ -311,6 +312,14 @@ const CHART_YARD: [f32; 3] = [47.0, 111.0, 158.0];
 const CHART_MISSION: [f32; 3] = [200.0, 150.0, 47.0];
 const CHART_RACE: [f32; 3] = [168.0, 40.0, 30.0];
 const CHART_SHIP: [f32; 3] = [79.0, 47.0, 23.0];
+// The trinket rack's wares (see `draw_trinkets`): the bosun's call's brass, the
+// draught's bottle glass and cork, the storm glass's pale vial and the milky
+// liquor sealed inside it.
+const TRINKET_BRASS: [f32; 3] = [198.0, 160.0, 92.0];
+const TRINKET_BOTTLE: [f32; 3] = [88.0, 132.0, 100.0];
+const TRINKET_CORK: [f32; 3] = [186.0, 152.0, 108.0];
+const TRINKET_VIAL: [f32; 3] = [176.0, 196.0, 204.0];
+const TRINKET_BREW: [f32; 3] = [226.0, 234.0, 238.0];
 
 // --- Deck plank grain ------------------------------------------------------------
 // The planks' wood grain is a small texture baked once at startup (deterministic,
@@ -642,6 +651,18 @@ pub struct DeckChart<'a> {
     pub legibility: f32,
 }
 
+/// The trinket rack's view of one active tavern ware, in helm-slot order (see
+/// [`SpecialItem::active_slot`]): whether it has been bought at all, and whether
+/// its daily charge is unspent (see `GameState::item_ready`).
+#[derive(Clone, Copy, Default)]
+pub struct TrinketState {
+    /// The ware rides with the captain; an unowned slot stays a bare berth.
+    pub owned: bool,
+    /// Recharged: the trinket stands (or hangs) upright, glinting. A spent one
+    /// lies toppled on the shelf, dimmed, until a fresh day readies it.
+    pub ready: bool,
+}
+
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
 /// bearing relative to the bow (0 = wind from dead astern, ±π = dead ahead).
 pub struct RigInput<'a> {
@@ -669,6 +690,9 @@ pub struct RigInput<'a> {
     /// The parchment minimap pinned by the wheel (always aboard); `None` only
     /// where a caller has no chart to draw (e.g. the render tests).
     pub chart: Option<DeckChart<'a>>,
+    /// The active tavern wares on the rack by the wheel, one entry per helm
+    /// slot (see [`TrinketState`]).
+    pub trinkets: [TrinketState; SpecialItem::ACTIVE_COUNT],
 }
 
 /// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
@@ -1226,6 +1250,9 @@ impl ShipRenderer {
         if let Some(chart) = &rig.chart {
             self.draw_chart(&sway, chart, pitch_ang, &lume, h, w);
         }
+        // The trinket rack keeps the chart's depth on the other rail, so it joins
+        // the same painter's slot: over the aft deck, under the wheel.
+        self.draw_trinkets(&sway, &rig.trinkets, pitch_ang, &lume, t, h, w);
         // The wheel last: it is the nearest thing on the ship, standing between
         // the eye and everything else.
         self.draw_wheel(&sway, pitch_ang, &lume, h, w);
@@ -2232,6 +2259,247 @@ impl ShipRenderer {
         draw_triangle(tip, bl, br, pcol(CHART_SHIP, 1.0));
     }
 
+    /// The trinket rack: a small shelf on its own pedestal on the quarterdeck
+    /// just starboard of the wheel (the chart desk's twin to port), berthing the
+    /// tavern's active wares in helm-slot order. Each ware wears its state
+    /// physically: recharged, it stands upright (the whistle hangs on its hook)
+    /// with a faint pulsing glint; spent, it lies toppled on the shelf, dimmed,
+    /// until a new day readies it. Unbought slots stay bare, and the rack itself
+    /// only comes aboard with the first active ware.
+    #[allow(clippy::too_many_arguments)] // the deck furniture's shared sway/projection inputs
+    fn draw_trinkets(
+        &self,
+        sway: &impl Fn(f32, f32) -> Vec2,
+        trinkets: &[TrinketState; SpecialItem::ACTIVE_COUNT],
+        pitch_ang: f32,
+        lume: &Lume,
+        t: f32,
+        h: f32,
+        w: f32,
+    ) {
+        if !trinkets.iter().any(|k| k.owned) {
+            return; // no active ware bought yet: the rack isn't aboard
+        }
+
+        // The rack in metres: a narrow shelf at hip height on the chart stand's
+        // station, mirrored to starboard, with a low fiddle rail along its aft
+        // edge so the wares ride out a sea.
+        const X0: f32 = 1.35;
+        const X1: f32 = 2.15;
+        const RACK_Z: f32 = 5.85;
+        const SHELF_H: f32 = 0.72; // shelf top above the quarterdeck
+        const SHELF_T: f32 = 0.05; // shelf plank thickness
+        const SHELF_D: f32 = 0.17; // half-depth fore-aft
+        const FIDDLE_H: f32 = 0.03; // the fiddle rail's lip
+
+        let deck_y = station_at(RACK_Z).1;
+        let y_top = deck_y + SHELF_H;
+
+        let (sp, cp) = pitch_ang.sin_cos();
+        let cam = |x: f32, y: f32, z: f32| {
+            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+        };
+        let pt = |x: f32, y: f32, z: f32| cam(x, y, z).map(|(p, _)| p);
+        // px-per-metre at the rack, sizing the line widths and the round bits.
+        let Some((_, s)) = cam((X0 + X1) * 0.5, y_top, RACK_Z) else {
+            return; // nod swung the rack inside the near plane: nothing to draw
+        };
+
+        let quad =
+            |a: Option<Vec2>, b: Option<Vec2>, c: Option<Vec2>, d: Option<Vec2>, col: Color| {
+                if let (Some(a), Some(b), Some(c), Some(d)) = (a, b, c, d) {
+                    draw_triangle(a, b, c, col);
+                    draw_triangle(a, c, d, col);
+                }
+            };
+        // A box's visible faces: the eye stands on the centre-line, port of the
+        // rack and above it, so the aft, inboard and top faces show.
+        let boxy = |x0: f32, x1: f32, ylo: f32, yhi: f32, z_near: f32, z_far: f32| {
+            quad(
+                pt(x0, ylo, z_near),
+                pt(x1, ylo, z_near),
+                pt(x1, yhi, z_near),
+                pt(x0, yhi, z_near),
+                lume.face(RAIL_DK, (0.0, 0.2, 0.98)), // aft face
+            );
+            quad(
+                pt(x0, ylo, z_near),
+                pt(x0, ylo, z_far),
+                pt(x0, yhi, z_far),
+                pt(x0, yhi, z_near),
+                lume.face(RAIL_DK, (-0.92, 0.2, 0.34)), // inboard face
+            );
+            quad(
+                pt(x0, yhi, z_near),
+                pt(x1, yhi, z_near),
+                pt(x1, yhi, z_far),
+                pt(x0, yhi, z_far),
+                lume.face(RAIL, (0.0, 0.98, 0.2)), // top
+            );
+        };
+
+        // Foot, post, then the shelf across the top (the chart pedestal's build).
+        let xc = (X0 + X1) * 0.5;
+        boxy(xc - 0.16, xc + 0.16, deck_y, deck_y + 0.06, RACK_Z + 0.13, RACK_Z - 0.13);
+        boxy(xc - 0.05, xc + 0.05, deck_y + 0.06, y_top - SHELF_T, RACK_Z + 0.05, RACK_Z - 0.05);
+        boxy(X0, X1, y_top - SHELF_T, y_top, RACK_Z + SHELF_D, RACK_Z - SHELF_D);
+
+        // One shade for the wares (they face aft-and-up like the shelf), dimmed
+        // to half strength while spent so readiness reads at a glance from the helm.
+        let tdiff = lume.diff((0.0, 0.5, 0.86));
+        let ware =
+            |base: [f32; 3], ready: bool| lume.col(base, tdiff, if ready { 1.0 } else { 0.5 });
+        let seg = |a: Option<Vec2>, b: Option<Vec2>, width: f32, col: Color| {
+            if let (Some(a), Some(b)) = (a, b) {
+                draw_line(a.x, a.y, b.x, b.y, width, col);
+            }
+        };
+        let dot = |p: Option<Vec2>, r: f32, col: Color| {
+            if let Some(p) = p {
+                draw_circle(p.x, p.y, r, col);
+            }
+        };
+        // A ready ware's glint: a slow warm pulse, the rack's "at your word".
+        let glint = |p: Option<Vec2>, slot: usize| {
+            let a = 0.45 + 0.3 * (t * 2.6 + slot as f32 * 2.1).sin();
+            dot(p, (0.013 * s).max(1.5), Color::new(1.0, 0.96, 0.78, a));
+        };
+
+        // The berth tags' faces and one line of their lettering: text laid along
+        // the tag's own horizontal (two projected reference points give the
+        // baseline's screen angle), so the label leans and sways with the shelf
+        // it is pinned to. Shrunk to the tag's width when a word runs long.
+        let zt = RACK_Z + SHELF_D + 0.002; // a whisker proud of the shelf's apron
+        let tag_face = lume.face(CHART_PARCH, (0.0, 0.2, 0.98));
+        let tag_ink = lume.face(CHART_INK, (0.0, 0.2, 0.98));
+        let letter = |text: &str, cx: f32, base_y: f32, size_m: f32| {
+            let mut px = (size_m * s).round().max(6.0) as u16;
+            let mut dims = measure_text(text, None, px, 1.0);
+            let max_w = 0.21 * s;
+            if dims.width > max_w {
+                px = (px as f32 * max_w / dims.width).floor().max(6.0) as u16;
+                dims = measure_text(text, None, px, 1.0);
+            }
+            let (Some(p0), Some(p1)) = (pt(cx - 0.1, base_y, zt), pt(cx + 0.1, base_y, zt))
+            else {
+                return;
+            };
+            let run = p1 - p0;
+            let start = (p0 + p1) * 0.5 - run / run.length().max(1e-3) * (dims.width * 0.5);
+            draw_text_ex(
+                text,
+                start.x,
+                start.y,
+                TextParams {
+                    font_size: px,
+                    rotation: run.y.atan2(run.x),
+                    color: tag_ink,
+                    ..Default::default()
+                },
+            );
+        };
+
+        let z = RACK_Z;
+        for (slot, k) in trinkets.iter().enumerate() {
+            if !k.owned {
+                continue;
+            }
+            // The berths spread along the shelf in helm-slot order.
+            let x = X0 + (X1 - X0) * (0.16 + 0.34 * slot as f32);
+            let Some(item) = SpecialItem::from_active_slot(slot) else {
+                continue;
+            };
+            match item {
+                SpecialItem::WindWhistle => {
+                    // A brass bosun's call on its hook: slung and glinting while
+                    // the wind waits on it, lying unslung once piped.
+                    let brass = ware(TRINKET_BRASS, k.ready);
+                    let post_col = lume.face(RAIL_DK, (0.0, 0.2, 0.98));
+                    seg(pt(x - 0.05, y_top, z), pt(x - 0.05, y_top + 0.30, z), (0.016 * s).max(1.0), post_col);
+                    seg(pt(x - 0.05, y_top + 0.30, z), pt(x + 0.03, y_top + 0.26, z), (0.014 * s).max(1.0), post_col);
+                    if k.ready {
+                        // The lanyard, then the call's barrel and its buoy.
+                        seg(pt(x + 0.03, y_top + 0.26, z), pt(x + 0.03, y_top + 0.20, z), (0.008 * s).max(1.0), lume.col(ROPE, 0.5, 1.0));
+                        seg(pt(x + 0.03, y_top + 0.20, z), pt(x + 0.045, y_top + 0.095, z), (0.022 * s).max(1.5), brass);
+                        dot(pt(x + 0.05, y_top + 0.075, z), 0.032 * s, brass);
+                        glint(pt(x + 0.035, y_top + 0.17, z), slot);
+                    } else {
+                        seg(pt(x - 0.085, y_top + 0.018, z), pt(x + 0.02, y_top + 0.018, z), (0.022 * s).max(1.5), brass);
+                        dot(pt(x + 0.04, y_top + 0.03, z), 0.032 * s, brass);
+                    }
+                }
+                SpecialItem::DolphinsDraught => {
+                    // A corked bottle of the draught: upright while the swig
+                    // waits, on its side once quaffed.
+                    let glass = ware(TRINKET_BOTTLE, k.ready);
+                    let cork = ware(TRINKET_CORK, k.ready);
+                    if k.ready {
+                        quad(pt(x - 0.024, y_top + 0.13, z), pt(x + 0.024, y_top + 0.13, z),
+                             pt(x + 0.024, y_top + 0.215, z), pt(x - 0.024, y_top + 0.215, z), glass);
+                        quad(pt(x - 0.028, y_top + 0.215, z), pt(x + 0.028, y_top + 0.215, z),
+                             pt(x + 0.028, y_top + 0.26, z), pt(x - 0.028, y_top + 0.26, z), cork);
+                        // The belly last, so it laps the neck's root cleanly.
+                        dot(pt(x, y_top + 0.085, z), 0.08 * s, glass);
+                        glint(pt(x - 0.028, y_top + 0.12, z), slot);
+                    } else {
+                        quad(pt(x + 0.045, y_top + 0.056, z), pt(x + 0.115, y_top + 0.056, z),
+                             pt(x + 0.115, y_top + 0.104, z), pt(x + 0.045, y_top + 0.104, z), glass);
+                        quad(pt(x + 0.115, y_top + 0.052, z), pt(x + 0.155, y_top + 0.052, z),
+                             pt(x + 0.155, y_top + 0.108, z), pt(x + 0.115, y_top + 0.108, z), cork);
+                        dot(pt(x - 0.03, y_top + 0.08, z), 0.08 * s, glass);
+                    }
+                }
+                SpecialItem::StormGlass => {
+                    // The storm glass: a pale vial of milky liquor on a little
+                    // wooden foot, the whole fitting toppled while it recharges.
+                    let vial = ware(TRINKET_VIAL, k.ready);
+                    let brew = ware(TRINKET_BREW, k.ready);
+                    let foot = ware(RAIL_DK, k.ready);
+                    if k.ready {
+                        quad(pt(x - 0.05, y_top, z), pt(x + 0.05, y_top, z),
+                             pt(x + 0.05, y_top + 0.035, z), pt(x - 0.05, y_top + 0.035, z), foot);
+                        quad(pt(x - 0.032, y_top + 0.035, z), pt(x + 0.032, y_top + 0.035, z),
+                             pt(x + 0.032, y_top + 0.27, z), pt(x - 0.032, y_top + 0.27, z), vial);
+                        quad(pt(x - 0.026, y_top + 0.045, z), pt(x + 0.026, y_top + 0.045, z),
+                             pt(x + 0.026, y_top + 0.135, z), pt(x - 0.026, y_top + 0.135, z), brew);
+                        glint(pt(x - 0.02, y_top + 0.24, z), slot);
+                    } else {
+                        quad(pt(x - 0.115, y_top, z), pt(x - 0.08, y_top, z),
+                             pt(x - 0.08, y_top + 0.1, z), pt(x - 0.115, y_top + 0.1, z), foot);
+                        quad(pt(x - 0.08, y_top + 0.004, z), pt(x + 0.12, y_top + 0.004, z),
+                             pt(x + 0.12, y_top + 0.068, z), pt(x - 0.08, y_top + 0.068, z), vial);
+                        // The liquor pooled along the vial's low side.
+                        quad(pt(x - 0.07, y_top + 0.004, z), pt(x + 0.03, y_top + 0.004, z),
+                             pt(x + 0.03, y_top + 0.032, z), pt(x - 0.07, y_top + 0.032, z), brew);
+                    }
+                }
+                _ => {}
+            }
+
+            // The berth's tag, pinned to the shelf's apron under the ware: the
+            // ware's name a word per line, and beneath it the key that invokes
+            // it, so the rack labels its own controls.
+            let tag_top = y_top - 0.005;
+            let words: Vec<&str> = item.name().split_whitespace().collect();
+            let key_base = tag_top - 0.047 * words.len() as f32 - 0.068;
+            quad(
+                pt(x - 0.115, key_base - 0.022, zt),
+                pt(x + 0.115, key_base - 0.022, zt),
+                pt(x + 0.115, tag_top, zt),
+                pt(x - 0.115, tag_top, zt),
+                tag_face,
+            );
+            for (i, word) in words.iter().enumerate() {
+                letter(word, x, tag_top - 0.047 * (i + 1) as f32, 0.043);
+            }
+            letter(item.key_hint().unwrap_or(""), x, key_base, 0.062);
+        }
+
+        // The fiddle rail last, so its lip laps the wares' feet like real
+        // furniture rather than hiding behind them.
+        boxy(X0, X1, y_top, y_top + FIDDLE_H, RACK_Z + SHELF_D, RACK_Z + SHELF_D - 0.02);
+    }
+
     /// Mast, yard and the square sail: the articulating rig. The sail is built
     /// from a grid of cloth cells, each vertex given an out-of-plane depth
     /// (belly + luff), then the whole yard rotated about the mast (the brace)
@@ -2520,6 +2788,7 @@ mod tests {
             yaw_rate,
             slam,
             chart: None,
+            trinkets: [TrinketState::default(); SpecialItem::ACTIVE_COUNT],
         }
     }
 
