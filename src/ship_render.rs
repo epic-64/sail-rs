@@ -3,10 +3,12 @@
 //! the waves and islands — *not* the original's painted `deck*.png` bolted to
 //! the camera with CSS `perspective()`/`rotateX` transforms.
 //!
-//! The hull is a real loft: stations in metres ([`STATIONS`]) projected through
-//! one perspective camera stood on the quarterdeck abaft the wheel
-//! ([`helm_cam`]), so deck, bulwarks, rails and wheel all foreshorten
-//! consistently. The whole assembly sways as a rigid body with the swell
+//! The whole ship is a real loft: hull stations and rig dimensions in metres
+//! projected through one perspective camera stood on the quarterdeck abaft the
+//! wheel ([`helm_cam`]), so deck, bulwarks, rails, wheel, mast, yard and sail
+//! all foreshorten consistently, and the deck furniture standing nearer the
+//! eye than the mast rightly covers its lower run (see the two-phase draw in
+//! [`ShipRenderer::render`]). The whole assembly sways as a rigid body with the swell
 //! (heave/pitch/roll/yaw from [`crate::ocean::ship_motion`]), about a pivot
 //! below the screen so the masthead arcs as the hull rolls. On top of that
 //! rigid sway the rig *articulates*:
@@ -16,9 +18,11 @@
 //!   deepest toward the free foot, so the curve runs down the cloth,
 //! - and **luffs** — a travelling ripple flogs the cloth when starved of wind.
 //!
-//! The belly/brace/luff are built in a small local 3-D rig space (x across, y up,
-//! z toward the viewer) and projected through a gentle fake perspective, so a
-//! braced-and-bellied sail still reads as a curved surface from any angle. The
+//! The belly/brace/luff are built in the hull's own loft space (metres: x
+//! across, y up, z aft toward the eye, origin at the mast foot) and projected
+//! through the same helm camera as the woodwork, so a braced-and-bellied sail
+//! still reads as a curved surface from any angle and a hard-braced yardarm
+//! honestly swings toward or away from the eye. The
 //! trim is driven by the real [`crate::sailing::Wind`]: the caller passes the
 //! wind's bearing relative to the bow (`wind_rel`), and the sail bellies by the
 //! same `Wind::factor` curve the physics uses, so it luffs exactly when the ship
@@ -53,14 +57,15 @@ const SET_EASE: f32 = 2.2; // 1/s the crew haul the canvas to its new set (furl/
 const DECK_SHARE: f32 = 0.6;
 const YAW_SWAY_PX: f32 = 180.0; // px of pan per rad of hull yaw
 
-// --- The hull in 3-D ------------------------------------------------------------
-// The hull is a real low-poly loft in metres, in the rig frame: +x starboard,
-// +y up, +z aft toward the eye, origin on the waist deck under the mast. One
-// perspective camera projects it all (see `helm_cam`), so the woodwork
-// foreshortens consistently: the eye stands on the quarterdeck a stretch abaft
-// the wheel. The rig (mast, yard, sail) keeps its own gentler anchored
-// perspective — an honest camera would crop the sail out of a fixed forward
-// view — pinned to the hull at the projected mast foot.
+// --- The ship in 3-D -------------------------------------------------------------
+// Hull and rig are one real low-poly loft in metres, in the rig frame: +x
+// starboard, +y up, +z aft toward the eye, origin on the waist deck under the
+// mast. One perspective camera projects it all (see `helm_cam`), so the
+// woodwork and the spars foreshorten consistently: the eye stands on the
+// quarterdeck a stretch abaft the wheel. Sharing the camera is also what lets
+// the deck occlude the rig honestly: the deck draws in a fore and an aft phase
+// around the mast station with the rig between them, so the crates and rails
+// standing nearer the eye than the mast paint over its foot.
 const CAM_AFT: f32 = 10.0; // the eye: metres abaft the mast
 // Eye height above the waist deck: a helmsman's eye line (~1.65 m) stood on the
 // quarterdeck (see the raised stations). Raising this reads as a taller viewer.
@@ -162,9 +167,18 @@ struct DeckPoints {
     bowsprit_tip: Vec2,
 }
 
-// Gentle perspective focal length (px) for the rig's local 3-D, matched to the
-// original's 1600px so the belly and brace stay shallow, not fish-eyed.
-const FOCAL: f32 = 1600.0;
+// --- The rig in metres -----------------------------------------------------------
+// Mast, yard and sail live in the same loft space as the hull and project
+// through the same helm camera, standing at the mast station (z = 0). Sized so
+// the masthead towers off the top of a landscape screen, the yard crosses just
+// under it, and the cloth's foot clears the tallest cargo stack on the waist.
+const MAST_TOP_M: f32 = 10.2; // masthead height above the waist deck
+const YARD_H_M: f32 = 6.5; // the yard crosses here; the bare pole runs on above
+const SAIL_W_M: f32 = 7.6; // the sail's full width along the yard
+const SAIL_H_M: f32 = 3.0; // its hoist, head to foot at full set
+const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
+const MAST_HEAD_HW: f32 = 0.15; // the post's half-width at the head (the foot is MAST_HW)
+const YARD_HALF_TH: f32 = 0.11; // the spar's half-thickness
 
 // --- Wood / canvas palette (harmonises with the island features' wood tones) --
 const SAIL_CLOTH: [f32; 3] = [226.0, 214.0, 188.0];
@@ -219,7 +233,7 @@ const CRATE_SPIN: f32 = 0.6; // yaw per metre slid, scaled by each crate's signe
 const CRATE_STOP: f32 = 0.06; // m/s under which a sliding crate settles
 const RESTOW_RATE: f32 = 0.04; // 1/s the crew ease shifted cargo back to stowage in a calm
 const WALL_GAP: f32 = 0.12; // clearance kept off the bulwark's inboard face
-const MAST_HW: f32 = 0.25; // the mast foot's half-extent crates shove against
+const MAST_HW: f32 = 0.25; // the mast's half-width at the foot: drawn size, and the extent crates shove against
 // A crate slammed into the bulwark hard enough carries clean over the rail and
 // is lost to the sea: the toll for keeping way on through a storm or hauling
 // the wheel over at full speed. The impact speed needed scales with each
@@ -949,8 +963,13 @@ impl ShipRenderer {
         };
 
         self.step_cargo(rig, roll, pitch_ang, dt);
-        let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w);
+        // The ship draws far to near through the one camera: the deck forward
+        // of the mast, then the rig standing at the mast station, then the
+        // deck abaft it (near crates, quarterdeck, breast rail), so woodwork
+        // between the eye and the mast rightly covers its lower run.
+        let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w, false);
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
+        self.draw_deck(&sway, pitch_ang, &lume, h, w, true);
         // The chart board after the rig, so no rope paints across the parchment;
         // it stands on the breast rail, nearer the eye than everything forward.
         if let Some(chart) = &rig.chart {
@@ -965,7 +984,12 @@ impl ShipRenderer {
     /// The hull: deck floor, quarterdeck, bulwarks, railing, cargo and bowsprit,
     /// lofted from [`STATIONS`] through the helm camera and drawn bow → stern so
     /// nearer woodwork paints over farther (macroquad has no depth buffer).
-    /// Returns the screen anchors the rig and the rain hang on.
+    /// Called twice a frame, split by `aft` around the mast station so the rig
+    /// slots into the painter's order between the calls: the fore pass draws
+    /// everything forward of the mast, the aft pass (after the rig) the crates
+    /// abaft it, the quarterdeck and the breast rail, which stand nearer the
+    /// eye than the mast and must cover its foot. Returns the screen anchors
+    /// the rig and the rain hang on (the same from either pass).
     fn draw_deck(
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,
@@ -973,6 +997,7 @@ impl ShipRenderer {
         lume: &Lume,
         h: f32,
         w: f32,
+        aft: bool,
     ) -> DeckPoints {
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
@@ -1032,8 +1057,10 @@ impl ShipRenderer {
         // A station belongs to the quarterdeck run if it lies aft of the break
         // (the raised twin of the doubled break station included).
         let is_aft = |z: f32, d: f32| z > QDECK_BREAK || (z == QDECK_BREAK && d > 0.4);
-        for pair in STATIONS.windows(2).filter(|p| !is_aft(p[0].0, p[0].2)) {
-            floor_pair(pair);
+        if !aft {
+            for pair in STATIONS.windows(2).filter(|p| !is_aft(p[0].0, p[0].2)) {
+                floor_pair(pair);
+            }
         }
 
         // --- Companion stairs: the way down from the quarterdeck to the waist,
@@ -1229,15 +1256,20 @@ impl ShipRenderer {
 
         // Waist level: shadow on its planks, then its walls and rails, then the
         // companion stairs over them (the flight is inboard of the walls).
-        mast_shadow(-14.5, QDECK_BREAK);
-        bulwarks(false);
-        railing(false);
-        companion_stairs();
+        if !aft {
+            mast_shadow(-14.5, QDECK_BREAK);
+            bulwarks(false);
+            railing(false);
+            companion_stairs();
+        }
 
         // --- Deck cargo: the lashed crates. Their layout and motion live in
         // `self.crates` (one per hold unit, stowed helm-first; stepped by
         // `step_cargo`, which lets extreme weather and violent turns shift
-        // them). Drawn far → near so nearer crates overlap those behind; each
+        // them). Drawn far → near so nearer crates overlap those behind, and
+        // split across the two passes at the mast station: a crate abaft the
+        // mast draws in the aft pass, after the rig, so it paints over the
+        // mast's foot, while one forward of it is covered by the mast. Each
         // side face is culled and shaded by its yawed outward normal, so a
         // crate slewed by a slide keeps honest light. Drawn before the
         // quarterdeck floor, so a crate reaching into the wedge the platform
@@ -1252,7 +1284,7 @@ impl ShipRenderer {
         const SIDE_N: [(f32, f32); 4] = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)];
         for &k in &idx {
             let c = &self.crates[k];
-            if c.gone {
+            if c.gone || (c.z >= 0.0) != aft {
                 continue;
             }
             let (ys, yc) = c.yaw.sin_cos();
@@ -1296,21 +1328,23 @@ impl ShipRenderer {
         }
 
         // Quarterdeck level: the platform floor over the waist detail, then its
-        // own shadow run, walls and rails.
-        for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
-            floor_pair(pair);
-        }
-        mast_shadow(QDECK_BREAK, 8.5);
-        bulwarks(true);
-        railing(true);
+        // own shadow run, walls and rails. All of it stands nearer the eye
+        // than the mast, so it belongs to the aft pass, painted over the rig.
+        if aft {
+            for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
+                floor_pair(pair);
+            }
+            mast_shadow(QDECK_BREAK, 8.5);
+            bulwarks(true);
+            railing(true);
 
-        // --- Breast rail: a railing across the quarterdeck's forward edge, so
-        // the raised platform the helmsman stands on actually reads from the
-        // helm: you look over it, down onto the waist where the cargo rides.
-        // It spans port to just past the centreline; the starboard end stays
-        // open where the companion stairs come up. Drawn after the crates,
-        // since it stands nearer the eye than everything forward of the break.
-        {
+            // --- Breast rail: a railing across the quarterdeck's forward edge,
+            // so the raised platform the helmsman stands on actually reads from
+            // the helm: you look over it, down onto the waist where the cargo
+            // rides. It spans port to just past the centreline; the starboard
+            // end stays open where the companion stairs come up. Drawn after
+            // the crates and the rig, since it stands nearer the eye than
+            // everything forward of the break (the mast included).
             let brk = BREAST_RAIL_Z; // just aft of the quarterdeck break
             let (_, qd_y, _) = station_at(brk);
             let rail_y = qd_y + BREAST_RAIL_H; // waist-high off the platform
@@ -1343,8 +1377,10 @@ impl ShipRenderer {
         // --- Bowsprit: a tapered spar from the stemhead out toward the horizon.
         // It anchors the forestay and closes the ship's profile so the prow
         // reads as a ship's, not a raft's. Two-tone halves, matching the mast.
+        // The farthest woodwork aboard, so it draws in the fore pass and the
+        // rig later paints over it.
         let sprit_tip = (2.7f32, -18.2f32); // (height, z) of the tip
-        {
+        if !aft {
             let base = (1.5f32, -14.6f32);
             let lit_l = lume.face(SPAR, (-0.66, 0.4, 0.64));
             let lit_r = lume.face(SPAR_DK, (0.66, 0.4, 0.64));
@@ -1591,8 +1627,8 @@ impl ShipRenderer {
     /// Mast, yard and the square sail: the articulating rig. The sail is built
     /// from a grid of cloth cells, each vertex given an out-of-plane depth
     /// (belly + luff), then the whole yard rotated about the mast (the brace)
-    /// before projecting through the fake perspective. Cells draw back-to-front
-    /// so the curved surface overlaps correctly.
+    /// before projecting through the helm camera, the same lens as the hull.
+    /// Cells draw back-to-front so the curved surface overlaps correctly.
     #[allow(clippy::too_many_arguments)] // sway/projection inputs for the rig
     fn draw_rig(
         &self,
@@ -1608,30 +1644,21 @@ impl ShipRenderer {
         // Rope is round and matte: no face to turn to the light, so it takes
         // a fixed half-diffuse of the hour's colour everywhere.
         let rope_col = lume.col(ROPE, 0.5, 1.0);
-        let cx = w * 0.5;
-        // The rig is anchored where the helm camera puts the hull's mast station.
-        let foot_y = h * HORIZON + w * CAM_F * CAM_UP / CAM_AFT;
-        let mast_len = h * 0.74; // tall enough to tower off the top of the screen
-        // The bare pole runs 3 m above the yard/sail rigging (the engine's metre
-        // scale is ocean::HEAVE_GAIN_PX = 27 px/m). The shrouds make for this very
-        // top; the yard and sail stay pinned to `mast_len` below.
-        let mast_top = mast_len + 3.0 * 27.0;
-        let yard_y = mast_len * 0.90; // yard crosses near the masthead
-        let sail_w = w * 0.44;
-        let sail_h = mast_len * 0.42;
 
-        // The fore-aft nod tips the whole rig about its foot: bow-up rocks the
-        // masthead aft (toward the helm/viewer), bow-down throws it forward.
+        // The rig is lofted in the hull's metres about the mast foot (the loft
+        // frame's origin) and projected through the very camera the woodwork
+        // takes, so the fore-aft nod, the sway and the foreshortening are all
+        // shared with the deck. The rig stands metres clear of the near plane
+        // at any pitch the swell can throw, so the off-screen park below is a
+        // formality (the same fallback the deck's rope feet use).
         let (sp, cp) = pitch_ang.sin_cos();
-        // Project a rig-local point (across x, up y, depth z toward viewer) to a
-        // swayed screen point. The mast foot is the local origin on the deck; (y, z)
-        // are first rotated by the pitch so the rig nods through the swell.
+        let off = vec2(w * 0.5, h * 3.0);
         let project = |x: f32, y: f32, z: f32| -> Vec2 {
-            let py = y * cp - z * sp;
-            let pz = y * sp + z * cp;
-            let persp = FOCAL / (FOCAL - pz);
-            sway(cx + x * persp, foot_y - py * persp)
+            helm_cam(x, y, z, sp, cp, w, h).map_or(off, |(p, _)| sway(p.x, p.y))
         };
+        // px per metre at the mast plane, for the cloth shading's expected
+        // cell span.
+        let s0 = w * CAM_F / CAM_AFT;
 
         // --- Sail trim --------------------------------------------------------
         let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
@@ -1649,14 +1676,15 @@ impl ShipRenderer {
         let brace = self.brace_angle;
         let (sb, cb) = brace.sin_cos();
 
-        // The cloth hangs a touch abaft the mast (away from the viewer) so the spar
-        // always parts it, never pokes through — on top of that sits the belly.
-        let stand_off = w * 0.020; // base depth of the sail behind the mast plane
-        let depth = -fill * BELLY_DEPTH * sail_w; // belly draft (px); negative = away
+        // The cloth hangs a touch forward of the mast (away from the viewer) so
+        // the spar always parts it, never pokes through; on top of that sits
+        // the belly.
+        let stand_off = SAIL_STANDOFF_M;
+        let depth = -fill * BELLY_DEPTH * SAIL_W_M; // belly draft (m); negative = away
         let phase = t * FLAP_HZ * TAU;
 
-        let sail_top = yard_y;
-        let sail_bot = yard_y - sail_h * furl;
+        let sail_top = YARD_H_M;
+        let sail_bot = YARD_H_M - SAIL_H_M * furl;
 
         // The belly's draft profiles. Down the height the cloth is laced flat
         // along the yard, bows to its deepest about two thirds down, and is
@@ -1673,12 +1701,12 @@ impl ShipRenderer {
         let panel_z = |u: f32, v: f32| -> f32 {
             let belly = depth * vert(v) * horiz(u);
             let wave = (phase - u * FLAP_WAVES * TAU).sin();
-            let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
+            let flog = luff * FLAP_DEPTH * SAIL_W_M * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
             -stand_off + belly + flog
         };
         // Rotate a panel edge (across `u`, out-of-plane `z0`) about the mast (the brace).
         let braced = |u: f32, z0: f32| -> (f32, f32) {
-            let x0 = u * sail_w;
+            let x0 = u * SAIL_W_M;
             (x0 * cb + z0 * sb, -x0 * sb + z0 * cb)
         };
 
@@ -1688,7 +1716,7 @@ impl ShipRenderer {
         // cloth hides its upper run; only the lower reach to the bow shows.
         {
             let tip = deck.bowsprit_tip;
-            let head = project(0.0, mast_top, 0.0);
+            let head = project(0.0, MAST_TOP_M, 0.0);
             let thick = (h * 0.0028).max(1.0);
             draw_line(head.x, head.y, tip.x, tip.y, thick, rope_col);
         }
@@ -1740,7 +1768,7 @@ impl ShipRenderer {
             // yard above, the sheeted foot, the leeches at the sides); a cell
             // braced edge-on (small horizontal span) also dims.
             let belly_lit = 1.0 - 0.28 * fill * (1.0 - vert(v) * horiz(u));
-            let face = ((tr.x - tl.x).abs() / (sail_w / n as f32 + 1.0)).min(1.0);
+            let face = ((tr.x - tl.x).abs() / (SAIL_W_M / n as f32 * s0 + 1.0)).min(1.0);
             let shade = (0.55 + 0.45 * face) * belly_lit;
             // Directional cloth: the braced plane's normal (the belly's edge
             // falloff is already in `belly_lit`) against the key light, with a
@@ -1762,8 +1790,9 @@ impl ShipRenderer {
         // the same brace/belly/luff transform as the cloth's own panels, so it
         // leads wherever the sail swings and trembles with it when it flogs;
         // the brace follows the rigid yard tip. Braced hard on the wind an
-        // attachment swings abaft the mast plane; that rope must hide behind
-        // the spars, so each rope draws before or after them by its end's depth.
+        // attachment swings forward of the mast plane, farther from the eye
+        // than the spars; that rope must hide behind them, so each rope draws
+        // before or after the spars by its end's depth.
         let rope_thick = (h * 0.0028).max(1.0);
         let ropes: Vec<(Vec<Vec2>, bool)> = {
             let sag = h * 0.035; // the rope's own weight bows the run a little
@@ -1817,7 +1846,7 @@ impl ShipRenderer {
                 draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, rope_thick, rope_col);
             }
         };
-        // The rope(s) whose rig end lies abaft the mast plane, hidden by the spars.
+        // The ropes whose rig end lies forward of the mast plane, hidden by the spars.
         for (pts, behind) in &ropes {
             if *behind {
                 draw_rope(pts);
@@ -1829,7 +1858,7 @@ impl ShipRenderer {
         {
             let (lx, lz) = braced(-0.54, -stand_off);
             let (rx, rz) = braced(0.54, -stand_off);
-            let th = h * 0.011;
+            let th = YARD_HALF_TH;
             let a = project(lx, sail_top + th, lz);
             let b = project(rx, sail_top + th, rz);
             let c = project(rx, sail_top - th, rz);
@@ -1842,16 +1871,16 @@ impl ShipRenderer {
         }
 
         // --- Mast: a slightly tapered vertical post, two-tone for round form ----
-        // Drawn last, at z=0 (nearest), so it stands in front of the sail and yard.
+        // Drawn last of the rig, at z = 0 (its nearest plane), so it stands in
+        // front of the sail and yard; the deck's aft pass then covers its foot
+        // with the crates and rails standing nearer the eye still.
         {
-            let bw = w * 0.016; // base half-width
-            let tw = w * 0.010; // taper to the masthead
-            let b0 = project(-bw, 0.0, 0.0);
-            let b1 = project(bw, 0.0, 0.0);
-            let t1 = project(tw, mast_top, 0.0);
-            let t0 = project(-tw, mast_top, 0.0);
+            let b0 = project(-MAST_HW, 0.0, 0.0);
+            let b1 = project(MAST_HW, 0.0, 0.0);
+            let t1 = project(MAST_HEAD_HW, MAST_TOP_M, 0.0);
+            let t0 = project(-MAST_HEAD_HW, MAST_TOP_M, 0.0);
             let mid0 = project(0.0, 0.0, 0.0);
-            let mid1 = project(0.0, mast_top, 0.0);
+            let mid1 = project(0.0, MAST_TOP_M, 0.0);
             // Two-tone halves for round form, each half turned to its own side so
             // the shading flips as the light crosses the bow.
             let lit_l = lume.face(SPAR, (-0.7, 0.15, 0.7));
@@ -1862,8 +1891,8 @@ impl ShipRenderer {
             draw_triangle(mid0, t1, mid1, lit_r);
         }
 
-        // The remaining ropes, their rig ends riding forward of the mast plane,
-        // drawn nearest so they lead over the spars toward the rail.
+        // The remaining ropes, their rig ends riding abaft the mast plane and
+        // so nearer the eye, drawn over the spars as they lead toward the rail.
         for (pts, behind) in &ropes {
             if !*behind {
                 draw_rope(pts);
