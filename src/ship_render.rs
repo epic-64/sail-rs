@@ -1147,11 +1147,12 @@ impl ShipRenderer {
             if ly <= 0.05 {
                 return;
             }
-            // Horizontal throw per metre of mast height; the pole length is
-            // capped so a low light runs the shadow off the hull, not forever.
+            // Horizontal throw per metre of mast height; the pole is the drawn
+            // masthead, capped so a low light runs the shadow off the hull,
+            // not forever.
             let (tx, tz) = (-lx / ly, -lz / ly);
             let throw = (tx * tx + tz * tz).sqrt().max(1e-3);
-            let mast_h = 14.0f32.min(30.0 / throw);
+            let mast_h = MAST_TOP_M.min(30.0 / throw);
             let key_l = (lume.key.0 + lume.key.1 + lume.key.2) / 3.0;
             let amb_l = (lume.ambient.0 + lume.ambient.1 + lume.ambient.2) / 3.0;
             let key_part = (1.0 - AMBIENT_SHARE) * ly * key_l;
