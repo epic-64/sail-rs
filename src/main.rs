@@ -15,6 +15,7 @@ mod font;
 mod game_state;
 mod geometry;
 mod guide;
+mod hud;
 mod isle_features;
 mod isle_terrain;
 mod islands_render;
@@ -35,6 +36,7 @@ mod sailing;
 mod save;
 mod scene;
 mod ship_render;
+mod sky;
 mod sound;
 mod spray;
 mod tavern;
@@ -55,6 +57,7 @@ use projection::MAX_VIEW;
 use rng::Rng;
 use sailing::{Helm, Kinematics, Wind};
 use ship_render::{RigInput, ShipLight, ShipRenderer};
+use sky::draw_sky;
 use tavern::SpecialItem;
 use clouds::StormSky;
 use rain::{Rain, RainInput};
@@ -105,7 +108,7 @@ fn launch_fullscreen() -> bool {
 }
 
 #[inline]
-fn lerp3(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
+pub(crate) fn lerp3(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
     (
         a.0 + (b.0 - a.0) * t,
         a.1 + (b.1 - a.1) * t,
@@ -114,163 +117,15 @@ fn lerp3(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
 }
 
 #[inline]
-fn rgb(c: (f32, f32, f32)) -> Color {
+pub(crate) fn rgb(c: (f32, f32, f32)) -> Color {
     Color::new(c.0 / 255.0, c.1 / 255.0, c.2 / 255.0, 1.0)
 }
 
 /// Smoothstep: 0 below `e0`, 1 above `e1`, eased in between.
 #[inline]
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// Paint the sky as a vertical three-stop gradient (top → mid → horizon), eased
-/// toward the storm overcast by `storm`. `sky` is the clock's fair-weather gradient.
-///
-/// The sky is treated as a skybox locked to the sun's bearing: a warm "lit" dome
-/// toward the sun and a cool, dark dome away from it, the split sharpening as the
-/// sun nears the horizon. So at sunrise the eastern sky around the sun glows while
-/// the west, the sides and the zenith stay night-dark; at sunset the red sits on
-/// the sun's side and the opposite sky has already gone dark. The directional split
-/// is gated to the low-sun `twilight` window (active whether the sun is just above
-/// *or* just below the horizon) and weighted toward the horizon, so high-noon and
-/// deep-night skies stay uniform. Because the bearing is taken relative to the
-/// heading, the bright side stays pinned to the sun as the helm swings the view.
-/// Built as one mesh, since macroquad has no built-in gradient.
-fn draw_sky(
-    view: &scene::SkyView,
-    sky: [(f32, f32, f32); 3],
-    storm: f32,
-    m: f32,
-    sun_az: f32,
-    sun_alt: f32,
-) {
-    let scene::SkyView {
-        heading,
-        half_fov_h: half_fov,
-        w,
-        horizon,
-    } = *view;
-    // How fully night has fallen: the overcast darkens with it (an unlit night sky has
-    // no sun behind the cloud), so a storm at night reads dark rather than daytime-grey.
-    let base_night = palette::night_factor(sun_alt); // 0 by day, 1 once set
-    let storm_sky = palette::storm_sky(base_night);
-    // The two gradients blended between horizontally: the clock's "lit" sky and the
-    // cool night sky stood in for the un-sunlit side. Both eased toward the overcast.
-    let storm_blend = |g: [(f32, f32, f32); 3]| {
-        [
-            lerp3(g[0], storm_sky[0], storm),
-            lerp3(g[1], storm_sky[1], storm),
-            lerp3(g[2], storm_sky[2], storm),
-        ]
-    };
-    let lit = storm_blend(sky);
-    let dark = storm_blend(palette::fair_sky(palette::Daytime::Night));
-
-    // Vertical three-stop sample (top → mid → horizon) at `t` in [0, 1].
-    let grad = |g: &[(f32, f32, f32); 3], t: f32| {
-        if t < 0.5 {
-            lerp3(g[0], g[1], t * 2.0)
-        } else {
-            lerp3(g[1], g[2], (t - 0.5) * 2.0)
-        }
-    };
-
-    // `base_night` (computed above) eases the whole sky to the night gradient as the
-    // sun sinks past the horizon, so no warm tint lingers overhead once it's down.
-    // The strength of the *directional* split: a bell centred on the sun sitting on
-    // the horizon, so it rises as the sun approaches the sea line (from above on the
-    // way down, from below on the way up) and fades both at high noon and at the dead
-    // of night. This is what makes the warm side appear while the sun is still up —
-    // the old code keyed the split off `base_night`, which is zero until the sun has
-    // already set, so a sunrise lit every bearing equally.
-    const TWILIGHT_WIDTH: f32 = 0.34;
-    let twilight = (-(sun_alt / TWILIGHT_WIDTH).powi(2)).exp();
-    // The sun's bearing across the view (relative to the heading).
-    let rel_sun = wrap_angle(sun_az - heading);
-    // Angular half-width of the warm glow around the sun's bearing.
-    const GLOW_WIDTH: f32 = 0.85;
-
-    // Backstop fill (covered by the mesh) so a hard camera tilt never bares the
-    // cleared background past the gradient's edges.
-    let back = lerp3(grad(&lit, 0.0), grad(&dark, 0.0), base_night);
-    draw_rectangle(-m, -m, w + 2.0 * m, horizon + m, rgb(back));
-
-    if twilight <= 0.001 {
-        // No twilight split (high day, or deep night): a plain vertical gradient —
-        // eased uniformly toward night by `base_night` — is enough.
-        let strips = 96;
-        let strip_h = horizon / strips as f32;
-        for i in 0..strips {
-            let t = i as f32 / (strips - 1) as f32;
-            let y = i as f32 * strip_h;
-            let c = lerp3(grad(&lit, t), grad(&dark, t), base_night);
-            draw_rectangle(-m, y, w + 2.0 * m, strip_h + 1.0, rgb(c));
-        }
-        return;
-    }
-
-    // Directional gradient as a grid mesh: rows give the vertical gradient, columns
-    // the sideways lit→dark blend by angle from the sun. Kept small enough that the
-    // index count stays under macroquad's per-drawcall limit (max_indices = 5000;
-    // 24×32×6 = 4608); the per-vertex colours interpolate smoothly across each quad.
-    let cols = 24usize;
-    let rows = 32usize;
-    let x0 = -m;
-    let x1 = w + m;
-    let y0 = -m;
-    let y1 = horizon;
-    let mut vertices: Vec<Vertex> = Vec::with_capacity((cols + 1) * (rows + 1));
-    for r in 0..=rows {
-        let fy = r as f32 / rows as f32;
-        let y = y0 + (y1 - y0) * fy;
-        // Vertical gradient parameter: clamp the over-scan above y=0 to the top stop.
-        let t = clamp(y / horizon, 0.0, 1.0);
-        let lit_c = grad(&lit, t);
-        let dark_c = grad(&dark, t);
-        // The split is confined to the lower sky (the zenith stays uniform, tracking
-        // `base_night` only) and fades out toward the very top.
-        let horizon_band = smoothstep(0.30, 0.95, t);
-        for c in 0..=cols {
-            let fx = c as f32 / cols as f32;
-            let x = x0 + (x1 - x0) * fx;
-            // This column's bearing relative to the heading, and its angle from the
-            // sun; the warm glow falls off as a soft bell around the sun's bearing.
-            let rel_col = (x - w * 0.5) / (w * 0.5) * half_fov;
-            let sep = wrap_angle(rel_col - rel_sun);
-            let glow = (-(sep / GLOW_WIDTH).powi(2)).exp();
-            // Two directional pushes, both scaled by the twilight strength and limited
-            // to the lower sky:
-            //   warm_keep — near the sun, hold the warm "lit" sky even after the sun
-            //               has dipped (spares the afterglow from `base_night`);
-            //   dark_push — away from the sun, pull toward the cool night sky even
-            //               while the sun is still up, so the anti-solar sky and the
-            //               sides darken at sunrise/sunset instead of brightening.
-            let warm_keep = glow * horizon_band * twilight;
-            let dark_push = (1.0 - glow) * horizon_band * twilight;
-            let night_amt =
-                clamp(base_night * (1.0 - warm_keep) + dark_push * (1.0 - base_night), 0.0, 1.0);
-            let col = lerp3(lit_c, dark_c, night_amt);
-            vertices.push(Vertex::new(x, y, 0.0, fx, fy, rgb(col)));
-        }
-    }
-    let stride = (cols + 1) as u16;
-    let mut indices: Vec<u16> = Vec::with_capacity(cols * rows * 6);
-    for r in 0..rows as u16 {
-        for c in 0..cols as u16 {
-            let i0 = r * stride + c;
-            let i1 = i0 + 1;
-            let i2 = i0 + stride;
-            let i3 = i2 + 1;
-            indices.extend_from_slice(&[i0, i1, i2, i1, i3, i2]);
-        }
-    }
-    draw_mesh(&Mesh {
-        vertices,
-        indices,
-        texture: None,
-    });
 }
 
 /// Discrete sail settings: W deploys a notch, S furls one. Each maps to a sail
@@ -313,49 +168,6 @@ fn read_turn(log_open: bool) -> f32 {
         turn -= 1.0;
     }
     turn
-}
-
-/// Faint keybind reminders in the bottom-left while sailing. Only shown in
-/// keyboard mode (the touch HUD carries its own glyphs), so a captain at the
-/// helm always sees how to reach the log, furl sail, steer and dock. The
-/// dock hint only appears when there's a harbour within reach.
-fn draw_keybind_hints(dockable: bool, extra: &[(&str, &str)], h: f32) {
-    // (key, action) top to bottom; the log sits first as the headline hint.
-    let mut hints: Vec<(&str, &str)> = vec![
-        ("L", "Captain's Log"),
-        ("G", "Guide"),
-        ("Esc", "Pause"),
-        ("\u{2191}\u{2193}", "Sail"),
-        ("\u{2190}\u{2192}", "Steer"),
-        ("C", "Look astern"),
-        ("H", "Hide HUD"),
-    ];
-    // Any tavern wares the captain has bought (the world map's M, the active wares'
-    // number keys), so their shortcuts are reminded only once they're earned.
-    hints.extend_from_slice(extra);
-    if dockable {
-        hints.push(("Space", "Dock"));
-    }
-
-    let fs = ui::fs_small();
-    let step = ui::line_h(fs);
-    let margin = px(14.0);
-    let key_w = px(38.0); // gutter the action text clears, so keys/actions align
-    let key_col = Color::new(0.98, 0.95, 0.86, 0.92);
-    let act_col = Color::new(0.96, 0.92, 0.80, 0.62);
-    let shadow = Color::new(0.0, 0.0, 0.0, 0.5);
-
-    // Stack upward from the bottom edge so the list grows from a fixed baseline.
-    let mut y = h - margin;
-    for (key, action) in hints.iter().rev() {
-        let x = margin;
-        // A faint drop shadow keeps the text legible over bright water or foam.
-        draw_text(key, x + 1.0, y + 1.0, fs as f32, shadow);
-        draw_text(key, x, y, fs as f32, key_col);
-        draw_text(action, x + key_w + 1.0, y + 1.0, fs as f32, shadow);
-        draw_text(action, x + key_w, y, fs as f32, act_col);
-        y -= step;
-    }
 }
 
 /// How a single voyage ended: the captain quit outright, or entered a new world
@@ -1823,69 +1635,7 @@ async fn run_game(
         // sailing physics) rides on top of the hull's own speed in the readout.
         // The whole corner readout (and its badges) tucks away with H.
         if !hud_hidden {
-        let knots = kin.speed() / sailing::KNOT + burst_kn;
-        let wind_from = compass(wrap_angle(wind.toward_rad + std::f32::consts::PI));
-        let point = wind.point_of_sail(kin.heading_rad).label();
-        let hull_pct = (hull::fraction(&gs) * 100.0).round() as i32;
-        // Everything in one row, at one font size, dot-separated: a coin icon and
-        // the purse, then speed · wind quarter · point of sail.
-        let fs = px(16.0);
-        let baseline = px(26.0);
-        // Coin icon, vertically centred on the text's cap height.
-        let r = px(7.0);
-        let cx = px(16.0) + r;
-        let cy = baseline - fs * 0.34;
-        let rim = Color::new(0.78, 0.58, 0.12, 1.0); // darker milled edge
-        let face = Color::new(1.0, 0.84, 0.32, 1.0); // bright gold face
-        let shine = Color::new(1.0, 0.97, 0.78, 1.0); // glint
-        draw_circle(cx, cy, r, rim);
-        draw_circle(cx, cy, r * 0.82, face);
-        draw_circle_lines(cx, cy, r * 0.82, px(1.0), rim);
-        draw_circle(cx - r * 0.3, cy - r * 0.3, r * 0.2, shine);
-        // The rest of the row, starting just right of the coin.
-        let line = format!(
-            "{}  ·  {:.1} kn  ·  Wind {}  ({})  ·  Hull {}%",
-            gs.gold, knots, wind_from, point, hull_pct
-        );
-        draw_text(&line, px(16.0) + 2.0 * r + px(8.0), baseline, fs, WHITE);
-
-        // Active-debuff badges: a warning triangle (and a word) for a battered
-        // hull and/or an overladen hold — the handling penalties in force.
-        {
-            let mut badges: Vec<String> = Vec::new();
-            if hull::fraction(&gs) <= 0.90 {
-                badges.push("Hull".to_string());
-            }
-            // Overladen: show the load against the rig's haul tolerance (e.g. 17/16)
-            // and the speed penalty it costs, so the cause and the cost are both legible.
-            let load = gs.hold_used();
-            let haul = upgrades::max_haul(gs.sail_level);
-            let pen = upgrades::overload_penalty(gs.sail_level, load);
-            if pen > 0.0 {
-                badges.push(format!(
-                    "Overladen {}/{}  (-{}% speed)",
-                    load,
-                    haul,
-                    (pen * 100.0).round() as i32
-                ));
-            }
-            let warn = Color::new(1.0, 0.78, 0.2, 1.0);
-            let mut x = px(16.0);
-            let y = px(56.0);
-            let s = px(13.0); // triangle size
-            for label in &badges {
-                draw_triangle(
-                    vec2(x + s * 0.5, y - s),
-                    vec2(x, y),
-                    vec2(x + s, y),
-                    warn,
-                );
-                draw_text("!", x + s * 0.5 - px(2.0), y - px(2.0), px(14.0), Color::new(0.1, 0.05, 0.0, 1.0));
-                let lx = x + s + px(6.0);
-                draw_text(label, lx, y, px(15.0), warn);
-                x = lx + measure_text(label, None, px(15.0) as u16, 1.0).width + px(18.0);
-            }
-        }
+            hud::status_readout(&gs, &kin, wind, burst_kn);
         }
 
         // Salvage pickup toast: a gold note that floats up and fades over the deck
@@ -2148,7 +1898,7 @@ async fn run_game(
                     }
                 }
             }
-            draw_keybind_hints(harbor.dockable.is_some(), &extra, h);
+            hud::keybind_hints(harbor.dockable.is_some(), &extra, h);
         }
 
         // The focus call-to-action, over everything until the first click or key.
