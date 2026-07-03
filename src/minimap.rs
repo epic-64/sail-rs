@@ -283,22 +283,21 @@ pub fn render(
         }
     }
 
-    // Concentric ring radii for the isle fittings, in design pixels (scaled by `ms`).
-    // Kept strictly increasing so the rings nest without overlapping, and the letter
-    // ring clears the widest of them.
-    const SHIPYARD_RING: f32 = 3.5;
-    const MISSION_RING: f32 = 5.5;
-    const RACE_RING: f32 = 7.5;
+    // Isle-fitting ring radii, in design pixels (scaled by `ms`). A lone fitting sits at
+    // the base radius; when an isle carries several, each successive ring steps out by
+    // `RING_STEP` so they nest visibly rather than one hiding another.
+    const RING_BASE: f32 = 3.5;
+    const RING_STEP: f32 = 2.0;
     const LETTER_DIST: f32 = 11.0;
-    // A brown ring marking the docked port and the selected target: sits just outside a
-    // mission ring so it reads as a highlight hugging the isle it points to.
+    // A brown ring marking the docked port and the selected target, hugging the isle as a
+    // highlight of the leg's end.
     const SELECT_RING: f32 = 7.0;
     // Every isle in view: a dot each (ports brighter). Its fittings (a shipyard, a
-    // booked mission, a booked race) each add a concentric ring and a letter. The
-    // rings are drawn smallest to largest so a larger one never hides a smaller
-    // (blue shipyard inside yellow mission inside red race). Each letter sits the same
-    // distance from the isle: a lone mark rides straight above, while two or more fan
-    // out to the sides so they never collide (angles picked by count below).
+    // booked mission, a booked race) each add a ring and a letter. A lone fitting rings
+    // the isle at the base radius; stacked fittings step outward (blue shipyard, yellow
+    // mission, red race), drawn smallest first so a larger never hides a smaller. Each
+    // letter sits the same distance from the isle: a lone mark rides straight above,
+    // while two or more fan out to the sides so they never collide (angles by count).
     let fs = (11.0 * ms).max(9.0);
     let letter = |x: f32, y: f32, glyph: &str, col: Color, ang_deg: f32| {
         let a = ang_deg.to_radians();
@@ -321,15 +320,17 @@ pub fn render(
 
         let is_mission = mission_targets.contains(&isle.id);
         let is_race = race_targets.contains(&isle.id);
-        // Rings, smallest first.
-        if isle.is_shipyard {
-            draw_circle_lines(x, y, SHIPYARD_RING * ms, 1.5, pal.shipyard_ring);
-        }
-        if is_mission {
-            draw_circle_lines(x, y, MISSION_RING * ms, 2.0, pal.mission_mark);
-        }
-        if is_race {
-            draw_circle_lines(x, y, RACE_RING * ms, 2.0, pal.race_mark);
+        // Rings, smallest first: each present fitting steps out one slot from the base.
+        let mut slot = 0;
+        for (present, col, th) in [
+            (isle.is_shipyard, pal.shipyard_ring, 1.5),
+            (is_mission, pal.mission_mark, 2.0),
+            (is_race, pal.race_mark, 2.0),
+        ] {
+            if present {
+                draw_circle_lines(x, y, (RING_BASE + slot as f32 * RING_STEP) * ms, th, col);
+                slot += 1;
+            }
         }
         // Letters: gather whichever marks this isle carries, then fan them across the
         // top by count. One mark sits dead centre above; two or more spread to the
