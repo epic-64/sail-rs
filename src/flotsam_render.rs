@@ -1,9 +1,9 @@
 //! Drawing floating salvage: small low-poly crates, barrels and strongboxes
 //! bobbing on the swell, projected from their world positions and shrinking with
-//! distance — the same billboard treatment the islands, their scenery and the
-//! racing rival get (see [`crate::rival_render`]). Replaces the original's
-//! `crate.svg` / `barrel.svg` / `chest.svg` sprites with flat-shaded geometry to
-//! match the rest of the port's look.
+//! distance, the same billboard treatment the islands' scenery gets (the racing
+//! rival graduated to a full 3-D miniature; see [`crate::rival_render`]).
+//! Replaces the original's `crate.svg` / `barrel.svg` / `chest.svg` sprites with
+//! flat-shaded geometry to match the rest of the port's look.
 //!
 //! Each piece rides the local wave so it heaves with the same sea the player
 //! does, and heels with the swell so it rocks on the water rather than standing

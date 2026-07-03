@@ -28,6 +28,10 @@ pub struct SceneView<'a> {
     pub right: Vec2,
     pub w: f32,
     pub h: f32,
+    /// The active key light (sun by day, moon by night) as a world-frame unit
+    /// direction (chart x/y, z up): what the rival's hull facets shade against,
+    /// the same value the island facets take.
+    pub sun: (f32, f32, f32),
 }
 
 /// The sky-dome projection for one frame: the bow `heading`, half field of view

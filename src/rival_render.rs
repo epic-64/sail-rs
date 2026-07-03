@@ -1,12 +1,22 @@
-//! Drawing the racing rival: a small low-poly sloop billboard standing on the
-//! swell, projected from its live position and shrinking with distance — the same
-//! treatment the islands and their scenery get. Replaces the original's
-//! `ship.svg`/`ship-bow.svg`/`ship-stern.svg` sprites (the port dropped the SVG
-//! billboards for flat-shaded geometry; see [`crate::islands_render`]).
+//! Drawing the racing rival and the wandering traders: the *same* ship the
+//! player sails, as a true low-poly 3-D miniature. The hull is lofted from
+//! [`crate::ship_render`]'s station table and the rig from its spar and sail
+//! dimensions, so a rival crossing the bay is recognisably the player's own
+//! vessel seen from without, and reshaping the ship there reshapes her here.
+//! Replaces the flat two-tone sloop billboard (itself a stand-in for the
+//! original's `ship.svg`/`ship-bow.svg`/`ship-stern.svg` sprites).
 //!
-//! The hull rides the local wave so the rival heaves with the same sea the player
-//! does; the mast stands a fixed height of real metres above it. The whole sprite
-//! is mirrored so her bow points the way she is actually sailing.
+//! Every vertex is projected through the same cylindrical map the waves and
+//! islands use (column = bearing, row = depression angle; see
+//! [`crate::islands_render`]), so the hull sits *in* the swell and turns
+//! honestly as she and the player manoeuvre: bow-on she foreshortens,
+//! broadside she shows her full run. macroquad's 2D pass has no depth buffer,
+//! so her faces are painter-sorted by range and shaded per face against the
+//! scene's active light, exactly like the island facets.
+//!
+//! The hull rides the local wave, and heels and pitches with the swell sampled
+//! along her own beam and keel line, so she works through the same sea the
+//! player feels rather than standing bolt upright on it.
 
 use macroquad::prelude::*;
 
@@ -16,21 +26,65 @@ use crate::ocean_renderer::WAVE_GAIN;
 use crate::projection::{BASE_EYE, MAX_VIEW};
 use crate::sailing::Kinematics;
 use crate::scene::SceneView;
+use crate::ship_render::{
+    station_at, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH, SAIL_H_M, SAIL_STANDOFF_M,
+    SAIL_W_M, SPAR, SPRIT_BASE, SPRIT_TIP, STATIONS, YARD_H_M,
+};
 
-const RIVAL_TOP_M: f32 = 15.0; // metres from the waterline to the masthead
+use std::f32::consts::PI;
+
 const RIVAL_MAG: f32 = 1.35; // drawn a touch larger than life
-const RIVAL_MIN_PX: f32 = 26.0; // floor so a distant sail stays spottable
+const RIVAL_MIN_PX: f32 = 26.0; // masthead floor so a distant sail stays spottable
 const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
+
+// The exterior the player's first-person loft never shows, so these live here
+// rather than in ship_render's palette.
+const FREEBOARD: f32 = 1.3; // metres the waist deck stands above her waterline
+const WL_TUCK: f32 = 0.62; // half-beam left at the waterline as the hull tucks toward the keel
+const HULL: [f32; 3] = [96.0, 68.0, 42.0];
+const HULL_DK: [f32; 3] = [62.0, 44.0, 28.0];
+
+// Rig set: the miniature's yard holds a fixed working brace (her live wind is
+// not plumbed out here), and the cloth bellies a fixed draft to leeward of it,
+// deepest toward the free foot like the player's sail.
+const BRACE: f32 = 0.42;
+const BELLY_M: f32 = 1.1;
+
+/// Floor under the per-face Lambert term, the sky-fill washing shadowed faces.
+const AMBIENT: f32 = 0.45;
 
 /// The racing rival flies a defiant red pennant; the wandering traders a calmer
 /// sea-green one, so a sail crossing the bay reads as friendly traffic at a glance.
 pub const RIVAL_PENNANT: [f32; 3] = [201.0, 62.0, 56.0];
 pub const TRADER_PENNANT: [f32; 3] = [86.0, 158.0, 132.0];
 
+/// A lofted vertex, carried from the projection into the face assembly: its
+/// screen spot, its bearing off the bow and range (for clipping and the painter
+/// sort), and its world position (chart x/y, height above her waterline) for
+/// the face normals.
+#[derive(Clone, Copy)]
+struct P3 {
+    sx: f32,
+    sy: f32,
+    phi: f32,
+    d: f32,
+    wx: f32,
+    wy: f32,
+    wz: f32,
+}
+
+/// glam's screen-space vector, under an explicit name: the world maths above
+/// uses our [`crate::geometry::Vec2`], which shadows it.
+type ScreenV = macroquad::math::Vec2;
+
+/// The frame's growing pile of shaded faces: (painter depth, screen triangle,
+/// lit colour), sorted far-to-near and drawn once the whole ship is assembled.
+type Prims = Vec<(f32, [ScreenV; 3], Color)>;
+
 /// Draw the rival on the water, or nothing if she is out of view. Called inside
 /// the world-camera pass (after the wave mesh) so she rides the camera ride and
 /// sits on the painted sea. `heave` is the player's heave (the camera's rise);
-/// `light` dims her into the night with the rest of the scene.
+/// the scene's `light` and `sun` shade her into the night with everything else.
 pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     let SceneView {
         kin,
@@ -42,104 +96,262 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         px_per_rad,
         half_fov_h_view,
         w,
+        sun,
         ..
     } = *view;
     let d = kin.pos.distance_to(rk.pos);
     if !(1.0..=MAX_VIEW).contains(&d) {
         return;
     }
-    let phi = wrap_angle(kin.pos.bearing_to(rk.pos) - kin.heading_rad);
-    if phi.abs() > half_fov_h_view * FOV_MARGIN {
+
+    // Foot on the local wave surface (gained like the sea); the hull's own
+    // metres are not gained, matching how the islands stand on the water.
+    let wave = ocean::height(rk.pos, t, sea);
+    let foot_disp = (wave - heave) * WAVE_GAIN;
+
+    // The model magnification: larger than life, grown further when the true
+    // perspective masthead would drop under the visibility floor, so a far
+    // rival scales up as one shape instead of degenerating to a smear.
+    let mast_m = (FREEBOARD + MAST_TOP_M) * RIVAL_MAG;
+    let foot_y = horizon + ((BASE_EYE - foot_disp) / d).atan() * px_per_rad;
+    let top_y = horizon + ((BASE_EYE - foot_disp - mast_m) / d).atan() * px_per_rad;
+    let raw_h = (foot_y - top_y).max(0.1);
+    let s = RIVAL_MAG * (RIVAL_MIN_PX / raw_h).max(1.0);
+
+    // View-cone gate on her centre, slackened by her own longest reach so she
+    // doesn't pop while partly on screen.
+    let phi_c = wrap_angle(kin.pos.bearing_to(rk.pos) - kin.heading_rad);
+    let slack = (SPRIT_TIP.1.abs() * s / d).atan();
+    if phi_c.abs() > half_fov_h_view * FOV_MARGIN + slack {
         return;
     }
     let px_per_rad_h = (w * 0.5) / half_fov_h_view;
-    let sx = w * 0.5 + phi * px_per_rad_h;
-
-    // Foot on the local wave surface (gained like the sea), masthead a fixed run of
-    // real metres above it. Project both through the same cylindrical map the waves
-    // use, so the rival sits *in* the swell rather than floating over it. The
-    // depression angle is purely `atan(height_below_eye / d)` — a function of
-    // distance alone, *not* of the bearing `phi` (column = bearing, row =
-    // depression are independent axes in this cylindrical map, exactly as
-    // `islands_render::project` does it). An earlier `* phi.cos()` foreshortening
-    // here made the rival swell and shrink as the player merely rotated the ship.
-    let wave = ocean::height(rk.pos, t, sea);
-    let foot_disp = (wave - heave) * WAVE_GAIN;
-    let foot_y = horizon + ((BASE_EYE - foot_disp) / d).atan() * px_per_rad;
-    let top_y = horizon + ((BASE_EYE - foot_disp - RIVAL_TOP_M) / d).atan() * px_per_rad;
-    let raw_h = (foot_y - top_y).max(0.0);
-    let height = (raw_h * RIVAL_MAG).max(RIVAL_MIN_PX);
     let alpha = clamp((1.0 - d / MAX_VIEW) * 1.6, 0.18, 1.0);
 
-    // Which way she shows: her bow points the way she is going, so mirror the
-    // sprite when she is crossing to our left (heading left of our line of sight).
-    let rel = wrap_angle(rk.heading_rad - kin.pos.bearing_to(rk.pos));
-    let flip = if rel.sin() < 0.0 { -1.0 } else { 1.0 };
-
-    // Heel her with the local swell so she rides the waves rather than standing
-    // bolt upright on them: sample the sea a few metres to each beam (across our
-    // line of sight) and tilt toward the lower side, by the same gain the mesh uses.
-    let dir = (rk.pos - kin.pos) * (1.0 / d);
-    let beam = Vec2::new(dir.y, -dir.x);
-    let span = 7.0;
-    let z_r = ocean::height(rk.pos + beam * span, t, sea);
-    let z_l = ocean::height(rk.pos - beam * span, t, sea);
-    let roll = clamp(((z_r - z_l) * WAVE_GAIN / (2.0 * span)).atan() * 0.7, -0.4, 0.4);
-
-    draw_sloop(sx, foot_y, height, flip, roll, alpha, light, pennant);
-}
-
-/// A stylised square-rigged sloop in a local space where x ∈ [-0.5, 0.5] (bow to
-/// the right before mirroring) and y ∈ [0, 1] (0 = waterline foot, 1 = masthead),
-/// mapped to screen at (cx + flip·lx·w, foot − ly·h). Two-tone to imply a bellied
-/// sail and a rounded hull, matching the faceted low-poly look of the isles.
-#[allow(clippy::too_many_arguments)]
-fn draw_sloop(cx: f32, foot: f32, h: f32, flip: f32, roll: f32, alpha: f32, light: f32, pennant: [f32; 3]) {
-    let w = h * 0.92;
-    // Local (lx, ly) → an offset from the foot, rotated by the swell heel, then
-    // anchored at the foot point on the wave so she rocks about her waterline.
-    let (sr, cr) = roll.sin_cos();
-    let p = |lx: f32, ly: f32| {
-        let dx = flip * lx * w;
-        let dy = -ly * h;
-        vec2(cx + dx * cr - dy * sr, foot + dx * sr + dy * cr)
+    // Her attitude in the swell: heel from the sea sampled off each beam, pitch
+    // from ahead and astern along her keel line, by the same gain the mesh uses.
+    let fwd = Vec2::from_heading(rk.heading_rad);
+    let right = Vec2::new(rk.heading_rad.cos(), -rk.heading_rad.sin());
+    let bspan = 7.0;
+    let heel = {
+        let z_r = ocean::height(rk.pos + right * bspan, t, sea);
+        let z_l = ocean::height(rk.pos - right * bspan, t, sea);
+        clamp(((z_l - z_r) * WAVE_GAIN / (2.0 * bspan)).atan() * 0.7, -0.4, 0.4)
     };
-    let tri = |a: (f32, f32), b: (f32, f32), c: (f32, f32), col: Color| {
-        draw_triangle(p(a.0, a.1), p(b.0, b.1), p(c.0, c.1), col);
+    let lspan = 10.0;
+    let pitch = {
+        let z_f = ocean::height(rk.pos + fwd * lspan, t, sea);
+        let z_a = ocean::height(rk.pos - fwd * lspan, t, sea);
+        clamp(((z_a - z_f) * WAVE_GAIN / (2.0 * lspan)).atan() * 0.5, -0.25, 0.25)
     };
-    let quad = |a: (f32, f32), b: (f32, f32), c: (f32, f32), dd: (f32, f32), col: Color| {
-        draw_triangle(p(a.0, a.1), p(b.0, b.1), p(c.0, c.1), col);
-        draw_triangle(p(a.0, a.1), p(c.0, c.1), p(dd.0, dd.1), col);
+    let (sp, cp) = pitch.sin_cos();
+    let (sr, cr) = heel.sin_cos();
+
+    // A loft point (rig frame: x starboard, y up from the waist deck, z aft,
+    // metres) through her attitude and heading into the world, then through the
+    // cylindrical map. The depression angle is purely `atan(height / range)`,
+    // a function of range alone, *not* of the bearing (column and row are
+    // independent axes, exactly as `islands_render::project` does it).
+    let vert = |x: f32, y: f32, z: f32| -> P3 {
+        let y1 = y * cp + z * sp; // pitch about the beam axis (bow-down positive)
+        let z1 = z * cp - y * sp;
+        let x1 = x * cr + y1 * sr; // heel about the keel line (starboard positive)
+        let y2 = y1 * cr - x * sr;
+        let wp = rk.pos + fwd * (-z1 * s) + right * (x1 * s);
+        let elev = (y2 + FREEBOARD) * s;
+        let dv = kin.pos.distance_to(wp).max(1.0);
+        let phi = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
+        P3 {
+            sx: w * 0.5 + phi * px_per_rad_h,
+            sy: horizon + ((BASE_EYE - foot_disp - elev) / dv).atan() * px_per_rad,
+            phi,
+            d: dv,
+            wx: wp.x,
+            wy: wp.y,
+            wz: elev,
+        }
     };
-    let rgba = |c: [f32; 3], a: f32| {
-        Color::new(c[0] / 255.0 * light, c[1] / 255.0 * light, c[2] / 255.0 * light, a)
+
+    // Face clipping: a vertex swung far outside the drawn fan (she is nearly
+    // alongside) would smear its triangle across the screen, so the face is
+    // dropped instead; likewise anything hard against or behind the camera.
+    let phi_clip = half_fov_h_view * 1.35;
+    let clipped = |a: &P3, b: &P3, c: &P3| {
+        a.d.min(b.d).min(c.d) < 2.0 || a.phi.abs().max(b.phi.abs()).max(c.phi.abs()) > phi_clip
     };
 
-    const HULL: [f32; 3] = [86.0, 60.0, 38.0];
-    const HULL_DK: [f32; 3] = [58.0, 40.0, 26.0];
-    const DECK: [f32; 3] = [128.0, 94.0, 58.0];
-    const MAST: [f32; 3] = [74.0, 56.0, 38.0];
-    const SAIL: [f32; 3] = [236.0, 228.0, 204.0];
-    const SAIL_DK: [f32; 3] = [200.0, 190.0, 162.0];
+    // One face: two-sided (the normal is turned toward the eye, so the far side
+    // of the hull shades as its outside), lit by the scene's active light with
+    // an ambient floor, like the island facets. `lam` overrides the Lambert
+    // term for faces whose true normal is meaningless (spars, the pennant).
+    let tri = |prims: &mut Prims, a: P3, b: P3, c: P3, base: [f32; 3], lam: f32| {
+        if clipped(&a, &b, &c) {
+            return;
+        }
+        let e1 = (b.wx - a.wx, b.wy - a.wy, b.wz - a.wz);
+        let e2 = (c.wx - a.wx, c.wy - a.wy, c.wz - a.wz);
+        let mut n = (
+            e1.1 * e2.2 - e1.2 * e2.1,
+            e1.2 * e2.0 - e1.0 * e2.2,
+            e1.0 * e2.1 - e1.1 * e2.0,
+        );
+        let cen = (
+            (a.wx + b.wx + c.wx) / 3.0,
+            (a.wy + b.wy + c.wy) / 3.0,
+            (a.wz + b.wz + c.wz) / 3.0,
+        );
+        let to_eye = (kin.pos.x - cen.0, kin.pos.y - cen.1, BASE_EYE - cen.2);
+        if n.0 * to_eye.0 + n.1 * to_eye.1 + n.2 * to_eye.2 < 0.0 {
+            n = (-n.0, -n.1, -n.2);
+        }
+        let diff = if lam >= 0.0 {
+            lam
+        } else {
+            let nl = (n.0 * n.0 + n.1 * n.1 + n.2 * n.2).sqrt().max(1e-6);
+            ((n.0 * sun.0 + n.1 * sun.1 + n.2 * sun.2) / nl).max(0.0)
+        };
+        let m = light * (AMBIENT + (1.0 - AMBIENT) * diff);
+        let col = Color::new(
+            base[0] / 255.0 * m,
+            base[1] / 255.0 * m,
+            base[2] / 255.0 * m,
+            alpha,
+        );
+        let depth = (a.d + b.d + c.d) / 3.0;
+        prims.push((depth, [vec2(a.sx, a.sy), vec2(b.sx, b.sy), vec2(c.sx, c.sy)], col));
+    };
+    let quad = |prims: &mut Prims, a: P3, b: P3, c: P3, dd: P3, base: [f32; 3], lam: f32| {
+        tri(prims, a, b, c, base, lam);
+        tri(prims, a, c, dd, base, lam);
+    };
 
-    // Mast, then the two sails braced about it (drawn before the hull so the hull's
-    // bulwark tucks over their foot).
-    quad((-0.03, 0.18), (0.03, 0.18), (0.02, 0.99), (-0.02, 0.99), rgba(MAST, alpha));
-    // Mainsail abaft the mast (toward the stern, to the left), bellied.
-    tri((-0.02, 0.24), (-0.02, 0.95), (-0.46, 0.36), rgba(SAIL, alpha));
-    tri((-0.02, 0.24), (-0.46, 0.36), (-0.40, 0.24), rgba(SAIL_DK, alpha));
-    // Headsail forward of the mast (toward the bow, to the right).
-    tri((0.0, 0.30), (0.0, 0.90), (0.46, 0.26), rgba(SAIL, alpha));
-    tri((0.0, 0.30), (0.46, 0.26), (0.40, 0.24), rgba(SAIL_DK, alpha));
+    // A round spar as a screen-space ribbon between two lofted points, its
+    // width the spar's true projected diameter (floored so a distant mast
+    // stays a visible stroke). A fixed mid Lambert stands in for the roundness
+    // (a cylinder always shows some lit and some shaded run).
+    let line3 = |prims: &mut Prims, a: P3, b: P3, r_m: f32| {
+        if clipped(&a, &b, &b) {
+            return;
+        }
+        let pa = vec2(a.sx, a.sy);
+        let pb = vec2(b.sx, b.sy);
+        let ab = pb - pa;
+        let n = vec2(-ab.y, ab.x) / ab.length().max(1e-3);
+        let ha = (r_m * s * px_per_rad / a.d).max(0.6);
+        let hb = (r_m * s * px_per_rad / b.d).max(0.6);
+        let depth = (a.d + b.d) * 0.5;
+        let m = light * (AMBIENT + (1.0 - AMBIENT) * 0.55);
+        let col = Color::new(
+            SPAR[0] / 255.0 * m,
+            SPAR[1] / 255.0 * m,
+            SPAR[2] / 255.0 * m,
+            alpha,
+        );
+        prims.push((depth, [pa + n * ha, pb + n * hb, pb - n * hb], col));
+        prims.push((depth, [pa + n * ha, pb - n * hb, pa - n * ha], col));
+    };
 
-    // Hull: a rounded body sitting at the waterline, transom to the left, bow
-    // sweeping out to the right, with a lighter deck strake along the top.
-    quad((-0.40, 0.04), (0.40, 0.04), (0.40, 0.18), (-0.40, 0.18), rgba(HULL, alpha));
-    tri((0.40, 0.04), (0.52, 0.13), (0.40, 0.18), rgba(HULL, alpha)); // bow
-    tri((-0.40, 0.04), (-0.40, 0.18), (-0.48, 0.13), rgba(HULL_DK, alpha)); // transom
-    tri((-0.40, 0.04), (0.40, 0.04), (0.30, 0.0), rgba(HULL_DK, alpha)); // keel shadow
-    quad((-0.40, 0.16), (0.40, 0.16), (0.40, 0.20), (-0.40, 0.20), rgba(DECK, alpha)); // deck line
+    let mut prims: Prims = Vec::with_capacity(192);
 
-    // A pennant streaming from the masthead (red for a rival, green for a trader).
-    tri((0.0, 0.99), (0.20, 0.95), (0.0, 0.90), rgba(pennant, alpha));
+    // --- Hull: the player's own lofting stations, seen from without. Each
+    // side runs a topside strake from the waterline up to the deck edge and a
+    // lighter wale on up to the cap rail, so the sheer line reads; the deck
+    // spans between the sheer lines (the doubled break station makes the
+    // quarterdeck riser of its own accord), and a dark transom closes the stern.
+    let mut port: Vec<(P3, P3, P3)> = Vec::with_capacity(STATIONS.len());
+    let mut stbd: Vec<(P3, P3, P3)> = Vec::with_capacity(STATIONS.len());
+    for &(z, b, dk, wall) in STATIONS.iter() {
+        for (side, out) in [(-1.0f32, &mut port), (1.0f32, &mut stbd)] {
+            out.push((
+                vert(side * b * WL_TUCK, -FREEBOARD, z),
+                vert(side * b, dk, z),
+                vert(side * b, dk + wall, z),
+            ));
+        }
+    }
+    for i in 0..STATIONS.len() - 1 {
+        for side in [&port, &stbd] {
+            let (wl0, dk0, cap0) = side[i];
+            let (wl1, dk1, cap1) = side[i + 1];
+            quad(&mut prims, wl0, wl1, dk1, dk0, HULL, -1.0);
+            quad(&mut prims, dk0, dk1, cap1, cap0, RAIL, -1.0);
+        }
+        quad(&mut prims, port[i].1, stbd[i].1, stbd[i + 1].1, port[i + 1].1, DECK_B, -1.0);
+    }
+    let aftmost = STATIONS.len() - 1;
+    quad(
+        &mut prims,
+        port[aftmost].0,
+        stbd[aftmost].0,
+        stbd[aftmost].2,
+        port[aftmost].2,
+        HULL_DK,
+        -1.0,
+    );
+
+    // --- Rig: mast, braced yard and bowsprit at the player's dimensions.
+    let (sb, cb) = BRACE.sin_cos();
+    line3(
+        &mut prims,
+        vert(0.0, station_at(0.0).1, 0.0),
+        vert(0.0, MAST_TOP_M, 0.0),
+        MAST_HW * 0.8,
+    );
+    let yhw = SAIL_W_M * 0.5 + 0.4; // the yardarms run a touch past the cloth
+    line3(
+        &mut prims,
+        vert(-cb * yhw, YARD_H_M, -sb * yhw),
+        vert(cb * yhw, YARD_H_M, sb * yhw),
+        0.11,
+    );
+    line3(
+        &mut prims,
+        vert(0.0, SPRIT_BASE.0, SPRIT_BASE.1),
+        vert(0.0, SPRIT_TIP.0, SPRIT_TIP.1),
+        0.13,
+    );
+
+    // --- Sail: a coarse grid of cloth panels laced flat along the yard,
+    // bellying forward of it and deepest toward the free foot, so the curve
+    // reads from any angle the way the player's sail does.
+    const COLS: usize = 4;
+    const ROWS: usize = 2;
+    let sail_pt = |i: usize, j: usize| {
+        let u = i as f32 / COLS as f32 - 0.5;
+        let v = j as f32 / ROWS as f32;
+        let along = u * SAIL_W_M;
+        let sag = SAIL_STANDOFF_M + BELLY_M * (0.25 + 0.75 * v) * (u * PI).cos();
+        vert(along * cb + sag * sb, YARD_H_M - v * SAIL_H_M, along * sb - sag * cb)
+    };
+    for i in 0..COLS {
+        for j in 0..ROWS {
+            quad(
+                &mut prims,
+                sail_pt(i, j),
+                sail_pt(i + 1, j),
+                sail_pt(i + 1, j + 1),
+                sail_pt(i, j + 1),
+                SAIL_CLOTH,
+                -1.0,
+            );
+        }
+    }
+
+    // --- The pennant streaming aft off the masthead (red for a rival, green
+    // for a trader). A fixed bright term keeps its signal colour saturated.
+    tri(
+        &mut prims,
+        vert(0.0, MAST_TOP_M, 0.0),
+        vert(0.0, MAST_TOP_M - 0.5, 0.05),
+        vert(0.5, MAST_TOP_M - 0.18, 1.3),
+        pennant,
+        0.85,
+    );
+
+    // Painter order: farthest faces first, so the near side of the hull covers
+    // the far, and the sail covers the mast's run behind it.
+    prims.sort_by(|x, y| y.0.total_cmp(&x.0));
+    for (_, p, col) in prims {
+        draw_triangle(p[0], p[1], p[2], col);
+    }
 }

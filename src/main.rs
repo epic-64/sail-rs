@@ -708,6 +708,11 @@ async fn run_game(
     let mut autosave_timer: f32 = 0.0;
     const AUTOSAVE_PERIOD: f32 = 15.0;
 
+    // Seconds since the dev screenshot hook last fired (see the SAIL_SHOT_DIR
+    // block at the bottom of the loop).
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut shot_timer: f32 = 0.0;
+
     // The day/night clock at the end of the previous frame, watched for the forward
     // crossing of sunrise (¼) that ticks the "days passed" tally over. Seeded from the
     // restored/initial clock so the first comparison can't misfire.
@@ -2166,6 +2171,19 @@ async fn run_game(
                     race_ready,
                     race_running,
                 );
+            }
+        }
+
+        // Dev screenshot hook (native only): with SAIL_SHOT_DIR set, dump the
+        // finished frame to <dir>/shot.png every couple of seconds, so a change
+        // can be verified headlessly when window capture APIs come up black
+        // (fullscreen GL swapchains bypass DWM composition).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(dir) = std::env::var("SAIL_SHOT_DIR") {
+            shot_timer += get_frame_time();
+            if shot_timer >= 2.0 {
+                shot_timer = 0.0;
+                get_screen_data().export_png(&format!("{dir}/shot.png"));
             }
         }
 

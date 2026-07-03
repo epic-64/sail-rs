@@ -84,7 +84,7 @@ const HORIZON: f32 = 0.54;
 /// ship means editing numbers here and nowhere else. The transom lies behind
 /// the eye (`CAM_AFT`), which is what keeps the woodwork running off-screen
 /// through any sway: there is simply more ship back there.
-const STATIONS: [(f32, f32, f32, f32); 13] = [
+pub(crate) const STATIONS: [(f32, f32, f32, f32); 13] = [
     (-15.0, 0.05, 1.55, 0.50), // stem tip
     (-13.5, 0.95, 1.22, 0.72),
     (-11.5, 1.95, 0.88, 0.70),
@@ -119,7 +119,7 @@ const BREAST_RAIL_H: f32 = 0.85;
 
 /// Hull data (half-beam, deck height, bulwark height) interpolated at fore-aft
 /// z, for placing furniture and rope feet between stations.
-fn station_at(z: f32) -> (f32, f32, f32) {
+pub(crate) fn station_at(z: f32) -> (f32, f32, f32) {
     for pair in STATIONS.windows(2) {
         let (z0, b0, d0, w0) = pair[0];
         let (z1, b1, d1, w1) = pair[1];
@@ -264,22 +264,27 @@ struct DeckPoints {
 // through the same helm camera, standing at the mast station (z = 0). Sized so
 // the masthead towers off the top of a landscape screen, the yard crosses just
 // under it, and the cloth's foot clears the tallest cargo stack on the waist.
-const MAST_TOP_M: f32 = 10.2; // masthead height above the waist deck
-const YARD_H_M: f32 = 7.0; // the yard crosses here; the bare pole runs on above
-const SAIL_W_M: f32 = 7.6; // the sail's full width along the yard
-const SAIL_H_M: f32 = 3.0; // its hoist, head to foot at full set
-const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
+pub(crate) const MAST_TOP_M: f32 = 10.2; // masthead height above the waist deck
+pub(crate) const YARD_H_M: f32 = 7.0; // the yard crosses here; the bare pole runs on above
+pub(crate) const SAIL_W_M: f32 = 7.6; // the sail's full width along the yard
+pub(crate) const SAIL_H_M: f32 = 3.0; // its hoist, head to foot at full set
+pub(crate) const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
 const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is MAST_HW)
 const YARD_MID_R: f32 = 0.13; // the yard's radius at the slings (its middle)...
 const YARD_TIP_R: f32 = 0.07; // ...tapering out to the yardarms
+// The bowsprit's run, (height above the waist deck, z aft) at its heel and tip.
+// Shared with the rival's miniature (see [`crate::rival_render`]) so both ships
+// fly the same prow.
+pub(crate) const SPRIT_BASE: (f32, f32) = (1.5, -14.6);
+pub(crate) const SPRIT_TIP: (f32, f32) = (2.7, -18.2);
 
 // --- Wood / canvas palette (harmonises with the island features' wood tones) --
-const SAIL_CLOTH: [f32; 3] = [226.0, 214.0, 188.0];
+pub(crate) const SAIL_CLOTH: [f32; 3] = [226.0, 214.0, 188.0];
 const DECK_A: [f32; 3] = [156.0, 120.0, 74.0];
-const DECK_B: [f32; 3] = [138.0, 104.0, 62.0];
-const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
+pub(crate) const DECK_B: [f32; 3] = [138.0, 104.0, 62.0];
+pub(crate) const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
-const SPAR: [f32; 3] = [140.0, 104.0, 66.0];
+pub(crate) const SPAR: [f32; 3] = [140.0, 104.0, 66.0];
 // Rigging: weathered hemp, light enough not to read as black lines on the sky.
 const ROPE: [f32; 3] = [118.0, 98.0, 72.0];
 // The breast rail netting's knit: metres per mesh along the rail's run and
@@ -329,7 +334,7 @@ const CRATE_SPIN: f32 = 0.6; // yaw per metre slid, scaled by each crate's signe
 const CRATE_STOP: f32 = 0.06; // m/s under which a sliding crate settles
 const RESTOW_RATE: f32 = 0.04; // 1/s the crew ease shifted cargo back to stowage in a calm
 const WALL_GAP: f32 = 0.12; // clearance kept off the bulwark's inboard face
-const MAST_HW: f32 = 0.25; // the mast's half-width at the foot: drawn size, and the extent crates shove against
+pub(crate) const MAST_HW: f32 = 0.25; // the mast's half-width at the foot: drawn size, and the extent crates shove against
 // A crate slammed into the bulwark hard enough carries clean over the rail and
 // is lost to the sea: the toll for keeping way on through a storm or hauling
 // the wheel over at full speed. The impact speed needed scales with each
@@ -1615,15 +1620,13 @@ impl ShipRenderer {
         // reads as a ship's, not a raft's. A faceted round spar like the mast.
         // The farthest woodwork aboard, so it draws in the fore pass and the
         // rig later paints over it.
-        let sprit_tip = (2.7f32, -18.2f32); // (height, z) of the tip
         if !aft {
-            let base = (1.5f32, -14.6f32);
             draw_spar(
                 &pt,
                 lume,
                 SPAR,
-                (0.0, base.0, base.1),
-                (0.0, sprit_tip.0, sprit_tip.1),
+                (0.0, SPRIT_BASE.0, SPRIT_BASE.1),
+                (0.0, SPRIT_TIP.0, SPRIT_TIP.1),
                 0.18,
                 0.08,
             );
@@ -1639,7 +1642,7 @@ impl ShipRenderer {
         let foot = |side: f32, z: f32| rail_top(side, z).unwrap_or(off);
         let sheet_foot = [foot(-1.0, 3.5), foot(1.0, 3.5)];
         let brace_foot = [foot(-1.0, 6.5), foot(1.0, 6.5)];
-        let bowsprit_tip = pt(0.0, sprit_tip.0, sprit_tip.1).unwrap_or(off);
+        let bowsprit_tip = pt(0.0, SPRIT_TIP.0, SPRIT_TIP.1).unwrap_or(off);
 
         // Outer silhouette for rain occlusion: down each rail bow → stern (as
         // far aft as the near plane allows), then straight off the bottom of the

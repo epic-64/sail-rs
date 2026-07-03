@@ -399,9 +399,20 @@ impl OceanRenderer {
         // so the band march can shade each into the wave facets without re-projecting.
         let cam_lights = crate::port_lights::camera_frame(lights, kin, fwd, right);
 
+        // The active light's world-frame direction (chart x/y, z up), shared by the
+        // island facets and the rival's hull; split into the camera frame below for
+        // the wave glitter. The altitude is its sine (the vertical component); the
+        // horizontal component is the matching cosine across the bearing.
+        let light_horiz = (1.0 - light_alt * light_alt).max(0.0).sqrt();
+        let sun_world = (
+            light_az.sin() * light_horiz,
+            light_az.cos() * light_horiz,
+            light_alt,
+        );
+
         // The per-frame sea camera, handed to every billboard and the flow pass so
         // each reads the projection it needs instead of a dozen positional floats.
-        // `light` here is `rival_light` — the scene light the floating objects take.
+        // `light` here is `rival_light`: the scene light the floating objects take.
         let scene = SceneView {
             kin,
             t,
@@ -416,13 +427,11 @@ impl OceanRenderer {
             right,
             w,
             h,
+            sun: sun_world,
         };
 
-        // Active-light direction in the camera's (right, forward, up) frame. The
-        // altitude is passed as its sine (the vertical component); the horizontal
-        // component is the matching cosine, split across the bearing relative to the
-        // bow. As the sun arcs over and sets, this swings the glitter and shading.
-        let light_horiz = (1.0 - light_alt * light_alt).max(0.0).sqrt();
+        // Active-light direction in the camera's (right, forward, up) frame. As the
+        // sun arcs over and sets, this swings the glitter and shading.
         let light_rel = wrap_angle(light_az - kin.heading_rad);
         let lx = light_rel.sin() * light_horiz;
         let ly = light_rel.cos() * light_horiz;
@@ -444,11 +453,7 @@ impl OceanRenderer {
             px_per_rad_h,
             half_fov_h_view,
             eye_rise: heave * WAVE_GAIN,
-            sun: (
-                light_az.sin() * light_horiz,
-                light_az.cos() * light_horiz,
-                light_alt,
-            ),
+            sun: sun_world,
             key,
             ambient,
             warm,
