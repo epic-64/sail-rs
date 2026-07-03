@@ -312,6 +312,119 @@ const CHART_MISSION: [f32; 3] = [200.0, 150.0, 47.0];
 const CHART_RACE: [f32; 3] = [168.0, 40.0, 30.0];
 const CHART_SHIP: [f32; 3] = [79.0, 47.0, 23.0];
 
+// --- Deck plank grain ------------------------------------------------------------
+// The planks' wood grain is a small texture baked once at startup (deterministic,
+// hashed; no asset, no world RNG) and multiplied over the lume-shaded plank
+// colour, so the grain rides the same light as every flat face. One vertical band
+// per plank strip: tarred caulk seams at the band edges, staggered butt joints,
+// wandering grain streaks and the odd knot. Resolution is kept coarse on purpose:
+// magnified severalfold at the near deck, it reads as low-fi painted wood in step
+// with the low-poly hull, not photo timber.
+const PLANKS: usize = 9; // plank strips across the deck, grain bands across the texture
+const GRAIN_BAND_PX: usize = 28; // texel width of one plank's band
+const GRAIN_ROWS: usize = 1024; // texel length covering the hull's full plank run
+
+/// Bake the plank-grain texture (layout in the constants above). Texel values sit
+/// near white so the multiply only ever darkens, and darker grain warms as it
+/// falls (red decays slower than blue), so streaks read as wood rather than soot.
+fn build_deck_grain() -> Texture2D {
+    let (w, h) = (PLANKS * GRAIN_BAND_PX, GRAIN_ROWS);
+    let mut bytes = vec![255u8; w * h * 4];
+    for band in 0..PLANKS {
+        let bk = band as u32;
+        // Butt joints: the band cut into board lengths, staggered per band so
+        // the joints never line up across the deck.
+        let mut joints: Vec<usize> = vec![0];
+        let mut edge = 0.0f32;
+        for n in 0u32.. {
+            edge += h as f32
+                * (0.09 + 0.09 * slot_rand(bk.wrapping_mul(131).wrapping_add(n * 17 + 5)));
+            if edge as usize >= h {
+                break;
+            }
+            joints.push(edge as usize);
+        }
+        joints.push(h);
+        // Grain streaks wandering down the band: (centre, wander rate, phase,
+        // darkness). The rate is set in cycles over the band's full length, so
+        // the wander keeps its physical scale whatever GRAIN_ROWS is.
+        let streaks: [(f32, f32, f32, f32); 3] = std::array::from_fn(|s| {
+            let j = |m: u32| slot_rand(bk.wrapping_mul(197).wrapping_add(s as u32 * 29 + m));
+            (
+                2.0 + j(0) * (GRAIN_BAND_PX as f32 - 4.0),
+                TAU * (1.5 + 3.5 * j(1)) / GRAIN_ROWS as f32,
+                j(2) * TAU,
+                0.84 + 0.09 * j(3),
+            )
+        });
+        for (seg, span) in joints.windows(2).enumerate() {
+            let (y0, y1) = (span[0], span[1]);
+            let sj = |m: u32| slot_rand(bk.wrapping_mul(883).wrapping_add(seg as u32 * 127 + m));
+            // Each board its own cast, so a strip changes shade at the joints;
+            // the grain also jumps sideways there, a fresh cut of timber.
+            let tone = 0.90 + 0.10 * sj(0);
+            let shift = (sj(7) - 0.5) * 5.0;
+            // The odd knot, off-centre in its board.
+            let knot = (sj(1) < 0.28).then(|| {
+                (
+                    2.5 + sj(2) * (GRAIN_BAND_PX as f32 - 5.0),
+                    y0 as f32 + (0.2 + 0.6 * sj(3)) * (y1 - y0) as f32,
+                    2.2 + 2.2 * sj(4),
+                )
+            });
+            for y in y0..y1 {
+                for bx in 0..GRAIN_BAND_PX {
+                    let x = band * GRAIN_BAND_PX + bx;
+                    let mut v = tone;
+                    // Tarred caulk at the plank edges, a soft shoulder inside it.
+                    if bx == 0 || bx == GRAIN_BAND_PX - 1 {
+                        v *= 0.62;
+                    } else if bx == 1 || bx == GRAIN_BAND_PX - 2 {
+                        v *= 0.90;
+                    }
+                    // The joint's end line across the board.
+                    if seg > 0 && y - y0 < 2 {
+                        v *= 0.66;
+                    }
+                    for &(sx, rate, ph, dark) in &streaks {
+                        let cx = sx + shift + (y as f32 * rate + ph).sin() * 1.6;
+                        let d = (bx as f32 - cx).abs();
+                        if d < 0.7 {
+                            v *= dark;
+                        } else if d < 1.3 {
+                            v *= (dark + 1.0) * 0.5;
+                        }
+                    }
+                    if let Some((kx, ky, kr)) = knot {
+                        let d = (bx as f32 - kx).hypot(y as f32 - ky);
+                        if d < kr {
+                            v *= 0.66 + 0.24 * (d / kr);
+                        } else if d < kr + 1.2 {
+                            v *= 0.86; // the dark ring the grain bends around
+                        }
+                    }
+                    // Fine speckle so flat runs still shimmer like sawn wood.
+                    v *= 0.97
+                        + 0.05
+                            * slot_rand(
+                                (x as u32).wrapping_mul(7919) ^ (y as u32).wrapping_mul(104_729),
+                            );
+                    let v = v.clamp(0.0, 1.0);
+                    let px = (y * w + x) * 4;
+                    bytes[px] = (v.powf(0.75) * 255.0) as u8;
+                    bytes[px + 1] = (v * 255.0) as u8;
+                    bytes[px + 2] = (v.powf(1.5) * 255.0) as u8;
+                    // Alpha stays the buffer's 255.
+                }
+            }
+        }
+    }
+    let tex = Texture2D::from_rgba8(w as u16, h as u16, &bytes);
+    // Linear, so the coarse texels blur into painted grain instead of pixel art.
+    tex.set_filter(FilterMode::Linear);
+    tex
+}
+
 // --- Deck cargo physics --------------------------------------------------------
 // The crates are heavy and lashed: ordinary sailing never beats their static
 // grip and the pile stands like furniture. What breaks them loose is the
@@ -580,6 +693,9 @@ pub struct ShipRenderer {
     washed: i32,
     /// Seconds before the sea may take another crate (see OVERBOARD_COOLDOWN).
     over_cooldown: f32,
+    /// The plank-grain texture, baked lazily on the first frame: a GPU context
+    /// exists then, where the physics tests construct the renderer without one.
+    deck_grain: Option<Texture2D>,
 }
 
 /// Even-odd ray cast: is point `p` inside the (possibly non-convex) polygon `poly`?
@@ -615,6 +731,7 @@ impl ShipRenderer {
             stowed: -1,
             washed: 0,
             over_cooldown: 0.0,
+            deck_grain: None,
         }
     }
 
@@ -1092,13 +1209,14 @@ impl ShipRenderer {
         };
 
         self.step_cargo(rig, roll, pitch_ang, dt);
+        let grain = self.deck_grain.get_or_insert_with(build_deck_grain).clone();
         // The ship draws far to near through the one camera: the deck forward
         // of the mast, then the rig standing at the mast station, then the
         // deck abaft it (near crates, quarterdeck, breast rail), so woodwork
         // between the eye and the mast rightly covers its lower run.
-        let pts = self.draw_deck(&sway, pitch_ang, &lume, h, w, false);
+        let pts = self.draw_deck(&sway, pitch_ang, &lume, &grain, h, w, false);
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
-        self.draw_deck(&sway, pitch_ang, &lume, h, w, true);
+        self.draw_deck(&sway, pitch_ang, &lume, &grain, h, w, true);
         // The chart board after the rig, so no rope paints across the parchment;
         // it stands on its pedestal by the wheel, nearer the eye than the deck.
         if let Some(chart) = &rig.chart {
@@ -1124,6 +1242,7 @@ impl ShipRenderer {
         sway: &impl Fn(f32, f32) -> Vec2,
         pitch_ang: f32,
         lume: &Lume,
+        grain: &Texture2D,
         h: f32,
         w: f32,
         aft: bool,
@@ -1158,33 +1277,64 @@ impl ShipRenderer {
         let net_col = lume.col(ROPE, 0.5, 0.8);
         let net_thick = (h * 0.0017).max(1.0);
 
-        // --- Deck floor: planks lofted station to station. Strips between fixed
-        // fractions of the half-beam in two alternating tones, so every board
-        // springs from the stem and follows the hull's plan curve. A segment
-        // standing more up than along (the quarterdeck riser) faces away from an
-        // eye abaft it, so it is skipped; the quarterdeck floor then overpaints
-        // exactly the run of waist its edge hides, which is the correct
-        // painter's-order occlusion. The loft runs in two phases, waist then
-        // quarterdeck, with the companion stairs drawn between them: they stand
-        // on the one and duck under the other.
-        let planks = 9;
+        // --- Deck floor: planks lofted station to station, each strip wearing
+        // its band of the baked grain texture (seams, joints and streaks live
+        // there; see `build_deck_grain`), so every board springs from the stem
+        // and follows the hull's plan curve. A segment standing more up than
+        // along (the quarterdeck riser) faces away from an eye abaft it, so it
+        // is skipped; the quarterdeck floor then overpaints exactly the run of
+        // waist its edge hides, which is the correct painter's-order occlusion.
+        // The loft runs in two phases, waist then quarterdeck, with the
+        // companion stairs drawn between them: they stand on the one and duck
+        // under the other.
+        // The grain's lengthwise axis maps the hull's whole station run, so a
+        // strip's texture rows continue seamlessly from one lofted pair to the
+        // next.
+        let plank_v = {
+            let z_bow = STATIONS[0].0;
+            let z_stern = STATIONS[STATIONS.len() - 1].0;
+            move |z: f32| (z - z_bow) / (z_stern - z_bow)
+        };
+        let deck_diff = lume.diff(n_deck);
         let floor_pair = |pair: &[(f32, f32, f32, f32)]| {
             let (z0, b0, d0, _) = pair[0];
             let (z1, b1, d1, _) = pair[1];
             if (d1 - d0).abs() > (z1 - z0).abs() {
                 return;
             }
-            for i in 0..planks {
-                let u0 = i as f32 / planks as f32 * 2.0 - 1.0;
-                let u1 = (i + 1) as f32 / planks as f32 * 2.0 - 1.0;
-                let tone = if i % 2 == 0 { DECK_A } else { DECK_B };
-                try_quad(
+            let (v0, v1) = (plank_v(z0), plank_v(z1));
+            for i in 0..PLANKS {
+                let u0 = i as f32 / PLANKS as f32 * 2.0 - 1.0;
+                let u1 = (i + 1) as f32 / PLANKS as f32 * 2.0 - 1.0;
+                // Per-strip tone: a hashed blend of the two deck browns (the
+                // baked seams now part the boards, so strict alternation would
+                // just stripe over them), lifted a touch to give back the
+                // light the grain's multiply soaks up.
+                let mix = slot_rand(i as u32 * 61 + 13);
+                let tone = [
+                    DECK_A[0] + (DECK_B[0] - DECK_A[0]) * mix,
+                    DECK_A[1] + (DECK_B[1] - DECK_A[1]) * mix,
+                    DECK_A[2] + (DECK_B[2] - DECK_A[2]) * mix,
+                ];
+                let col = lume.col(tone, deck_diff, 1.06);
+                let (ul, ur) = (i as f32 / PLANKS as f32, (i + 1) as f32 / PLANKS as f32);
+                if let (Some(a), Some(b), Some(c), Some(d)) = (
                     pt(u0 * b0, d0, z0),
                     pt(u1 * b0, d0, z0),
                     pt(u1 * b1, d1, z1),
                     pt(u0 * b1, d1, z1),
-                    lume.face(tone, n_deck),
-                );
+                ) {
+                    draw_mesh(&Mesh {
+                        vertices: vec![
+                            Vertex::new(a.x, a.y, 0.0, ul, v0, col),
+                            Vertex::new(b.x, b.y, 0.0, ur, v0, col),
+                            Vertex::new(c.x, c.y, 0.0, ur, v1, col),
+                            Vertex::new(d.x, d.y, 0.0, ul, v1, col),
+                        ],
+                        indices: vec![0, 1, 2, 0, 2, 3],
+                        texture: Some(grain.clone()),
+                    });
+                }
             }
         };
         // A station belongs to the quarterdeck run if it lies aft of the break
