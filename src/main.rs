@@ -137,6 +137,9 @@ pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// (`SailingView.sailFractions` / `sailNames`.)
 const SAIL_FRACTIONS: [f32; 3] = [0.0, 0.5, 1.0];
 const SAIL_NAMES: [&str; 3] = ["None", "Half", "Full"];
+/// How long the lone "H Show HUD" reminder lingers after the last keypress while
+/// the HUD is hidden, before the view goes fully clean.
+const SHOW_HUD_HINT_SECS: f32 = 4.0;
 
 // --- Camera "ride": how the viewpoint rocks with the boat ---------------------
 // The whole world (sky, sun, waves, islands) is drawn through a camera that tilts
@@ -385,6 +388,11 @@ async fn run_game(
     // the on-screen/keybind controls) for an unobstructed view of the sea. Toggles;
     // open menus and the world still draw underneath.
     let mut hud_hidden = false;
+    // While the HUD is hidden, any keypress surfaces the lone "H Show HUD" hint for
+    // a few seconds (see `SHOW_HUD_HINT_SECS`) so a captain who tucked it away by
+    // accident can find the key back; the timer counting to zero returns the clean,
+    // hudless view.
+    let mut show_hud_hint_timer: f32 = 0.0;
     // On the web the canvas only receives keyboard input once it has focus, which
     // a click grants. Until the captain clicks (or presses a key), a big centred
     // call-to-action sits over the scene; the first input dismisses it for good.
@@ -1127,6 +1135,16 @@ async fn run_game(
             // clean view of the sea; press again to bring it back.
             if is_key_pressed(KeyCode::H) {
                 hud_hidden = !hud_hidden;
+            }
+            // While hidden, any keypress (including the H that hid it) rearms the
+            // "Show HUD" reminder, then it fades as the timer bleeds down over the
+            // frames that follow. Left alone, the view stays fully clean.
+            if hud_hidden {
+                if !get_keys_pressed().is_empty() {
+                    show_hud_hint_timer = SHOW_HUD_HINT_SECS;
+                } else {
+                    show_hud_hint_timer = (show_hud_hint_timer - dt).max(0.0);
+                }
             }
             // The basics primer, summoned with G. Like the log it reserves the arrows
             // while open, so the two are mutually exclusive.
@@ -1905,28 +1923,17 @@ async fn run_game(
                     item_btns,
                 );
             }
-        } else if !hud_hidden && !pause.open && !log_open && !guide_open && !harbor.is_open() && !shore.is_open() {
-            // Keyboard mode at the helm: faint reminders of the sailing keys,
-            // bottom-left. (Touch mode has its own on-screen glyphs above.)
-            // Owned tavern wares add their shortcuts, so they show only once earned.
-            let mut extra: Vec<(&str, &str)> = Vec::new();
-            if gs.owns(SpecialItem::WorldMap) {
-                extra.push(("M", "World map"));
+        } else if !pause.open && !log_open && !guide_open && !harbor.is_open() && !shore.is_open() {
+            // Keyboard mode at the helm, bottom-left. (Touch mode has its own
+            // on-screen glyphs above.) With the HUD shown, the ways in and out of
+            // the reference screens; the full control list lives in the Guide (G).
+            // With it hidden, only the "Show HUD" hint, and only for a few seconds
+            // after the last keypress, so leaving the keys alone clears the view.
+            if !hud_hidden {
+                hud::keybind_hints(h);
+            } else if show_hud_hint_timer > 0.0 {
+                hud::show_hud_hint(h);
             }
-            for slot in 0..3 {
-                if let Some(it) = SpecialItem::from_active_slot(slot).filter(|it| gs.owns(*it)) {
-                    // Drop the shortcut while the ware is spent for the day: its keybind
-                    // reappears once it recharges at sunrise, so the hint only shows a key
-                    // that would actually fire.
-                    if !gs.item_ready(it) {
-                        continue;
-                    }
-                    if let Some(key) = it.key_hint() {
-                        extra.push((key, it.name()));
-                    }
-                }
-            }
-            hud::keybind_hints(harbor.dockable.is_some(), &extra, h);
         }
 
         // The focus call-to-action, over everything until the first click or key.

@@ -43,6 +43,21 @@ const PAGES: &[GuidePage] = &[
         ],
     },
     GuidePage {
+        title: "All the Controls",
+        body: &[
+            "Everything you can do from the helm:",
+            "\u{2022} Steer: A / D, or the left / right arrows.",
+            "\u{2022} Sail: W / S (or up / down) deploy and furl a notch at a time.",
+            "\u{2022} Dock: Space, with a harbour in reach and the sail furled.",
+            "\u{2022} Look astern: hold C to glance back over the stern.",
+            "\u{2022} Captain's Log: L (repairs, cargo, contracts, upgrades).",
+            "\u{2022} World map: M, once you've bought the chart from a tavern.",
+            "\u{2022} Wares: 1 / 2 / 3 call on your active tavern wares, once a day each.",
+            "\u{2022} Hide HUD: H tucks it away; press again to bring it back.",
+            "\u{2022} Guide: G opens this guide. Pause: Escape.",
+        ],
+    },
+    GuidePage {
         title: "Your First Gold",
         body: &[
             "To earn your first coin, accept a trade contract bound for the \
