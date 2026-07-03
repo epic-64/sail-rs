@@ -291,10 +291,6 @@ async fn run_game(
     // shove is ~0.10 rad/s, a bit under half the rudder's full authority
     // (`sailing::MAX_YAW_RATE`): demanding helm work, never an uncontrollable spin.
     const STORM_YAW_GAIN: f32 = 1.5;
-    // Past this fury the corner chart is unreadable in the gale and stops drawing;
-    // it returns as the storm eases. Sits between a squall's fury and a full
-    // storm's, so only a real storm takes the chart away.
-    const STORM_CHART_HIDE: f32 = 0.7;
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
@@ -394,8 +390,6 @@ async fn run_game(
     // word. Cleared whenever the book is shut so stale keystrokes never match.
     let mut cheat_buf = String::new();
     const CHEAT_CODE: &str = "banana";
-    // The always-on corner chart's ink scheme.
-    let minimap_pal = minimap::MinimapPalette::hud();
 
     // The prevailing wind. The opening breeze is rolled within a reach of the bow
     // (Wind::favorable) so a fresh captain never spawns in irons; from there it
@@ -1704,29 +1698,13 @@ async fn run_game(
         let chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
         let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
 
-        // Corner chart: the local cluster, top-right (tucked away with H, and lost
-        // to the gale while the fury is past STORM_CHART_HIDE: no chart to steer by
-        // in a storm, so foul-weather navigation is done by eye).
-        let map_size = (h * 0.24).clamp(px(140.0), px(200.0));
-        let map_rect = Rect::new(w - map_size - px(16.0), px(16.0), map_size, map_size);
-        if !hud_hidden && storm <= STORM_CHART_HIDE {
-            minimap::render(
-                &world,
-                &kin,
-                wind,
-                map_rect,
-                &minimap_pal,
-                &chart_marks,
-                &race_marks,
-                None,
-                &traders.positions(),
-                rival.map(|r| (r.pos, r.heading_rad)),
-                None,
-            );
-
-            // A beginner's checklist tucked under the chart (until its steps are all
-            // struck, then it retires itself), so a fresh captain learns the ropes.
-            checklist::render(&gs.stats, map_rect);
+        // A beginner's checklist in the top-right corner (until its steps are all
+        // struck, then it retires itself), so a fresh captain learns the ropes. The
+        // deck chart by the wheel is the ship's only minimap now, so the old corner
+        // chart is gone and the list stands on its own (anchored to a zero-size rect
+        // at the corner, which `checklist::render` right-aligns and drops below).
+        if !hud_hidden {
+            checklist::render(&gs.stats, Rect::new(w - px(16.0), px(16.0), 0.0, 0.0));
         }
 
         // Race standings strip: the mark and how far the player and rival each have

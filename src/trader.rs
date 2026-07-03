@@ -186,9 +186,4 @@ impl TraderFleet {
     pub fn kinematics(&self) -> Vec<Kinematics> {
         self.traders.iter().map(|t| t.kin).collect()
     }
-
-    /// The chart positions of every local trader (for the minimap).
-    pub fn positions(&self) -> Vec<Vec2> {
-        self.traders.iter().map(|t| t.kin.pos).collect()
-    }
 }
