@@ -1451,6 +1451,32 @@ impl ShipRenderer {
                     );
                 }
             }
+            // A fishnet laced across the rail, platform to top board, so the
+            // break reads as a closed screen from the helm: the quarterdeck
+            // ends *here*, the waist and its cargo lie beyond. A diamond
+            // mesh (every cell crossed corner to corner both ways), drawn
+            // before the boards so they paint over its edges like lacing.
+            {
+                let net_col = lume.col(ROPE, 0.5, 0.8);
+                let net_thick = (h * 0.0017).max(1.0);
+                let np = |x: f32, y: f32| cam(x, y, brk).map(|(p, _)| p);
+                let cells_x = 16; // meshes along the span
+                let cells_y = 4; // meshes up the drop
+                for ix in 0..cells_x {
+                    for iy in 0..cells_y {
+                        let xa = rail_l + (rail_r - rail_l) * ix as f32 / cells_x as f32;
+                        let xb = rail_l + (rail_r - rail_l) * (ix + 1) as f32 / cells_x as f32;
+                        let ya = qd_y + (rail_y - qd_y) * iy as f32 / cells_y as f32;
+                        let yb = qd_y + (rail_y - qd_y) * (iy + 1) as f32 / cells_y as f32;
+                        if let (Some(p00), Some(p10), Some(p01), Some(p11)) =
+                            (np(xa, ya), np(xb, ya), np(xa, yb), np(xb, yb))
+                        {
+                            draw_line(p00.x, p00.y, p11.x, p11.y, net_thick, net_col);
+                            draw_line(p10.x, p10.y, p01.x, p01.y, net_thick, net_col);
+                        }
+                    }
+                }
+            }
             // The rail board along the post tops, and a mid rail below it.
             for (y, th_m) in [(rail_y, 0.07f32), (qd_y + 0.45, 0.045)] {
                 if let (Some((l, s)), Some((r, _))) = (cam(rail_l, y, brk), cam(rail_r, y, brk))
