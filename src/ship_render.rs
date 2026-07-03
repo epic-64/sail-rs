@@ -1290,12 +1290,27 @@ impl ShipRenderer {
         // The grain's lengthwise axis maps the hull's whole station run, so a
         // strip's texture rows continue seamlessly from one lofted pair to the
         // next.
-        let plank_v = {
-            let z_bow = STATIONS[0].0;
-            let z_stern = STATIONS[STATIONS.len() - 1].0;
-            move |z: f32| (z - z_bow) / (z_stern - z_bow)
-        };
+        let z_bow = STATIONS[0].0;
+        let z_stern = STATIONS[STATIONS.len() - 1].0;
+        let plank_v = move |z: f32| (z - z_bow) / (z_stern - z_bow);
         let deck_diff = lume.diff(n_deck);
+        // A lofted face wearing the plank grain: four corners with their texture
+        // coordinates, tinted by a lume-shaded wood tone. Skipped whole if any
+        // corner sits inside the near plane, like `try_quad`.
+        let grain_quad = |pts: [Option<Vec2>; 4], uv: [(f32, f32); 4], col: Color| {
+            if let [Some(a), Some(b), Some(c), Some(d)] = pts {
+                draw_mesh(&Mesh {
+                    vertices: vec![
+                        Vertex::new(a.x, a.y, 0.0, uv[0].0, uv[0].1, col),
+                        Vertex::new(b.x, b.y, 0.0, uv[1].0, uv[1].1, col),
+                        Vertex::new(c.x, c.y, 0.0, uv[2].0, uv[2].1, col),
+                        Vertex::new(d.x, d.y, 0.0, uv[3].0, uv[3].1, col),
+                    ],
+                    indices: vec![0, 1, 2, 0, 2, 3],
+                    texture: Some(grain.clone()),
+                });
+            }
+        };
         let floor_pair = |pair: &[(f32, f32, f32, f32)]| {
             let (z0, b0, d0, _) = pair[0];
             let (z1, b1, d1, _) = pair[1];
@@ -1318,23 +1333,16 @@ impl ShipRenderer {
                 ];
                 let col = lume.col(tone, deck_diff, 1.06);
                 let (ul, ur) = (i as f32 / PLANKS as f32, (i + 1) as f32 / PLANKS as f32);
-                if let (Some(a), Some(b), Some(c), Some(d)) = (
-                    pt(u0 * b0, d0, z0),
-                    pt(u1 * b0, d0, z0),
-                    pt(u1 * b1, d1, z1),
-                    pt(u0 * b1, d1, z1),
-                ) {
-                    draw_mesh(&Mesh {
-                        vertices: vec![
-                            Vertex::new(a.x, a.y, 0.0, ul, v0, col),
-                            Vertex::new(b.x, b.y, 0.0, ur, v0, col),
-                            Vertex::new(c.x, c.y, 0.0, ur, v1, col),
-                            Vertex::new(d.x, d.y, 0.0, ul, v1, col),
-                        ],
-                        indices: vec![0, 1, 2, 0, 2, 3],
-                        texture: Some(grain.clone()),
-                    });
-                }
+                grain_quad(
+                    [
+                        pt(u0 * b0, d0, z0),
+                        pt(u1 * b0, d0, z0),
+                        pt(u1 * b1, d1, z1),
+                        pt(u0 * b1, d1, z1),
+                    ],
+                    [(ul, v0), (ur, v0), (ur, v1), (ul, v1)],
+                    col,
+                );
             }
         };
         // A station belongs to the quarterdeck run if it lies aft of the break
@@ -1363,26 +1371,40 @@ impl ShipRenderer {
             let run = STAIR_RUN; // fore-aft reach of the flight
             let (_, qd_y, _) = station_at(QDECK_BREAK + 0.1);
             let side_col = lume.col(RAIL_DK, lume.diff(n_wall(1.0)), 0.9);
+            // The carriage's grain runs fore-aft down the flight: one band of
+            // the texture spread bottom to top, its plank-edge seams landing
+            // on the carriage's own top and bottom edges. The u mapping is
+            // linear in height, so neighbouring segments' shared edges sample
+            // the same texels and the wall reads as one board.
+            let carr_band = (PLANKS / 2) as f32;
+            let carr_u = move |yy: f32| (carr_band + (yy / qd_y).min(1.0)) / PLANKS as f32;
             for k in (1..steps).rev() {
                 let y = qd_y * (1.0 - k as f32 / steps as f32);
                 let za = QDECK_BREAK - run * k as f32 / steps as f32;
                 let zb = QDECK_BREAK - run * (k as f32 - 1.0) / steps as f32;
                 // The carriage: the solid side wall under this tread.
-                try_quad(
-                    pt(x0, 0.0, za),
-                    pt(x0, 0.0, zb),
-                    pt(x0, y, zb),
-                    pt(x0, y, za),
+                grain_quad(
+                    [pt(x0, 0.0, za), pt(x0, 0.0, zb), pt(x0, y, zb), pt(x0, y, za)],
+                    [
+                        (carr_u(0.0), plank_v(za)),
+                        (carr_u(0.0), plank_v(zb)),
+                        (carr_u(y), plank_v(zb)),
+                        (carr_u(y), plank_v(za)),
+                    ],
                     side_col,
                 );
-                // The tread.
+                // The tread: one board cut from a hashed stretch of a hashed
+                // band, its length (and so its grain) running athwartships;
+                // the band-edge caulk lands on the tread's nosing and heel.
                 let tone = if k % 2 == 0 { DECK_A } else { DECK_B };
-                try_quad(
-                    pt(x0, y, za),
-                    pt(x1, y, za),
-                    pt(x1, y, zb),
-                    pt(x0, y, zb),
-                    lume.face(tone, n_deck),
+                let band = (k * 5 + 2) % PLANKS;
+                let (ul, ur) = (band as f32 / PLANKS as f32, (band + 1) as f32 / PLANKS as f32);
+                let v0 = 0.9 * slot_rand(k as u32 * 53 + 11);
+                let v1 = v0 + (x1 - x0) / (z_stern - z_bow);
+                grain_quad(
+                    [pt(x0, y, za), pt(x1, y, za), pt(x1, y, zb), pt(x0, y, zb)],
+                    [(ul, v0), (ul, v1), (ur, v1), (ur, v0)],
+                    lume.col(tone, deck_diff, 1.06),
                 );
             }
             // The handrail down the inboard carriage: head post height off the
