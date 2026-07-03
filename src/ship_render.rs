@@ -226,7 +226,7 @@ fn draw_spar(
         // The true normal, tipped a touch skyward so a high sun still grazes
         // the timber, and the rim falloff for round form.
         let ns = (n.0 * 0.98, n.1 * 0.98 + 0.18, n.2 * 0.98);
-        let col = lume.col(base, lume.diff(ns), 0.72 + 0.28 * f);
+        let col = lume.col(base, lume.diff(ns), 0.8 + 0.2 * f);
         let pr = |p: (f32, f32, f32)| proj(p.0, p.1, p.2);
         if let (Some(p0), Some(p1), Some(p2), Some(p3)) = (
             pr(ring(a, ra, a0)),
@@ -259,7 +259,7 @@ struct DeckPoints {
 // the masthead towers off the top of a landscape screen, the yard crosses just
 // under it, and the cloth's foot clears the tallest cargo stack on the waist.
 const MAST_TOP_M: f32 = 10.2; // masthead height above the waist deck
-const YARD_H_M: f32 = 6.5; // the yard crosses here; the bare pole runs on above
+const YARD_H_M: f32 = 7.0; // the yard crosses here; the bare pole runs on above
 const SAIL_W_M: f32 = 7.6; // the sail's full width along the yard
 const SAIL_H_M: f32 = 3.0; // its hoist, head to foot at full set
 const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
@@ -273,7 +273,7 @@ const DECK_A: [f32; 3] = [156.0, 120.0, 74.0];
 const DECK_B: [f32; 3] = [138.0, 104.0, 62.0];
 const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
-const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
+const SPAR: [f32; 3] = [140.0, 104.0, 66.0];
 // Rigging: weathered hemp, light enough not to read as black lines on the sky.
 const ROPE: [f32; 3] = [118.0, 98.0, 72.0];
 // Kept darker than the deck planks so the rim reads against them.
