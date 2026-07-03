@@ -1503,12 +1503,13 @@ async fn run_game(
                 ship: chart_uv(kin.pos),
                 heading: kin.heading_rad,
                 wind_toward: wind.toward_rad,
-                // The rain washes the chartwork out as the gale builds: the ink
-                // fades with the fury and the sheet is fully bare before the
-                // fury peaks, so a Storm blanks the board outright (a squall
-                // only wets it) and the helmsman steers from memory until the
-                // weather lays down and the ink dries back in.
-                legibility: 1.0 - clamp(storm / 0.8, 0.0, 1.0),
+                // A true storm washes the chartwork off the sheet. The ramp's
+                // foot sits above a squall's eased fury, so up to and through a
+                // squall the ink stays at full strength; only on the Storm rung
+                // does the fury climb past it, fading the board to bare
+                // parchment before the fury peaks. The helmsman steers from
+                // memory until the weather lays down and the ink dries back in.
+                legibility: 1.0 - clamp((storm - 0.5) / 0.4, 0.0, 1.0),
             }),
         };
         // --- Bow spray ---------------------------------------------------------

@@ -2013,8 +2013,8 @@ impl ShipRenderer {
         // leaving bare rain-soaked parchment in a storm. The board, stand and
         // sheet stay; only the chartwork drowns.
         let leg = clamp(chart.legibility, 0.0, 1.0);
-        let ink = lume.col(CHART_INK, diff, 1.0);
-        let ink = Color::new(ink.r, ink.g, ink.b, ink.a * leg);
+        let ink_full = lume.col(CHART_INK, diff, 1.0);
+        let ink = Color::new(ink_full.r, ink_full.g, ink_full.b, ink_full.a * leg);
         let frame_col = lume.col(RAIL_DK, diff, 0.9);
         let faint = Color::new(ink.r, ink.g, ink.b, ink.a * 0.3);
         let line_w = (0.012 * s).max(1.0);
