@@ -154,6 +154,92 @@ fn helm_cam(x: f32, y: f32, z: f32, sp: f32, cp: f32, w: f32, h: f32) -> Option<
     Some((vec2(w * 0.5 + x * s, h * HORIZON + (CAM_UP - py) * s), s))
 }
 
+/// A round spar between two points in the loft frame (metres): a tapered pole
+/// drawn as lengthwise facets, each shaded through the scene light by its true
+/// outward normal, so the lit side follows the sun or moon of its own accord
+/// (no baked per-side colours). Facets turned away from the eye are culled (a
+/// round spar's far side hides behind its own silhouette; the cull ignores the
+/// pitch nod, which at worst pops an edge-on sliver a frame early), and a rim
+/// falloff toward the silhouette keeps the round form readable even when the
+/// key light strikes every lengthwise facet alike (dead overhead, say). `proj`
+/// projects a loft point to the swayed screen, `None` inside the near plane.
+fn draw_spar(
+    proj: &impl Fn(f32, f32, f32) -> Option<Vec2>,
+    lume: &Lume,
+    base: [f32; 3],
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+    ra: f32,
+    rb: f32,
+) {
+    // Enough sides that the shading steps read as roundness, few enough that
+    // the low-poly cut of the rest of the ship survives.
+    const FACETS: usize = 8;
+    let axis = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
+    let len = (axis.0 * axis.0 + axis.1 * axis.1 + axis.2 * axis.2).sqrt();
+    if len < 1e-4 {
+        return;
+    }
+    let ad = (axis.0 / len, axis.1 / len, axis.2 / len);
+    let cross = |p: (f32, f32, f32), q: (f32, f32, f32)| {
+        (
+            p.1 * q.2 - p.2 * q.1,
+            p.2 * q.0 - p.0 * q.2,
+            p.0 * q.1 - p.1 * q.0,
+        )
+    };
+    // A perpendicular frame around the axis; the reference flips for a
+    // near-vertical spar (the mast), where world-up runs degenerate.
+    let rf = if ad.1.abs() > 0.9 { (0.0, 0.0, 1.0) } else { (0.0, 1.0, 0.0) };
+    let u = {
+        let c = cross(ad, rf);
+        let l = (c.0 * c.0 + c.1 * c.1 + c.2 * c.2).sqrt().max(1e-6);
+        (c.0 / l, c.1 / l, c.2 / l)
+    };
+    let v = cross(ad, u); // unit, since the axis is perpendicular to u
+    let ring = |e: (f32, f32, f32), r: f32, ang: f32| {
+        let (s, c) = ang.sin_cos();
+        (
+            e.0 + (u.0 * c + v.0 * s) * r,
+            e.1 + (u.1 * c + v.1 * s) * r,
+            e.2 + (u.2 * c + v.2 * s) * r,
+        )
+    };
+    let mid = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5, (a.2 + b.2) * 0.5);
+    for i in 0..FACETS {
+        let a0 = i as f32 / FACETS as f32 * TAU;
+        let a1 = (i + 1) as f32 / FACETS as f32 * TAU;
+        let (s, c) = ((a0 + a1) * 0.5).sin_cos();
+        let n = (u.0 * c + v.0 * s, u.1 * c + v.1 * s, u.2 * c + v.2 * s);
+        // Cull the far side: the sight line from the facet to the eye at the
+        // helm (where `helm_cam` stands).
+        let e = (
+            -(mid.0 + n.0 * ra),
+            CAM_UP - (mid.1 + n.1 * ra),
+            CAM_AFT - (mid.2 + n.2 * ra),
+        );
+        let facing = n.0 * e.0 + n.1 * e.1 + n.2 * e.2;
+        if facing <= 0.0 {
+            continue;
+        }
+        let f = facing / (e.0 * e.0 + e.1 * e.1 + e.2 * e.2).sqrt();
+        // The true normal, tipped a touch skyward so a high sun still grazes
+        // the timber, and the rim falloff for round form.
+        let ns = (n.0 * 0.98, n.1 * 0.98 + 0.18, n.2 * 0.98);
+        let col = lume.col(base, lume.diff(ns), 0.72 + 0.28 * f);
+        let pr = |p: (f32, f32, f32)| proj(p.0, p.1, p.2);
+        if let (Some(p0), Some(p1), Some(p2), Some(p3)) = (
+            pr(ring(a, ra, a0)),
+            pr(ring(a, ra, a1)),
+            pr(ring(b, rb, a1)),
+            pr(ring(b, rb, a0)),
+        ) {
+            draw_triangle(p0, p1, p2, col);
+            draw_triangle(p0, p2, p3, col);
+        }
+    }
+}
+
 /// Screen anchors the rest of the frame hangs on, computed by `draw_deck` as it
 /// projects the hull.
 struct DeckPoints {
@@ -177,8 +263,9 @@ const YARD_H_M: f32 = 6.5; // the yard crosses here; the bare pole runs on above
 const SAIL_W_M: f32 = 7.6; // the sail's full width along the yard
 const SAIL_H_M: f32 = 3.0; // its hoist, head to foot at full set
 const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
-const MAST_HEAD_HW: f32 = 0.15; // the post's half-width at the head (the foot is MAST_HW)
-const YARD_HALF_TH: f32 = 0.11; // the spar's half-thickness
+const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is MAST_HW)
+const YARD_MID_R: f32 = 0.13; // the yard's radius at the slings (its middle)...
+const YARD_TIP_R: f32 = 0.07; // ...tapering out to the yardarms
 
 // --- Wood / canvas palette (harmonises with the island features' wood tones) --
 const SAIL_CLOTH: [f32; 3] = [226.0, 214.0, 188.0];
@@ -187,7 +274,6 @@ const DECK_B: [f32; 3] = [138.0, 104.0, 62.0];
 const RAIL: [f32; 3] = [120.0, 86.0, 52.0];
 const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
 const SPAR: [f32; 3] = [120.0, 88.0, 56.0];
-const SPAR_DK: [f32; 3] = [90.0, 64.0, 40.0];
 // Rigging: weathered hemp, light enough not to read as black lines on the sky.
 const ROPE: [f32; 3] = [118.0, 98.0, 72.0];
 // Kept darker than the deck planks so the rim reads against them.
@@ -1377,27 +1463,21 @@ impl ShipRenderer {
 
         // --- Bowsprit: a tapered spar from the stemhead out toward the horizon.
         // It anchors the forestay and closes the ship's profile so the prow
-        // reads as a ship's, not a raft's. Two-tone halves, matching the mast.
+        // reads as a ship's, not a raft's. A faceted round spar like the mast.
         // The farthest woodwork aboard, so it draws in the fore pass and the
         // rig later paints over it.
         let sprit_tip = (2.7f32, -18.2f32); // (height, z) of the tip
         if !aft {
             let base = (1.5f32, -14.6f32);
-            let lit_l = lume.face(SPAR, (-0.66, 0.4, 0.64));
-            let lit_r = lume.face(SPAR_DK, (0.66, 0.4, 0.64));
-            if let (Some(b0), Some(b1), Some(t1), Some(t0), Some(mb), Some(mt)) = (
-                pt(-0.18, base.0, base.1),
-                pt(0.18, base.0, base.1),
-                pt(0.08, sprit_tip.0, sprit_tip.1),
-                pt(-0.08, sprit_tip.0, sprit_tip.1),
-                pt(0.0, base.0, base.1),
-                pt(0.0, sprit_tip.0, sprit_tip.1),
-            ) {
-                draw_triangle(b0, mb, mt, lit_l);
-                draw_triangle(b0, mt, t0, lit_l);
-                draw_triangle(mb, b1, t1, lit_r);
-                draw_triangle(mb, t1, mt, lit_r);
-            }
+            draw_spar(
+                &pt,
+                lume,
+                SPAR,
+                (0.0, base.0, base.1),
+                (0.0, sprit_tip.0, sprit_tip.1),
+                0.18,
+                0.08,
+            );
         }
 
         // --- Screen anchors for the rig's ropes and the rain -------------------
@@ -1654,9 +1734,10 @@ impl ShipRenderer {
         // formality (the same fallback the deck's rope feet use).
         let (sp, cp) = pitch_ang.sin_cos();
         let off = vec2(w * 0.5, h * 3.0);
-        let project = |x: f32, y: f32, z: f32| -> Vec2 {
-            helm_cam(x, y, z, sp, cp, w, h).map_or(off, |(p, _)| sway(p.x, p.y))
+        let proj = |x: f32, y: f32, z: f32| -> Option<Vec2> {
+            helm_cam(x, y, z, sp, cp, w, h).map(|(p, _)| sway(p.x, p.y))
         };
+        let project = |x: f32, y: f32, z: f32| -> Vec2 { proj(x, y, z).unwrap_or(off) };
         // px per metre at the mast plane, for the cloth shading's expected
         // cell span.
         let s0 = w * CAM_F / CAM_AFT;
@@ -1854,43 +1935,37 @@ impl ShipRenderer {
             }
         }
 
-        // --- Yard: a spar along the braced across-axis at the sail's head -------
-        // Drawn over the panels so it crosses ahead of the cloth it carries.
+        // --- Yard: a round spar along the braced across-axis at the sail's head,
+        // slung thickest at its middle and tapering out to the yardarms (two
+        // frustums of the shared spar loft). Drawn over the panels so it
+        // crosses ahead of the cloth it carries; its facets take the light by
+        // their true normals, so the lit grain follows the brace of its own
+        // accord.
         {
             let (lx, lz) = braced(-0.54, -stand_off);
             let (rx, rz) = braced(0.54, -stand_off);
-            let th = YARD_HALF_TH;
-            let a = project(lx, sail_top + th, lz);
-            let b = project(rx, sail_top + th, rz);
-            let c = project(rx, sail_top - th, rz);
-            let d = project(lx, sail_top - th, lz);
-            // The yard swings with the brace, so its lit face follows the sail's
-            // plane (plus a touch of sky from above).
-            let yard_col = lume.face(SPAR, (sb * 0.95, 0.3, cb * 0.95));
-            draw_triangle(a, b, c, yard_col);
-            draw_triangle(a, c, d, yard_col);
+            let (mx, mz) = braced(0.0, -stand_off);
+            let tip_l = (lx, sail_top, lz);
+            let slings = (mx, sail_top, mz);
+            let tip_r = (rx, sail_top, rz);
+            draw_spar(&proj, lume, SPAR, tip_l, slings, YARD_TIP_R, YARD_MID_R);
+            draw_spar(&proj, lume, SPAR, slings, tip_r, YARD_MID_R, YARD_TIP_R);
         }
 
-        // --- Mast: a slightly tapered vertical post, two-tone for round form ----
-        // Drawn last of the rig, at z = 0 (its nearest plane), so it stands in
-        // front of the sail and yard; the deck's aft pass then covers its foot
-        // with the crates and rails standing nearer the eye still.
-        {
-            let b0 = project(-MAST_HW, 0.0, 0.0);
-            let b1 = project(MAST_HW, 0.0, 0.0);
-            let t1 = project(MAST_HEAD_HW, MAST_TOP_M, 0.0);
-            let t0 = project(-MAST_HEAD_HW, MAST_TOP_M, 0.0);
-            let mid0 = project(0.0, 0.0, 0.0);
-            let mid1 = project(0.0, MAST_TOP_M, 0.0);
-            // Two-tone halves for round form, each half turned to its own side so
-            // the shading flips as the light crosses the bow.
-            let lit_l = lume.face(SPAR, (-0.7, 0.15, 0.7));
-            let lit_r = lume.face(SPAR_DK, (0.7, 0.15, 0.7));
-            draw_triangle(b0, mid0, mid1, lit_l);
-            draw_triangle(b0, mid1, t0, lit_l);
-            draw_triangle(mid0, b1, t1, lit_r);
-            draw_triangle(mid0, t1, mid1, lit_r);
-        }
+        // --- Mast: a tapered round spar, its facets lit by their true normals
+        // so the light rolls around the timber with the hour. Drawn last of
+        // the rig, at z = 0 (its nearest plane), so it stands in front of the
+        // sail and yard; the deck's aft pass then covers its foot with the
+        // crates and rails standing nearer the eye still.
+        draw_spar(
+            &proj,
+            lume,
+            SPAR,
+            (0.0, 0.0, 0.0),
+            (0.0, MAST_TOP_M, 0.0),
+            MAST_HW,
+            MAST_HEAD_R,
+        );
 
         // The remaining ropes, their rig ends riding abaft the mast plane and
         // so nearer the eye, drawn over the spars as they lead toward the rail.
