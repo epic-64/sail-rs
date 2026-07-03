@@ -105,6 +105,12 @@ const STATIONS: [(f32, f32, f32, f32); 13] = [
 /// here, with the companion stairs drawn between them.
 const QDECK_BREAK: f32 = 5.0;
 
+/// Fore-aft reach of the companion stairs' flight down from the break; the
+/// shorter the run, the steeper the climb. Shared with the cargo fence in
+/// `step_cargo`, so sliding crates fetch up against the flight exactly where
+/// it stands.
+const STAIR_RUN: f32 = 2.2;
+
 /// The breast rail across the quarterdeck's forward edge: where it stands and
 /// how high its top rail rides off the platform. Shared by the rail itself and
 /// the deck chart clipped to it (see [`DeckChart`]).
@@ -276,6 +282,10 @@ const RAIL_DK: [f32; 3] = [92.0, 64.0, 38.0];
 const SPAR: [f32; 3] = [140.0, 104.0, 66.0];
 // Rigging: weathered hemp, light enough not to read as black lines on the sky.
 const ROPE: [f32; 3] = [118.0, 98.0, 72.0];
+// The breast rail netting's knit: metres per mesh along the rail's run and
+// up its drop.
+const NET_MESH_ALONG_M: f32 = 0.20;
+const NET_MESH_UP_M: f32 = 0.14;
 // Kept darker than the deck planks so the rim reads against them.
 const WHEEL_C: [f32; 3] = [104.0, 74.0, 44.0];
 const WHEEL_DK: [f32; 3] = [76.0, 52.0, 30.0];
@@ -942,7 +952,7 @@ impl ShipRenderer {
             }
             // The companion stairs block the starboard run abaft the waist.
             let stair_x = 2.0 - WALL_GAP - c.hw;
-            if c.z + c.hd > QDECK_BREAK - 4.0 && c.x > stair_x {
+            if c.z + c.hd > QDECK_BREAK - STAIR_RUN && c.x > stair_x {
                 c.x = stair_x;
                 if c.vx > 0.0 {
                     kick.0 = c.vx;
@@ -1110,6 +1120,10 @@ impl ShipRenderer {
 
         let rail_col = lume.face(RAIL, (0.0, 0.25, 0.97));
         let board_col = lume.face(RAIL_DK, (0.0, 0.8, 0.6));
+        // The breast rail netting's cord: hemp like the rigging, thinner and
+        // a shade dimmer.
+        let net_col = lume.col(ROPE, 0.5, 0.8);
+        let net_thick = (h * 0.0017).max(1.0);
 
         // --- Deck floor: planks lofted station to station. Strips between fixed
         // fractions of the half-beam in two alternating tones, so every board
@@ -1150,9 +1164,10 @@ impl ShipRenderer {
         }
 
         // --- Companion stairs: the way down from the quarterdeck to the waist,
-        // starboard, under the breast rail's open end. A long shallow flight,
-        // so it emerges from behind the platform edge into view (a steep ladder
-        // would hide entirely inside the wedge the edge masks from the eye).
+        // starboard, under the breast rail's open end. The flight's pitch is a
+        // balance (see STAIR_RUN): steep enough to read as a ship's stairs,
+        // shallow enough that the treads still emerge from behind the platform
+        // edge into view instead of hiding inside the wedge it masks.
         // Only the treads and the inboard carriage face the eye; the risers
         // face the bow. The sloped handrail pokes above the platform edge, so
         // the flight reads even where its top treads are rightly hidden.
@@ -1162,7 +1177,7 @@ impl ShipRenderer {
         let companion_stairs = || {
             let (x0, x1) = (2.0f32, 3.3); // inboard / outboard edges
             let steps = 6;
-            let run = 4.0; // fore-aft reach of the flight
+            let run = STAIR_RUN; // fore-aft reach of the flight
             let (_, qd_y, _) = station_at(QDECK_BREAK + 0.1);
             let side_col = lume.col(RAIL_DK, lume.diff(n_wall(1.0)), 0.9);
             for k in (1..steps).rev() {
@@ -1308,27 +1323,94 @@ impl ShipRenderer {
         // the quarterdeck's begins on its own corner post.
         let post_h = 0.42; // m above the cap
         let post_hw = 0.05;
+        // The rail-top line down the whole ship as a (z, y) profile: one knot
+        // per station (the break's doubled station folds into one), with any
+        // sharp kink filleted into a short arc, so the climb from the waist
+        // rail up to the quarterdeck's turns shoulders rather than corners.
+        // The gentle sheer along the bow stays below the kink threshold and
+        // keeps its knots untouched.
+        let rail_profile: Vec<(f32, f32)> = {
+            let mut knots: Vec<(f32, f32)> = Vec::new();
+            for &(z, _, d, wh) in STATIONS.iter() {
+                if knots.last().is_some_and(|&(pz, _)| z - pz < 0.2) {
+                    continue;
+                }
+                knots.push((z, d + wh + post_h));
+            }
+            const FILLET_R: f32 = 0.55; // m of rail traded for each arc's arm
+            const KINK: f32 = 0.97; // cos of the bend that counts as a corner
+            let mut path: Vec<(f32, f32)> = vec![knots[0]];
+            for i in 1..knots.len() - 1 {
+                let (pz, py) = knots[i - 1];
+                let (cz, cy) = knots[i];
+                let (nz, ny) = knots[i + 1];
+                let (az, ay) = (cz - pz, cy - py);
+                let (bz, by) = (nz - cz, ny - cy);
+                let (la, lb) = (az.hypot(ay), bz.hypot(by));
+                if (az * bz + ay * by) / (la * lb).max(1e-6) > KINK {
+                    path.push((cz, cy));
+                    continue;
+                }
+                let r = FILLET_R.min(0.45 * la).min(0.45 * lb);
+                let a = (cz - az / la * r, cy - ay / la * r);
+                let c = (cz + bz / lb * r, cy + by / lb * r);
+                let steps = 5;
+                for s in 0..=steps {
+                    let t = s as f32 / steps as f32;
+                    let u = 1.0 - t;
+                    path.push((
+                        u * u * a.0 + 2.0 * u * t * cz + t * t * c.0,
+                        u * u * a.1 + 2.0 * u * t * cy + t * t * c.1,
+                    ));
+                }
+            }
+            path.push(*knots.last().unwrap());
+            path
+        };
+        // Rail height at fore-aft z, off the rounded profile, so the posts
+        // land exactly on the board even inside a fillet.
+        let rail_y_at = |z: f32| -> f32 {
+            for pair in rail_profile.windows(2) {
+                let ((z0, y0), (z1, y1)) = (pair[0], pair[1]);
+                if z >= z0 && z <= z1 && z1 > z0 {
+                    return y0 + (y1 - y0) * (z - z0) / (z1 - z0);
+                }
+            }
+            rail_profile.last().map(|&(_, y)| y).unwrap_or(0.0)
+        };
         let railing = |aft: bool| {
             for side in [-1.0f32, 1.0] {
-                let mut prev: Option<(Vec2, f32)> = None; // previous rail top + px/m
-                for &(z, b, d, wh) in STATIONS.iter().filter(|s| is_aft(s.0, s.2) == aft) {
-                    let (Some((cap_p, s)), Some((rail_p, _))) =
-                        (cam(side * b, d + wh, z), cam(side * b, d + wh + post_h, z))
-                    else {
+                // The rail board riding the rounded profile. Each sampled
+                // span draws in the pass its midpoint belongs to, so the
+                // runs still split around the platform for the painter's
+                // order while the shoulder arcs stay seamless across it.
+                for pair in rail_profile.windows(2) {
+                    let (z0, y0) = pair[0];
+                    let (z1, y1) = pair[1];
+                    if ((z0 + z1) * 0.5 > QDECK_BREAK) != aft {
                         continue;
-                    };
-                    // The rail board from the previous post's top.
-                    if let Some((pr, ps)) = prev {
+                    }
+                    let b0 = station_at(z0).0;
+                    let b1 = station_at(z1).0;
+                    if let (Some((p0, s0)), Some((p1, s1))) =
+                        (cam(side * b0, y0, z0), cam(side * b1, y1, z1))
+                    {
                         quad(
-                            pr,
-                            rail_p,
-                            vec2(rail_p.x, rail_p.y + 0.07 * s),
-                            vec2(pr.x, pr.y + 0.07 * ps),
+                            p0,
+                            p1,
+                            vec2(p1.x, p1.y + 0.07 * s1),
+                            vec2(p0.x, p0.y + 0.07 * s0),
                             board_col,
                         );
                     }
-                    prev = Some((rail_p, s));
-                    // The stanchion itself.
+                }
+                // The stanchions, cap to the rounded rail line.
+                for &(z, b, d, wh) in STATIONS.iter().filter(|s| is_aft(s.0, s.2) == aft) {
+                    let (Some((cap_p, s)), Some((rail_p, _))) =
+                        (cam(side * b, d + wh, z), cam(side * b, rail_y_at(z), z))
+                    else {
+                        continue;
+                    };
                     let pw = (post_hw * s).max(1.0);
                     quad(
                         vec2(cap_p.x - pw, cap_p.y),
@@ -1436,10 +1518,25 @@ impl ShipRenderer {
             let (_, qd_y, _) = station_at(brk);
             let rail_y = qd_y + BREAST_RAIL_H; // waist-high off the platform
             let (rail_l, rail_r) = (-3.25f32, 1.6); // port bulwark → the stair head
+            let mid_y = qd_y + 0.45; // the mid rail below the top board
+            // The stair-head shoulder: the top board rounds down at its open
+            // end (a quarter arc) and lands on the mid rail, so the rail
+            // meets the stairs with a curve rather than a squared-off end.
+            // Top-board height over x; the posts and the net follow it.
+            let end_r = rail_y - mid_y;
+            let top_at = |x: f32| -> f32 {
+                let dx = x - (rail_r - end_r);
+                if dx <= 0.0 {
+                    rail_y
+                } else {
+                    mid_y + (end_r * end_r - dx * dx).max(0.0).sqrt()
+                }
+            };
             let posts = 6;
             for i in 0..posts {
                 let x = rail_l + (rail_r - rail_l) * (i as f32 / (posts - 1) as f32);
-                if let (Some((b0, s)), Some((t0, _))) = (cam(x, qd_y, brk), cam(x, rail_y, brk))
+                if let (Some((b0, s)), Some((t0, _))) =
+                    (cam(x, qd_y, brk), cam(x, top_at(x), brk))
                 {
                     let pw = (0.05 * s).max(1.0);
                     quad(
@@ -1457,32 +1554,58 @@ impl ShipRenderer {
             // mesh (every cell crossed corner to corner both ways), drawn
             // before the boards so they paint over its edges like lacing.
             {
-                let net_col = lume.col(ROPE, 0.5, 0.8);
-                let net_thick = (h * 0.0017).max(1.0);
                 let np = |x: f32, y: f32| cam(x, y, brk).map(|(p, _)| p);
-                let cells_x = 16; // meshes along the span
-                let cells_y = 4; // meshes up the drop
+                let cells_x = (((rail_r - rail_l) / NET_MESH_ALONG_M).round() as usize).max(1);
+                let cells_y = (((rail_y - qd_y) / NET_MESH_UP_M).round() as usize).max(1);
                 for ix in 0..cells_x {
+                    let xa = rail_l + (rail_r - rail_l) * ix as f32 / cells_x as f32;
+                    let xb = rail_l + (rail_r - rail_l) * (ix + 1) as f32 / cells_x as f32;
+                    // Column tops follow the stair-head shoulder, so the mesh
+                    // stays laced to the board through the curve.
+                    let (ta, tb) = (top_at(xa), top_at(xb));
                     for iy in 0..cells_y {
-                        let xa = rail_l + (rail_r - rail_l) * ix as f32 / cells_x as f32;
-                        let xb = rail_l + (rail_r - rail_l) * (ix + 1) as f32 / cells_x as f32;
-                        let ya = qd_y + (rail_y - qd_y) * iy as f32 / cells_y as f32;
-                        let yb = qd_y + (rail_y - qd_y) * (iy + 1) as f32 / cells_y as f32;
-                        if let (Some(p00), Some(p10), Some(p01), Some(p11)) =
-                            (np(xa, ya), np(xb, ya), np(xa, yb), np(xb, yb))
-                        {
+                        let (f0, f1) =
+                            (iy as f32 / cells_y as f32, (iy + 1) as f32 / cells_y as f32);
+                        if let (Some(p00), Some(p10), Some(p01), Some(p11)) = (
+                            np(xa, qd_y + (ta - qd_y) * f0),
+                            np(xb, qd_y + (tb - qd_y) * f0),
+                            np(xa, qd_y + (ta - qd_y) * f1),
+                            np(xb, qd_y + (tb - qd_y) * f1),
+                        ) {
                             draw_line(p00.x, p00.y, p11.x, p11.y, net_thick, net_col);
                             draw_line(p10.x, p10.y, p01.x, p01.y, net_thick, net_col);
                         }
                     }
                 }
             }
-            // The rail board along the post tops, and a mid rail below it.
-            for (y, th_m) in [(rail_y, 0.07f32), (qd_y + 0.45, 0.045)] {
-                if let (Some((l, s)), Some((r, _))) = (cam(rail_l, y, brk), cam(rail_r, y, brk))
-                {
-                    let th = th_m * s;
-                    quad(l, r, vec2(r.x, r.y + th), vec2(l.x, l.y + th), board_col);
+            // The mid rail below the top board, straight across the span
+            // (the shoulder arc lands on its line at the stair head).
+            if let (Some((l, s)), Some((r, _))) =
+                (cam(rail_l, mid_y, brk), cam(rail_r, mid_y, brk))
+            {
+                let th = 0.045 * s;
+                quad(l, r, vec2(r.x, r.y + th), vec2(l.x, l.y + th), board_col);
+            }
+            // The top board along the post tops: the straight run, then the
+            // shoulder arc, each span thickened perpendicular on screen so
+            // the board keeps its width as it turns down.
+            {
+                let mut line: Vec<(f32, f32)> = vec![(rail_l, rail_y), (rail_r - end_r, rail_y)];
+                let arc_steps = 6;
+                for i in 1..=arc_steps {
+                    let a = i as f32 / arc_steps as f32 * std::f32::consts::FRAC_PI_2;
+                    line.push((rail_r - end_r + end_r * a.sin(), mid_y + end_r * a.cos()));
+                }
+                let proj: Vec<(Vec2, f32)> =
+                    line.iter().filter_map(|&(x, y)| cam(x, y, brk)).collect();
+                for pr in proj.windows(2) {
+                    let ((p0, s0), (p1, _)) = (pr[0], pr[1]);
+                    let d = p1 - p0;
+                    let mut n = vec2(-d.y, d.x) / d.length().max(1e-3) * (0.07 * s0);
+                    if n.y < 0.0 {
+                        n = -n;
+                    }
+                    quad(p0, p1, p1 + n, p0 + n, board_col);
                 }
             }
         }
