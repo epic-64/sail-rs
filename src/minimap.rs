@@ -8,9 +8,10 @@
 //! (with any neighbouring isles) comes into view; if it strays far its arrow clamps
 //! to the frame edge rather than flying off the chart.
 //!
-//! Drawn straight to the screen (after `set_default_camera`), so the same renderer
-//! serves both the always-on corner HUD map (`MinimapPalette::hud`) and the
-//! captain's-log chart on parchment (`MinimapPalette::parchment`).
+//! Drawn straight to the screen (after `set_default_camera`), on parchment
+//! (`MinimapPalette::parchment`): it serves the captain's-log chart and the port
+//! board's leg preview. (The always-on chart the captain steers by is the deck
+//! chart at the wheel, see [`crate::ship_render::DeckChart`].)
 
 use macroquad::prelude::*;
 
@@ -23,8 +24,7 @@ fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
     Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a)
 }
 
-/// The minimap's ink colours. The corner HUD map is drawn over a dark glass panel;
-/// the logbook copy is inked onto parchment, so each wants its own scheme.
+/// The minimap's ink colours, inked onto the logbook / port-board parchment.
 pub struct MinimapPalette {
     pub panel: Color,
     pub border: Color,
@@ -39,22 +39,6 @@ pub struct MinimapPalette {
 }
 
 impl MinimapPalette {
-    /// Bright marks on a dark glass panel for the corner HUD map.
-    pub fn hud() -> Self {
-        MinimapPalette {
-            panel: rgba(8, 16, 28, 0.55),
-            border: rgba(150, 200, 255, 0.28),
-            wind_streak: rgba(150, 200, 255, 0.20),
-            shipyard_ring: rgba(96, 170, 255, 0.95),
-            port: rgba(255, 224, 138, 0.95),
-            land: rgba(176, 214, 210, 0.8),
-            ship: rgba(255, 255, 255, 0.95),
-            mission_mark: rgba(255, 210, 90, 0.95),
-            race_mark: rgba(255, 92, 92, 0.95),
-            trader: rgba(96, 210, 120, 0.95),
-        }
-    }
-
     /// Sepia inks for the logbook chart drawn on beige parchment. The panel itself
     /// is transparent here — the log draws the parchment leaf behind it.
     pub fn parchment() -> Self {

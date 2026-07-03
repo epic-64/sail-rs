@@ -112,8 +112,7 @@ const QDECK_BREAK: f32 = 5.0;
 const STAIR_RUN: f32 = 3.6;
 
 /// The breast rail across the quarterdeck's forward edge: where it stands and
-/// how high its top rail rides off the platform. Shared by the rail itself and
-/// the deck chart clipped to it (see [`DeckChart`]).
+/// how high its top rail rides off the platform.
 const BREAST_RAIL_Z: f32 = QDECK_BREAK + 0.1;
 const BREAST_RAIL_H: f32 = 0.85;
 
@@ -1098,7 +1097,7 @@ impl ShipRenderer {
         self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
         self.draw_deck(&sway, pitch_ang, &lume, h, w, true);
         // The chart board after the rig, so no rope paints across the parchment;
-        // it stands on the breast rail, nearer the eye than everything forward.
+        // it stands on its pedestal by the wheel, nearer the eye than the deck.
         if let Some(chart) = &rig.chart {
             self.draw_chart(&sway, chart, pitch_ang, &lume, h, w);
         }
@@ -1769,11 +1768,11 @@ impl ShipRenderer {
         draw_circle(hub.x, hub.y, r * 0.22, rim_col);
     }
 
-    /// The deck chart aboard: a small parchment board clipped to the breast
-    /// rail just port of the wheel, leaned like a chart desk so its face tips
-    /// up toward the helmsman's eye. Inked with the current archipelago's isles
-    /// and a sepia heading arrow for the ship (see [`DeckChart`]), in the log's
-    /// parchment palette, so the local waters are a glance away from the helm.
+    /// The deck chart aboard: a parchment board on a pedestal stand on the
+    /// quarterdeck just port of the wheel, leaned like a chart desk so its face
+    /// tips up toward the helmsman's eye. Inked with the current archipelago's
+    /// isles and a sepia heading arrow for the ship (see [`DeckChart`]), in the
+    /// log's parchment palette, so the local waters are a glance away from the helm.
     fn draw_chart(
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,
@@ -1783,21 +1782,23 @@ impl ShipRenderer {
         h: f32,
         w: f32,
     ) {
-        // The board in metres: bottom edge resting on the breast rail's top,
-        // port of the wheel so it never blocks the view dead ahead; the top
-        // edge leans toward the bow so the face reads from above. The face is
-        // square (width == length) so the isotropic chart keeps the isles' true
-        // spacing rather than stretching one axis.
-        const XL: f32 = -2.4;
-        const BOARD_SIDE: f32 = 0.82;
+        // The board in metres: a square chart (width == length, so the isotropic
+        // plot keeps the isles' true spacing) leaned back like a chart desk so its
+        // face tips up toward the helmsman's eye. It stands on its own pedestal on
+        // the quarterdeck just port of the wheel (clear of the view dead ahead),
+        // pulled aft near the helm rather than clipped to the forward rail.
+        const XL: f32 = -2.15;
+        const BOARD_SIDE: f32 = 0.95;
         const XR: f32 = XL + BOARD_SIDE;
         const BOARD_H: f32 = BOARD_SIDE;
+        const STAND_Z: f32 = 5.85; // aft of the breast rail, nearer the wheel
+        const STAND_H: f32 = 0.74; // the board's near edge above the quarterdeck
         const LEAN: f32 = 0.5; // radians off vertical, top toward the bow
 
-        let (_, qd_y, _) = station_at(BREAST_RAIL_Z);
-        let y0 = qd_y + BREAST_RAIL_H - 0.04; // clipped onto the top rail board
+        let deck_y = station_at(STAND_Z).1;
+        let y0 = deck_y + STAND_H; // the near (bottom) edge, atop the stand
         let (ls, lc) = LEAN.sin_cos();
-        let (y1, z1) = (y0 + BOARD_H * lc, BREAST_RAIL_Z - BOARD_H * ls);
+        let (y1, z1) = (y0 + BOARD_H * lc, STAND_Z - BOARD_H * ls);
 
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
@@ -1805,8 +1806,8 @@ impl ShipRenderer {
         };
         // Every corner must clear the near plane, or the board is off-screen.
         let (Some((bl, s)), Some((br, _)), Some((tl, _)), Some((tr, _))) = (
-            cam(XL, y0, BREAST_RAIL_Z),
-            cam(XR, y0, BREAST_RAIL_Z),
+            cam(XL, y0, STAND_Z),
+            cam(XR, y0, STAND_Z),
             cam(XL, y1, z1),
             cam(XR, y1, z1),
         ) else {
@@ -1832,6 +1833,35 @@ impl ShipRenderer {
         let frame_col = lume.col(RAIL_DK, diff, 0.9);
         let faint = Color::new(ink.r, ink.g, ink.b, ink.a * 0.3);
         let line_w = (0.012 * s).max(1.0);
+
+        // The stand: a slim pedestal from the quarterdeck up to the board's
+        // underside, on a splayed foot, so the chart stands by the wheel. Drawn
+        // before the face so the board rests on top of the post. The helmsman sits
+        // aft and to starboard of it, so its aft, right and top faces show.
+        let xc = (XL + XR) * 0.5;
+        let zc = (STAND_Z + z1) * 0.5; // under the board's mid-line
+        let post_top = (y0 + y1) * 0.5; // meets the board underside at its centre
+        let boxy = |x0: f32, x1b: f32, ylo: f32, yhi: f32, z_near: f32, z_far: f32| {
+            let c = |x: f32, y: f32, z: f32| cam(x, y, z).map(|(p, _)| p);
+            if let (Some(a), Some(b), Some(cc), Some(d)) =
+                (c(x0, ylo, z_near), c(x1b, ylo, z_near), c(x1b, yhi, z_near), c(x0, yhi, z_near))
+            {
+                quad(a, b, cc, d, lume.face(RAIL_DK, (0.0, 0.2, 0.98))); // aft face
+            }
+            if let (Some(a), Some(b), Some(cc), Some(d)) =
+                (c(x1b, ylo, z_near), c(x1b, ylo, z_far), c(x1b, yhi, z_far), c(x1b, yhi, z_near))
+            {
+                quad(a, b, cc, d, lume.face(RAIL_DK, (0.92, 0.2, 0.34))); // right face
+            }
+            if let (Some(a), Some(b), Some(cc), Some(d)) =
+                (c(x0, yhi, z_near), c(x1b, yhi, z_near), c(x1b, yhi, z_far), c(x0, yhi, z_far))
+            {
+                quad(a, b, cc, d, lume.face(RAIL, (0.0, 0.98, 0.2))); // top
+            }
+        };
+        // Foot first, then the post over it (so the post's foot-line is hidden).
+        boxy(xc - 0.16, xc + 0.16, deck_y, deck_y + 0.06, zc + 0.13, zc - 0.13);
+        boxy(xc - 0.05, xc + 0.05, deck_y + 0.06, post_top, zc + 0.05, zc - 0.05);
 
         // The wooden backing board, a whisker proud of the parchment all round,
         // then the sheet itself and a sketched double border.
@@ -1907,17 +1937,6 @@ impl ShipRenderer {
         let bl = ap(su - fu * 0.042 + ru * 0.028, sv - fv * 0.042 + rv * 0.028);
         let br = ap(su - fu * 0.042 - ru * 0.028, sv - fv * 0.042 - rv * 0.028);
         draw_triangle(tip, bl, br, pcol(CHART_SHIP, 1.0));
-
-        // Two clips lashing the board to the rail, so it hangs rather than floats.
-        for u in [0.14f32, 0.86] {
-            quad(
-                at(u - 0.035, -0.10),
-                at(u + 0.035, -0.10),
-                at(u + 0.035, 0.05),
-                at(u - 0.035, 0.05),
-                lume.col(RAIL, diff, 0.9),
-            );
-        }
     }
 
     /// Mast, yard and the square sail: the articulating rig. The sail is built
