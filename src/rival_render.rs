@@ -24,11 +24,11 @@ use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
 use crate::projection::{BASE_EYE, MAX_VIEW};
-use crate::sailing::Kinematics;
+use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
-    station_at, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH, SAIL_H_M, SAIL_STANDOFF_M,
-    SAIL_W_M, SPAR, SPRIT_BASE, SPRIT_TIP, STATIONS, YARD_H_M,
+    station_at, BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH,
+    SAIL_H_M, SAIL_STANDOFF_M, SAIL_W_M, SPAR, SPRIT_BASE, SPRIT_TIP, STATIONS, YARD_H_M,
 };
 
 use std::f32::consts::PI;
@@ -44,11 +44,6 @@ const WL_TUCK: f32 = 0.62; // half-beam left at the waterline as the hull tucks 
 const HULL: [f32; 3] = [96.0, 68.0, 42.0];
 const HULL_DK: [f32; 3] = [62.0, 44.0, 28.0];
 
-// Rig set: the miniature's yard holds a fixed working brace (her live wind is
-// not plumbed out here), and the cloth bellies a fixed draft to leeward of it,
-// deepest toward the free foot like the player's sail.
-const BRACE: f32 = 0.42;
-const BELLY_M: f32 = 1.1;
 
 /// Floor under the per-face Lambert term, the sky-fill washing shadowed faces.
 const AMBIENT: f32 = 0.45;
@@ -97,6 +92,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         half_fov_h_view,
         w,
         sun,
+        wind_toward,
         ..
     } = *view;
     let d = kin.pos.distance_to(rk.pos);
@@ -289,8 +285,14 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         -1.0,
     );
 
-    // --- Rig: mast, braced yard and bowsprit at the player's dimensions.
-    let (sb, cb) = BRACE.sin_cos();
+    // --- Rig: mast, yard and bowsprit at the player's dimensions, trimmed to
+    // the same prevailing wind the player's rig is. The yard braces toward the
+    // wind's bearing off her own bow by the player's rule (hard over on a beam
+    // wind, see `BRACE_LIMIT`); her helm holds course rather than chasing trim,
+    // so no easing is needed.
+    let wind_rel = wrap_angle(wind_toward - rk.heading_rad);
+    let brace = clamp(-wind_rel, -BRACE_LIMIT, BRACE_LIMIT);
+    let (sb, cb) = brace.sin_cos();
     line3(
         &mut prims,
         vert(0.0, station_at(0.0).1, 0.0),
@@ -300,8 +302,8 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     let yhw = SAIL_W_M * 0.5 + 0.4; // the yardarms run a touch past the cloth
     line3(
         &mut prims,
-        vert(-cb * yhw, YARD_H_M, -sb * yhw),
-        vert(cb * yhw, YARD_H_M, sb * yhw),
+        vert(-cb * yhw, YARD_H_M, sb * yhw),
+        vert(cb * yhw, YARD_H_M, -sb * yhw),
         0.11,
     );
     line3(
@@ -312,16 +314,21 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     );
 
     // --- Sail: a coarse grid of cloth panels laced flat along the yard,
-    // bellying forward of it and deepest toward the free foot, so the curve
-    // reads from any angle the way the player's sail does.
+    // bellying by how much wind she actually harvests on this point of sail
+    // (the physics' own curve, so the cloth hangs slack in irons), deepest
+    // toward the free foot, with the player's own draft profiles. The panel's
+    // out-of-plane offset rides in front of the mast (`z0` negative = forward)
+    // and rotates with the brace, as `ship_render::draw_rig` does it.
     const COLS: usize = 4;
     const ROWS: usize = 2;
+    let depth = -wind_factor_rel(wind_rel) * BELLY_DEPTH * SAIL_W_M;
     let sail_pt = |i: usize, j: usize| {
         let u = i as f32 / COLS as f32 - 0.5;
         let v = j as f32 / ROWS as f32;
-        let along = u * SAIL_W_M;
-        let sag = SAIL_STANDOFF_M + BELLY_M * (0.25 + 0.75 * v) * (u * PI).cos();
-        vert(along * cb + sag * sb, YARD_H_M - v * SAIL_H_M, along * sb - sag * cb)
+        let x0 = u * SAIL_W_M;
+        let z0 = -SAIL_STANDOFF_M
+            + depth * (v * 0.75 * PI).sin() * (1.0 - 0.3 * (2.0 * u).powi(2));
+        vert(x0 * cb + z0 * sb, YARD_H_M - v * SAIL_H_M, -x0 * sb + z0 * cb)
     };
     for i in 0..COLS {
         for j in 0..ROWS {
@@ -337,13 +344,16 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         }
     }
 
-    // --- The pennant streaming aft off the masthead (red for a rival, green
-    // for a trader). A fixed bright term keeps its signal colour saturated.
+    // --- The pennant off the masthead (red for a rival, green for a trader),
+    // streaming dead downwind: unlike the yard it knows no brace limit, so it
+    // shows the true wind even when the sail is hauled hard over. A fixed
+    // bright term keeps its signal colour saturated.
+    let (pw_s, pw_c) = wind_rel.sin_cos();
     tri(
         &mut prims,
         vert(0.0, MAST_TOP_M, 0.0),
-        vert(0.0, MAST_TOP_M - 0.5, 0.05),
-        vert(0.5, MAST_TOP_M - 0.18, 1.3),
+        vert(0.0, MAST_TOP_M - 0.45, 0.0),
+        vert(pw_s * 1.4, MAST_TOP_M - 0.15, -pw_c * 1.4),
         pennant,
         0.85,
     );

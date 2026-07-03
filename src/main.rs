@@ -1610,6 +1610,7 @@ async fn run_game(
             t,
             sea,
             motion.heave,
+            wind.toward_rad,
             &sea_pal,
             reflect_sky,
             sky.light_az,

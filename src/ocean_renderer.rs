@@ -283,6 +283,9 @@ impl OceanRenderer {
         t: f32,
         sea: f32,
         heave: f32,
+        // The world bearing the wind blows toward: the rival and the traders trim
+        // their rigs and stream their pennants by it (see `SceneView::wind_toward`).
+        wind_toward: f32,
         // The sea palette for the current clock (already blended across the day),
         // the fair-weather sky gradient to reflect, and the active light: its world
         // bearing, sine-altitude and brightness (sun by day, moon by night).
@@ -428,6 +431,7 @@ impl OceanRenderer {
             w,
             h,
             sun: sun_world,
+            wind_toward,
         };
 
         // Active-light direction in the camera's (right, forward, up) frame. As the
