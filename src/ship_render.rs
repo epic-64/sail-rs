@@ -67,9 +67,9 @@ const YAW_SWAY_PX: f32 = 180.0; // px of pan per rad of hull yaw
 // around the mast station with the rig between them, so the crates and rails
 // standing nearer the eye than the mast paint over its foot.
 const CAM_AFT: f32 = 10.0; // the eye: metres abaft the mast
-// Eye height above the waist deck: a helmsman's eye line (~1.65 m) stood on the
+// Eye height above the waist deck: a helmsman's eye line (~1.75 m) stood on the
 // quarterdeck (see the raised stations). Raising this reads as a taller viewer.
-const CAM_UP: f32 = 2.45;
+const CAM_UP: f32 = 2.75;
 const CAM_F: f32 = 0.58; // focal length, ×w (~80° horizontal field of view)
 const CAM_NEAR: f32 = 0.8; // metres; geometry nearer the eye than this is dropped
 /// The horizon row the camera is levelled on, ×h (`ocean_renderer` draws the
@@ -94,10 +94,10 @@ const STATIONS: [(f32, f32, f32, f32); 13] = [
     (0.0, 3.50, 0.02, 0.65), // the mast station: full beam
     (3.0, 3.45, 0.00, 0.66),
     (4.0, 3.40, 0.005, 0.68), // the sheer starts its climb to the quarterdeck...
-    (QDECK_BREAK, 3.36, 0.01, 1.49), // ...topping out level with the platform's wall
-    (QDECK_BREAK, 3.36, 0.82, 0.68), // quarterdeck side of the break (the riser)
-    (9.0, 3.05, 0.88, 0.74),
-    (11.0, 2.72, 0.92, 0.80), // transom, behind the eye
+    (QDECK_BREAK, 3.36, 0.01, 1.67), // ...topping out level with the platform's wall
+    (QDECK_BREAK, 3.36, 1.00, 0.68), // quarterdeck side of the break (the riser)
+    (9.0, 3.05, 1.06, 0.74),
+    (11.0, 2.72, 1.10, 0.80), // transom, behind the eye
 ];
 
 /// Where the deck steps up onto the helm's raised platform (the doubled
@@ -109,7 +109,7 @@ const QDECK_BREAK: f32 = 5.0;
 /// shorter the run, the steeper the climb. Shared with the cargo fence in
 /// `step_cargo`, so sliding crates fetch up against the flight exactly where
 /// it stands.
-const STAIR_RUN: f32 = 2.2;
+const STAIR_RUN: f32 = 3.6;
 
 /// The breast rail across the quarterdeck's forward edge: where it stands and
 /// how high its top rail rides off the platform. Shared by the rail itself and
@@ -1683,7 +1683,7 @@ impl ShipRenderer {
         // Hub about waist height off the quarterdeck, far under the eye line:
         // the helmsman looks down onto the wheel, its lower rim running off the
         // bottom of the screen.
-        const HUB_Y: f32 = 1.25; // above the waist deck; the pedestal adds the rest
+        const HUB_Y: f32 = 1.43; // above the waist deck; the pedestal adds the rest
         const WHEEL_R: f32 = 0.52;
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
