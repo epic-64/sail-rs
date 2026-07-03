@@ -302,7 +302,16 @@ const CRATE_DK: [f32; 3] = [108.0, 80.0, 46.0];
 // cloth's warmth so the little board sits in the same palette.
 const CHART_PARCH: [f32; 3] = [216.0, 198.0, 158.0];
 const CHART_INK: [f32; 3] = [66.0, 50.0, 34.0];
-const CHART_PIN: [f32; 3] = [158.0, 42.0, 32.0];
+// The map's marks, matching the captain's-log parchment minimap
+// (`minimap::MinimapPalette::parchment`) so the deck chart reads as the same hand:
+// faint isle bodies, heavier ports, a blue shipyard ring, target rings (yellow for
+// a contract, red for the booked race), and a sepia ship arrow.
+const CHART_LAND: [f32; 3] = [42.0, 32.0, 24.0];
+const CHART_PORT: [f32; 3] = [79.0, 47.0, 23.0];
+const CHART_YARD: [f32; 3] = [47.0, 111.0, 158.0];
+const CHART_MISSION: [f32; 3] = [200.0, 150.0, 47.0];
+const CHART_RACE: [f32; 3] = [168.0, 40.0, 30.0];
+const CHART_SHIP: [f32; 3] = [79.0, 47.0, 23.0];
 
 // --- Deck cargo physics --------------------------------------------------------
 // The crates are heavy and lashed: ordinary sailing never beats their static
@@ -486,15 +495,32 @@ impl Lume {
     }
 }
 
-/// The world chart pinned to the breast rail beside the wheel, once the
-/// captain owns the World Map ware: a keepsake miniature of the whole world,
-/// readable from the helm without opening the captain's log. Positions are
-/// normalized chart space, [0,1] on each axis (u east, v north).
+/// One local isle's plot on the deck chart: its position in chart space plus the
+/// fittings that ring it, mirroring the log minimap's rings (a shipyard, an
+/// accepted contract's destination, the booked race's mark).
+pub struct ChartPlot {
+    /// Position in normalized chart space, [0,1] on each axis (u east, v north).
+    pub u: f32,
+    pub v: f32,
+    pub is_port: bool,
+    pub is_shipyard: bool,
+    /// An accepted contract delivers here (a yellow ring).
+    pub is_mission: bool,
+    /// The booked race's mark (a red ring).
+    pub is_race: bool,
+}
+
+/// The chart pinned to the breast rail beside the wheel: a parchment minimap of
+/// the ship's current archipelago (the local cluster), readable from the helm
+/// without opening the captain's log. Positions are normalized chart space,
+/// [0,1] on each axis (u east, v north), framing that cluster's isles.
 pub struct DeckChart<'a> {
-    /// Every isle's plot: (u, v, is_port).
-    pub isles: &'a [(f32, f32, bool)],
-    /// The ship's own plot in the same space: the "you are here" pin.
+    /// Every local isle's plot and its fittings.
+    pub isles: &'a [ChartPlot],
+    /// The ship's own plot in the same space: the "you are here" heading arrow.
     pub ship: (f32, f32),
+    /// The ship's heading (radians, 0 = north): the arrow's bearing.
+    pub heading: f32,
 }
 
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
@@ -521,8 +547,8 @@ pub struct RigInput<'a> {
     /// Frontal slam this frame, [0,1] (the spray's input): a plunge jolts the
     /// cargo forward and floats weight off the planks for a moment.
     pub slam: f32,
-    /// The world chart pinned by the wheel, `None` until the captain owns the
-    /// World Map ware (the board simply isn't aboard yet).
+    /// The parchment minimap pinned by the wheel (always aboard); `None` only
+    /// where a caller has no chart to draw (e.g. the render tests).
     pub chart: Option<DeckChart<'a>>,
 }
 
@@ -1743,11 +1769,11 @@ impl ShipRenderer {
         draw_circle(hub.x, hub.y, r * 0.22, rim_col);
     }
 
-    /// The world chart aboard: a small parchment board clipped to the breast
+    /// The deck chart aboard: a small parchment board clipped to the breast
     /// rail just port of the wheel, leaned like a chart desk so its face tips
-    /// up toward the helmsman's eye. Inked with the isles and a red pin for the
-    /// ship (see [`DeckChart`]), so the whole world is a glance away from the
-    /// helm without opening the captain's log.
+    /// up toward the helmsman's eye. Inked with the current archipelago's isles
+    /// and a sepia heading arrow for the ship (see [`DeckChart`]), in the log's
+    /// parchment palette, so the local waters are a glance away from the helm.
     fn draw_chart(
         &self,
         sway: &impl Fn(f32, f32) -> Vec2,
@@ -1759,10 +1785,13 @@ impl ShipRenderer {
     ) {
         // The board in metres: bottom edge resting on the breast rail's top,
         // port of the wheel so it never blocks the view dead ahead; the top
-        // edge leans toward the bow so the face reads from above.
+        // edge leans toward the bow so the face reads from above. The face is
+        // square (width == length) so the isotropic chart keeps the isles' true
+        // spacing rather than stretching one axis.
         const XL: f32 = -2.4;
-        const XR: f32 = -1.45;
-        const BOARD_H: f32 = 0.68;
+        const BOARD_SIDE: f32 = 0.82;
+        const XR: f32 = XL + BOARD_SIDE;
+        const BOARD_H: f32 = BOARD_SIDE;
         const LEAN: f32 = 0.5; // radians off vertical, top toward the bow
 
         let (_, qd_y, _) = station_at(BREAST_RAIL_Z);
@@ -1830,20 +1859,50 @@ impl ShipRenderer {
             draw_line(a.x, a.y, b.x, b.y, line_w, faint);
         }
 
+        // A parchment-palette mark, lit with the board then tinted to the log
+        // minimap's alpha (faint land, heavier ports) so both charts read alike.
+        let pcol = |base: [f32; 3], a: f32| {
+            let c = lume.col(base, diff, 1.0);
+            Color::new(c.r, c.g, c.b, a)
+        };
+
         // The isles, inked inside a margin so none kisses the border. Ports get
-        // the heavier blot, the rest a fleck.
+        // the heavier blot, the rest a fleck; then concentric rings for the
+        // fittings, smallest first so a larger never hides a smaller: a blue
+        // shipyard, a yellow contract mark, a red race mark (colour tells them
+        // apart, as on the log minimap, without crowding letters onto so small a
+        // board).
         let plot = |u: f32, v: f32| at(0.08 + u * 0.84, 0.08 + v * 0.84);
-        for &(u, v, is_port) in chart.isles {
-            let p = plot(u, v);
-            let r = if is_port { 0.020 * s } else { 0.013 * s };
-            draw_circle(p.x, p.y, r.max(1.0), ink);
+        let ring_w = (line_w * 1.4).max(1.5);
+        for isle in chart.isles {
+            let p = plot(isle.u, isle.v);
+            let (base, a, r) = if isle.is_port {
+                (CHART_PORT, 0.7, 0.020 * s)
+            } else {
+                (CHART_LAND, 0.35, 0.013 * s)
+            };
+            draw_circle(p.x, p.y, r.max(1.0), pcol(base, a));
+            if isle.is_shipyard {
+                draw_circle_lines(p.x, p.y, (0.030 * s).max(2.0), line_w, pcol(CHART_YARD, 1.0));
+            }
+            if isle.is_mission {
+                draw_circle_lines(p.x, p.y, (0.044 * s).max(3.0), ring_w, pcol(CHART_MISSION, 1.0));
+            }
+            if isle.is_race {
+                draw_circle_lines(p.x, p.y, (0.058 * s).max(4.0), ring_w, pcol(CHART_RACE, 1.0));
+            }
         }
-        // The ship's pin: a red-headed tack over the plots, ringed so it reads
-        // against a crowded archipelago.
-        let (su, sv) = chart.ship;
-        let p = plot(clamp(su, 0.0, 1.0), clamp(sv, 0.0, 1.0));
-        draw_circle_lines(p.x, p.y, (0.030 * s).max(2.0), line_w, ink);
-        draw_circle(p.x, p.y, (0.018 * s).max(1.5), lume.col(CHART_PIN, diff, 1.0));
+        // The ship's "you are here": a slim sepia heading arrow over the plots,
+        // clamped to the frame so she stays on the chart out over open water.
+        // North is up the board, so forward = (sin, cos) in (east, north).
+        let (su, sv) = (clamp(chart.ship.0, 0.0, 1.0), clamp(chart.ship.1, 0.0, 1.0));
+        let (fu, fv) = (chart.heading.sin(), chart.heading.cos());
+        let (ru, rv) = (chart.heading.cos(), -chart.heading.sin()); // forward rotated 90 cw
+        let ap = |u: f32, v: f32| plot(clamp(u, -0.05, 1.05), clamp(v, -0.05, 1.05));
+        let tip = ap(su + fu * 0.075, sv + fv * 0.075);
+        let bl = ap(su - fu * 0.042 + ru * 0.028, sv - fv * 0.042 + rv * 0.028);
+        let br = ap(su - fu * 0.042 - ru * 0.028, sv - fv * 0.042 - rv * 0.028);
+        draw_triangle(tip, bl, br, pcol(CHART_SHIP, 1.0));
 
         // Two clips lashing the board to the rail, so it hangs rather than floats.
         for u in [0.14f32, 0.86] {

@@ -329,36 +329,6 @@ async fn run_game(
             .collect()
     };
     let mut features = regen_features(feat_density_level);
-    // The deck chart's frame (see `ship_render::DeckChart`): the world's bounding
-    // box, mapping any position into [0,1] chart space (u east, v north). Isle
-    // plots are fixed, so they're taken once; the ship's pin goes through the
-    // same mapping each frame.
-    let chart_uv = {
-        let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
-        let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
-        for i in &world.islands {
-            min_x = min_x.min(i.pos.x);
-            max_x = max_x.max(i.pos.x);
-            min_y = min_y.min(i.pos.y);
-            max_y = max_y.max(i.pos.y);
-        }
-        let (sx, sy) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
-        move |p: Vec2| ((p.x - min_x) / sx, (p.y - min_y) / sy)
-    };
-    let chart_isles: Vec<(f32, f32, bool)> = world
-        .islands
-        .iter()
-        .map(|i| {
-            let (u, v) = chart_uv(i.pos);
-            (u, v, i.is_port)
-        })
-        .collect();
-    // `SAIL_CHART=1` forces the deck chart board on without owning the World
-    // Map (a native dev convenience, matching `SAIL_TOUCH`'s style).
-    #[cfg(not(target_arch = "wasm32"))]
-    let force_chart = std::env::var_os("SAIL_CHART").is_some();
-    #[cfg(target_arch = "wasm32")]
-    let force_chart = false;
     let home = world.cluster_at(Vec2::ZERO);
     let start_isle = home
         .island_ids
@@ -1480,6 +1450,37 @@ async fn run_game(
         }
 
         // --- Ship (deck + rig) -------------------------------------------------
+        // The deck chart by the wheel frames the ship's current archipelago (its local
+        // cluster) in the log's parchment tones (see `ship_render::draw_chart`), so the
+        // local isles read large rather than the whole world crammed to specks. Reframed
+        // each frame as she crosses between archipelagos; her heading arrow clamps to the
+        // frame edge when she strays out over open water.
+        let chart_cluster = world.cluster_at(kin.pos);
+        let (chart_c, chart_half) = world.cluster_bounds(chart_cluster);
+        // A little breathing room past the isles so none kisses the chart's edge.
+        let chart_frame = (chart_half * 1.15).max(1.0);
+        let chart_uv = |p: Vec2| {
+            (
+                0.5 + (p.x - chart_c.x) / (2.0 * chart_frame),
+                0.5 + (p.y - chart_c.y) / (2.0 * chart_frame),
+            )
+        };
+        let chart_isles: Vec<ship_render::ChartPlot> = world
+            .cluster_islands(chart_cluster)
+            .iter()
+            .map(|i| {
+                let (u, v) = chart_uv(i.pos);
+                ship_render::ChartPlot {
+                    u,
+                    v,
+                    is_port: i.is_port,
+                    is_shipyard: i.is_shipyard,
+                    is_mission: gs.active_missions.iter().any(|m| m.target_id == i.id),
+                    is_race: gs.race.iter().any(|r| r.target_id == i.id),
+                }
+            })
+            .collect();
+
         // The deck leans with the same swell roll *and* wind heel, so she visibly
         // heels under sail while the horizon tilts the other way; pitch/heave are
         // read straight off the swell.
@@ -1501,11 +1502,12 @@ async fn run_game(
             speed: kin.speed(),
             yaw_rate: kin.yaw_rate,
             slam,
-            // The chart board by the wheel, aboard once the World Map is owned
-            // (or forced for dev testing, see `force_chart`).
-            chart: (gs.owns(SpecialItem::WorldMap) || force_chart).then(|| ship_render::DeckChart {
+            // The parchment minimap of the current archipelago, always aboard
+            // (see `chart_isles` above).
+            chart: Some(ship_render::DeckChart {
                 isles: &chart_isles,
                 ship: chart_uv(kin.pos),
+                heading: kin.heading_rad,
             }),
         };
         // --- Bow spray ---------------------------------------------------------
