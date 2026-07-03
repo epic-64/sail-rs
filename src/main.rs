@@ -9,6 +9,8 @@ mod captains_log;
 mod celestial;
 mod checklist;
 mod clouds;
+mod dig_site;
+mod dig_view;
 mod flotsam;
 mod flotsam_render;
 mod font;
@@ -51,6 +53,7 @@ use macroquad::prelude::*;
 
 use game_state::{hull, upgrades, GameState, Market};
 use geometry::{clamp, compass, wrap_angle, Vec2};
+use dig_view::Shore;
 use port_view::Harbor;
 use ocean_renderer::OceanRenderer;
 use projection::MAX_VIEW;
@@ -342,6 +345,11 @@ async fn run_game(
     // a starting purse and larder, free to sail in and dock.
     let mut gs = GameState::start();
     let mut harbor = Harbor::new();
+    let mut shore = Shore::new();
+    // Isle fields worked today, by (island id, day), so a field can't be re-dug
+    // for fresh gold until it reshuffles at the next sunrise. Session-scoped for
+    // now (a save/reload forgets it).
+    let mut dug_sites: std::collections::HashSet<(i32, u32)> = std::collections::HashSet::new();
     // The pause menu (`pause`, Esc in open water) and the audio bed (`sounds`) are
     // owned by `main` and handed in so they survive a change of world.
 
@@ -766,6 +774,19 @@ async fn run_game(
             } else {
                 harbor.set_sail(&mut gs);
             }
+        } else if shore.is_open() {
+            // Ashore digging: freeze the ship and route input to the dig board.
+            sail_mode = 0;
+            kin.vel = Vec2::ZERO;
+            kin.yaw_rate = 0.0;
+            let put_to_sea = shore
+                .screen
+                .as_mut()
+                .map(|s| s.handle_input(&mut gs, sounds, &touch))
+                .unwrap_or(true);
+            if put_to_sea {
+                shore.cast_off();
+            }
         } else {
             // Sails are set in discrete notches (W deploys, S furls): set once, the
             // ship keeps going; only the *first* press of a held key steps the sail.
@@ -969,13 +990,28 @@ async fn run_game(
             }
 
             // Offer the port the bow is pointed at; tie up on Space, sails furled.
+            // A portless isle instead offers to be landed on for a treasure dig,
+            // but only when no port is on offer here and its field is unworked today.
             harbor.update_dockable(&world, &kin);
-            if (is_key_pressed(KeyCode::Space) || touch.tapped_in(hud.dock))
-                && sail_mode == 0
-                && harbor.try_dock(&mut gs)
-            {
+            let want_ashore = (is_key_pressed(KeyCode::Space) || touch.tapped_in(hud.dock)) && sail_mode == 0;
+            if want_ashore && harbor.try_dock(&mut gs) {
                 log_open = false;
                 guide_open = false;
+            } else {
+                let day = gs.stats.days_passed;
+                shore.update_landable(&world, &kin, harbor.dockable.is_some());
+                if let Some(id) = shore.landable {
+                    if dug_sites.contains(&(id, day)) {
+                        shore.landable = None;
+                    }
+                }
+                if want_ashore {
+                    if let Some(id) = shore.try_land(&world, day) {
+                        dug_sites.insert((id, day));
+                        log_open = false;
+                        guide_open = false;
+                    }
+                }
             }
 
             // Dev aids (all need dev mode, unlocked by typing "banana" in the log):
@@ -1182,7 +1218,7 @@ async fn run_game(
             }
         }
         // Ride the ambient beds to match the boat's speed and the gale's fury.
-        sounds.update(dt, harbor.is_open(), kin.speed() / sailing::KNOT, storm);
+        sounds.update(dt, harbor.is_open() || shore.is_open(), kin.speed() / sailing::KNOT, storm);
 
         // --- Ship motion + camera ride -----------------------------------------
         // Sample how the swell throws the hull this frame, then ease the parts that
@@ -1814,6 +1850,7 @@ async fn run_game(
         let race_target = gs.race.map(|r| r.target_id);
         if !log_open && !guide_open {
             port_view::render_prompt(&harbor, &world, sail_mode == 0, race_target, w, h);
+            dig_view::render_prompt(&shore, &world, sail_mode == 0, w, h);
         }
         if harbor.is_open() {
             if let Some(id) = gs.docked_island_id() {
@@ -1822,6 +1859,9 @@ async fn run_game(
                     screen.render(&gs, &world, &market, &kin, wind, w, h);
                 }
             }
+        }
+        if let Some(screen) = shore.screen.as_ref() {
+            screen.render(&world, w, h);
         }
 
         // The pause menu sits over everything (it only opens in open water).
@@ -1835,7 +1875,7 @@ async fn run_game(
         // untouched. A menu shows the nav cluster (the board adds a Tab button);
         // open water shows the sailing helm.
         if touch.active() {
-            if pause.open || log_open || guide_open || harbor.is_open() {
+            if pause.open || log_open || guide_open || harbor.is_open() || shore.is_open() {
                 // The board can be tapped directly (tabs / rows / chips), but it also
                 // gets the full d-pad + ✓/✕ cluster, like the pause menu and log, for
                 // captains who'd rather step the cursor than tap precisely. The ✓ only
@@ -1865,7 +1905,7 @@ async fn run_game(
                     item_btns,
                 );
             }
-        } else if !hud_hidden && !pause.open && !log_open && !guide_open && !harbor.is_open() {
+        } else if !hud_hidden && !pause.open && !log_open && !guide_open && !harbor.is_open() && !shore.is_open() {
             // Keyboard mode at the helm: faint reminders of the sailing keys,
             // bottom-left. (Touch mode has its own on-screen glyphs above.)
             // Owned tavern wares add their shortcuts, so they show only once earned.
