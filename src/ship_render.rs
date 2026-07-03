@@ -636,6 +636,10 @@ pub struct DeckChart<'a> {
     /// The prevailing wind's bearing (radians, 0 = north) in the direction it
     /// blows toward: the chart's wind streaks flow along it.
     pub wind_toward: f32,
+    /// How legible the ink is, [0,1]: 1 in fair weather, fading as the gale
+    /// builds until the sheet is rain-soaked bare parchment in a storm and the
+    /// helmsman must hold his bearings in his head.
+    pub legibility: f32,
 }
 
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
@@ -2004,7 +2008,13 @@ impl ShipRenderer {
         // One shade for the whole face: it tips up toward the aft sky.
         let diff = lume.diff((0.0, ls, lc));
         let parch = lume.col(CHART_PARCH, diff, 1.0);
+        // The gale washes the ink off the sheet: every inked mark (border,
+        // graticule, wind, isles, the ship's arrow) fades with `legibility`,
+        // leaving bare rain-soaked parchment in a storm. The board, stand and
+        // sheet stay; only the chartwork drowns.
+        let leg = clamp(chart.legibility, 0.0, 1.0);
         let ink = lume.col(CHART_INK, diff, 1.0);
+        let ink = Color::new(ink.r, ink.g, ink.b, ink.a * leg);
         let frame_col = lume.col(RAIL_DK, diff, 0.9);
         let faint = Color::new(ink.r, ink.g, ink.b, ink.a * 0.3);
         let line_w = (0.012 * s).max(1.0);
@@ -2043,6 +2053,9 @@ impl ShipRenderer {
         let f = 0.06;
         quad(at(-f, -f), at(1.0 + f, -f), at(1.0 + f, 1.0 + f), at(-f, 1.0 + f), frame_col);
         quad(at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0), parch);
+        if leg <= 0.0 {
+            return; // washed fully bare: nothing inked left to draw
+        }
         let border = |inset: f32, col: Color| {
             let pts = [
                 at(inset, inset),
@@ -2124,7 +2137,7 @@ impl ShipRenderer {
         // minimap's alpha (faint land, heavier ports) so both charts read alike.
         let pcol = |base: [f32; 3], a: f32| {
             let c = lume.col(base, diff, 1.0);
-            Color::new(c.r, c.g, c.b, a)
+            Color::new(c.r, c.g, c.b, a * leg)
         };
 
         // The isles, inked inside a margin so none kisses the border. Ports get

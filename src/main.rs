@@ -1503,6 +1503,12 @@ async fn run_game(
                 ship: chart_uv(kin.pos),
                 heading: kin.heading_rad,
                 wind_toward: wind.toward_rad,
+                // The rain washes the chartwork out as the gale builds: the ink
+                // fades with the fury and the sheet is fully bare before the
+                // fury peaks, so a Storm blanks the board outright (a squall
+                // only wets it) and the helmsman steers from memory until the
+                // weather lays down and the ink dries back in.
+                legibility: 1.0 - clamp(storm / 0.8, 0.0, 1.0),
             }),
         };
         // --- Bow spray ---------------------------------------------------------
