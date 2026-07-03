@@ -32,6 +32,10 @@ pub struct SceneView<'a> {
     /// direction (chart x/y, z up): what the rival's hull facets shade against,
     /// the same value the island facets take.
     pub sun: (f32, f32, f32),
+    /// The world bearing the prevailing wind blows *toward*: the rival braces
+    /// her yard and streams her pennant by it, the same wind the player's rig
+    /// trims to.
+    pub wind_toward: f32,
 }
 
 /// The sky-dome projection for one frame: the bow `heading`, half field of view

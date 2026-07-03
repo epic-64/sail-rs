@@ -44,11 +44,11 @@ use std::f32::consts::TAU;
 // --- Rig trim feel (ported from SailingView) ---------------------------------
 const SAIL_PANELS: usize = 8; // cloth panels across the sail's width
 const SAIL_ROWS: usize = 6; // rows down its height (they resolve the vertical belly)
-const BELLY_DEPTH: f32 = 0.37; // deepest draft, as a fraction of sail width
+pub(crate) const BELLY_DEPTH: f32 = 0.37; // deepest draft, as a fraction of sail width
 const FLAP_HZ: f32 = 1.6; // luff flutter rate
 const FLAP_WAVES: f32 = 1.6; // ripple crests across the sail at once
 const FLAP_DEPTH: f32 = 0.035; // deepest a flog throws a panel, fraction of width
-const BRACE_LIMIT: f32 = 1.3; // hard brace (~75°) reached by a beam wind
+pub(crate) const BRACE_LIMIT: f32 = 1.3; // hard brace (~75°) reached by a beam wind
 const BRACE_EASE: f32 = 2.5; // 1/s the crew haul the yard toward its trim
 const WHEEL_EASE: f32 = 5.0; // 1/s the wheel chases the rudder input
 const SET_EASE: f32 = 2.2; // 1/s the crew haul the canvas to its new set (furl/unfurl)
