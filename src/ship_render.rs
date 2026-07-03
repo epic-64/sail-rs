@@ -2053,8 +2053,57 @@ impl ShipRenderer {
         let f = 0.06;
         quad(at(-f, -f), at(1.0 + f, -f), at(1.0 + f, 1.0 + f), at(-f, 1.0 + f), frame_col);
         quad(at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0), parch);
+
+        // The gale's own mark: as the chartwork drowns, a hand-inked storm cloud
+        // (scalloped puffs, a lightning bolt, a few strokes of rain) fades in over
+        // the sheet, so a stormed-out board reads as "no chart in this weather"
+        // rather than sitting empty. It cross-fades against the chartwork's ink:
+        // absent in fair weather, alone at full fury.
+        let gale = 1.0 - leg;
+        if gale > 0.0 {
+            let doodle =
+                |a: f32| Color::new(ink_full.r, ink_full.g, ink_full.b, ink_full.a * a * gale);
+            let cloud = doodle(0.85);
+            let cw = (line_w * 1.4).max(1.2);
+            // A puff of the cloud's top: an upper semicircle in board space, laid
+            // down as short segments through `at` so the doodle leans with the
+            // board, with a light wobble to keep the line hand-drawn.
+            let arc = |cu: f32, cv: f32, r: f32, wob: f32| {
+                const SEG: i32 = 14;
+                let pt = |i: i32| {
+                    let t = i as f32 / SEG as f32 * std::f32::consts::PI;
+                    let rr = r * (1.0 + 0.05 * (t * 4.7 + wob).sin());
+                    at(cu + t.cos() * rr, cv + t.sin() * rr)
+                };
+                let mut prev = pt(0);
+                for i in 1..=SEG {
+                    let p = pt(i);
+                    draw_line(prev.x, prev.y, p.x, p.y, cw, cloud);
+                    prev = p;
+                }
+            };
+            // Three scallops over a flat base, the middle one proud.
+            let vb = 0.58;
+            arc(0.38, vb, 0.080, 0.0);
+            arc(0.50, vb + 0.012, 0.105, 2.1);
+            arc(0.62, vb, 0.080, 4.4);
+            let (a, b) = (at(0.30, vb), at(0.70, vb));
+            draw_line(a.x, a.y, b.x, b.y, cw, cloud);
+            // The bolt, struck down from the cloud's belly.
+            let bolt = [(0.54, vb - 0.02), (0.47, vb - 0.13), (0.53, vb - 0.13), (0.45, vb - 0.27)];
+            for seg in bolt.windows(2) {
+                let (p, q) = (at(seg[0].0, seg[0].1), at(seg[1].0, seg[1].1));
+                draw_line(p.x, p.y, q.x, q.y, cw, cloud);
+            }
+            // Rain slanting off the cloud's flanks, lighter than the outline.
+            for &(u, v) in &[(0.36f32, vb - 0.05), (0.42, vb - 0.12), (0.63, vb - 0.07)] {
+                let (p, q) = (at(u, v), at(u - 0.025, v - 0.07));
+                draw_line(p.x, p.y, q.x, q.y, cw * 0.8, doodle(0.6));
+            }
+        }
+
         if leg <= 0.0 {
-            return; // washed fully bare: nothing inked left to draw
+            return; // washed fully bare: no chartwork left to draw
         }
         let border = |inset: f32, col: Color| {
             let pts = [
