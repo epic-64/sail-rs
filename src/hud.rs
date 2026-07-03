@@ -10,28 +10,32 @@ use crate::geometry::{compass, wrap_angle};
 use crate::sailing::{self, Kinematics, Wind};
 use crate::ui::{self, px};
 
-/// Faint keybind reminders in the bottom-left while sailing. Only shown in
-/// keyboard mode (the touch HUD carries its own glyphs), so a captain at the
-/// helm always sees how to reach the log, furl sail, steer and dock. The
-/// dock hint only appears when there's a harbour within reach.
-pub fn keybind_hints(dockable: bool, extra: &[(&str, &str)], h: f32) {
-    // (key, action) top to bottom; the log sits first as the headline hint.
-    let mut hints: Vec<(&str, &str)> = vec![
-        ("L", "Captain's Log"),
-        ("G", "Guide"),
-        ("Esc", "Pause"),
-        ("\u{2191}\u{2193}", "Sail"),
-        ("\u{2190}\u{2192}", "Steer"),
-        ("C", "Look astern"),
-        ("H", "Hide HUD"),
-    ];
-    // Any tavern wares the captain has bought (the world map's M, the active wares'
-    // number keys), so their shortcuts are reminded only once they're earned.
-    hints.extend_from_slice(extra);
-    if dockable {
-        hints.push(("Space", "Dock"));
-    }
+/// Faint keybind reminders in the bottom-left while sailing (HUD shown). Only
+/// the ways in and out of the reference screens: the full control list now lives
+/// in the Guide (G), so the helm stays uncluttered. Shown only in keyboard mode
+/// (the touch HUD carries its own glyphs).
+pub fn keybind_hints(h: f32) {
+    draw_hint_stack(
+        &[
+            ("L", "Captain's Log"),
+            ("G", "Guide"),
+            ("H", "Hide HUD"),
+        ],
+        h,
+    );
+}
 
+/// The lone "show HUD" reminder, drawn briefly after a keypress while the HUD is
+/// hidden. A captain who tucked it away by accident can press any key to surface
+/// this one hint and find the key back; leaving the keys alone lets it fade to a
+/// fully clean view.
+pub fn show_hud_hint(h: f32) {
+    draw_hint_stack(&[("H", "Show HUD")], h);
+}
+
+/// Stack `(key, action)` hints upward from the bottom-left, one per line, in the
+/// faint parchment-on-water palette shared by every keybind reminder.
+fn draw_hint_stack(hints: &[(&str, &str)], h: f32) {
     let fs = ui::fs_small();
     let step = ui::line_h(fs);
     let margin = px(14.0);
