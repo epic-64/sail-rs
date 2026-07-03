@@ -520,6 +520,9 @@ pub struct DeckChart<'a> {
     pub ship: (f32, f32),
     /// The ship's heading (radians, 0 = north): the arrow's bearing.
     pub heading: f32,
+    /// The prevailing wind's bearing (radians, 0 = north) in the direction it
+    /// blows toward: the chart's wind streaks flow along it.
+    pub wind_toward: f32,
 }
 
 /// Per-frame trim the rig is steered by. `wind_rel` is the prevailing wind's
@@ -1887,6 +1890,62 @@ impl ShipRenderer {
             draw_line(a.x, a.y, b.x, b.y, line_w, faint);
             let (a, b) = (at(0.05, t), at(0.95, t));
             draw_line(a.x, a.y, b.x, b.y, line_w, faint);
+        }
+
+        // The prevailing wind, charted as streaks flowing downwind each tipped with
+        // a chevron (the log minimap's hand), north up (the board's v axis), so it
+        // stays put while the ship's arrow turns. `wind_toward` is the bearing the
+        // wind blows toward. Drawn a shade over the graticule and under the isle
+        // marks, and slightly warmer so it reads apart from the grid.
+        let (wu, wv) = (chart.wind_toward.sin(), chart.wind_toward.cos());
+        let (pu, pv) = (-wv, wu); // perpendicular: spacing between streaks
+        let wind_col = Color::new(ink.r, ink.g, ink.b, ink.a * 0.34);
+        // Clip a board-space (uv) segment to the plot square [lo, hi]^2 (Liang-Barsky),
+        // so a streak never spills past the border however the wind lies.
+        let clip_uv = |x0: f32, y0: f32, x1: f32, y1: f32, lo: f32, hi: f32| {
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let p = [-dx, dx, -dy, dy];
+            let q = [x0 - lo, hi - x0, y0 - lo, hi - y0];
+            let (mut t0, mut t1) = (0.0f32, 1.0f32);
+            for i in 0..4 {
+                if p[i] == 0.0 {
+                    if q[i] < 0.0 {
+                        return None;
+                    }
+                } else {
+                    let t = q[i] / p[i];
+                    if p[i] < 0.0 {
+                        if t > t1 {
+                            return None;
+                        }
+                        t0 = t0.max(t);
+                    } else {
+                        if t < t0 {
+                            return None;
+                        }
+                        t1 = t1.min(t);
+                    }
+                }
+            }
+            Some(((x0 + t0 * dx, y0 + t0 * dy), (x0 + t1 * dx, y0 + t1 * dy)))
+        };
+        for i in -1..=1 {
+            let o = i as f32 * 0.26;
+            let (mx, my) = (0.5 + pu * o, 0.5 + pv * o);
+            let Some((a, b)) = clip_uv(mx - wu * 1.5, my - wv * 1.5, mx + wu * 1.5, my + wv * 1.5, 0.06, 0.94)
+            else {
+                continue;
+            };
+            let (pa, pb) = (at(a.0, a.1), at(b.0, b.1));
+            draw_line(pa.x, pa.y, pb.x, pb.y, line_w, wind_col);
+            // A chevron at the streak's midpoint, opening upwind so it points the way
+            // the wind flows (toward `b`).
+            let (cx2, cy2) = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
+            let tip = at(cx2 + wu * 0.05, cy2 + wv * 0.05);
+            let w1 = at(cx2 - wu * 0.03 + pu * 0.04, cy2 - wv * 0.03 + pv * 0.04);
+            let w2 = at(cx2 - wu * 0.03 - pu * 0.04, cy2 - wv * 0.03 - pv * 0.04);
+            draw_line(w1.x, w1.y, tip.x, tip.y, line_w, wind_col);
+            draw_line(w2.x, w2.y, tip.x, tip.y, line_w, wind_col);
         }
 
         // A parchment-palette mark, lit with the board then tinted to the log

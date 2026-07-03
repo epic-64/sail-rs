@@ -1502,6 +1502,7 @@ async fn run_game(
                 isles: &chart_isles,
                 ship: chart_uv(kin.pos),
                 heading: kin.heading_rad,
+                wind_toward: wind.toward_rad,
             }),
         };
         // --- Bow spray ---------------------------------------------------------
