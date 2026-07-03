@@ -1867,13 +1867,14 @@ impl ShipRenderer {
         };
 
         // The isles, inked inside a margin so none kisses the border. Ports get
-        // the heavier blot, the rest a fleck; then concentric rings for the
-        // fittings, smallest first so a larger never hides a smaller: a blue
-        // shipyard, a yellow contract mark, a red race mark (colour tells them
-        // apart, as on the log minimap, without crowding letters onto so small a
-        // board).
+        // the heavier blot, the rest a fleck; then a ring per fitting (colour tells
+        // them apart, as on the log minimap, without crowding letters onto so small
+        // a board). A lone fitting rings at the base radius; stacked fittings step
+        // outward (shipyard, mission, race), smallest first so none hides another.
         let plot = |u: f32, v: f32| at(0.08 + u * 0.84, 0.08 + v * 0.84);
         let ring_w = (line_w * 1.4).max(1.5);
+        const RING_BASE: f32 = 0.030;
+        const RING_STEP: f32 = 0.014;
         for isle in chart.isles {
             let p = plot(isle.u, isle.v);
             let (base, a, r) = if isle.is_port {
@@ -1882,14 +1883,17 @@ impl ShipRenderer {
                 (CHART_LAND, 0.35, 0.013 * s)
             };
             draw_circle(p.x, p.y, r.max(1.0), pcol(base, a));
-            if isle.is_shipyard {
-                draw_circle_lines(p.x, p.y, (0.030 * s).max(2.0), line_w, pcol(CHART_YARD, 1.0));
-            }
-            if isle.is_mission {
-                draw_circle_lines(p.x, p.y, (0.044 * s).max(3.0), ring_w, pcol(CHART_MISSION, 1.0));
-            }
-            if isle.is_race {
-                draw_circle_lines(p.x, p.y, (0.058 * s).max(4.0), ring_w, pcol(CHART_RACE, 1.0));
+            let mut slot = 0;
+            for (present, base_col) in [
+                (isle.is_shipyard, CHART_YARD),
+                (isle.is_mission, CHART_MISSION),
+                (isle.is_race, CHART_RACE),
+            ] {
+                if present {
+                    let rr = ((RING_BASE + slot as f32 * RING_STEP) * s).max(2.0);
+                    draw_circle_lines(p.x, p.y, rr, ring_w, pcol(base_col, 1.0));
+                    slot += 1;
+                }
             }
         }
         // The ship's "you are here": a slim sepia heading arrow over the plots,
