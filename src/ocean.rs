@@ -159,20 +159,61 @@ pub fn ship_motion(pos: Vec2, heading: f32, t: f32, sea: f32) -> ShipMotion {
     // crest); the earlier `z_stbd - z_port` rolled her *into* the swell, backwards.
     let roll = (z_port - z_stbd).atan2(2.0 * HALF_BEAM);
 
-    // Yaw torque from the swell's twist: port-starboard slope at the bow vs the
-    // stern; their difference slews the bow off course. Halved to keep it gentle.
+    ShipMotion {
+        heave,
+        pitch,
+        roll,
+        yaw: swell_yaw(pos, heading, t, sea),
+    }
+}
+
+/// Yaw torque from the swell's twist: port-starboard slope at the bow vs the
+/// stern; their difference slews the bow off course. Halved to keep it gentle.
+/// The camera/deck sway reads it via [`ship_motion`]; in a gale the sailing loop
+/// also feeds it back into the hull's *actual* heading (scaled by the storm's
+/// fury), so heavy seas genuinely shove the bow and the helm must answer.
+pub fn swell_yaw(pos: Vec2, heading: f32, t: f32, sea: f32) -> f32 {
+    let fwd = Vec2::from_heading(heading);
+    let right = Vec2::new(heading.cos(), -heading.sin()); // 90° to starboard of the bow
+    let centre = pos + fwd * CENTRE_AHEAD;
+    let bow = centre + fwd * HALF_LENGTH;
+    let stern = centre - fwd * HALF_LENGTH;
     let bow_roll = (height(bow + right * HALF_BEAM, t, sea)
         - height(bow - right * HALF_BEAM, t, sea))
     .atan2(2.0 * HALF_BEAM);
     let stern_roll = (height(stern + right * HALF_BEAM, t, sea)
         - height(stern - right * HALF_BEAM, t, sea))
     .atan2(2.0 * HALF_BEAM);
-    let yaw = (bow_roll - stern_roll) / 2.0;
+    (bow_roll - stern_roll) / 2.0
+}
 
-    ShipMotion {
-        heave,
-        pitch,
-        roll,
-        yaw,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_swell_yaw_envelope() {
+        // Sweep positions, headings and times at full-storm sea and report the
+        // twist's envelope; calibrates how hard main.rs lets a gale shove the bow
+        // (its storm yaw gain multiplies this). Also pins that the twist stays a
+        // nudge, well under a radian, so the feedback can never spin the ship.
+        let mut max = 0.0f32;
+        let mut sum = 0.0f64;
+        let mut n = 0u32;
+        for pi in 0..24 {
+            let pos = Vec2::new(pi as f32 * 137.3 - 1500.0, pi as f32 * 91.7 - 900.0);
+            for hi in 0..8 {
+                let heading = hi as f32 / 8.0 * TAU;
+                for ti in 0..240 {
+                    let yaw = swell_yaw(pos, heading, ti as f32 * 0.171, 1.3).abs();
+                    max = max.max(yaw);
+                    sum += yaw as f64;
+                    n += 1;
+                }
+            }
+        }
+        println!("swell_yaw at sea=1.3: max {:.4} rad, mean {:.4} rad", max, sum / n as f64);
+        assert!(max > 0.01, "storm seas must twist the hull at all");
+        assert!(max < 1.0, "the twist is a nudge, not a spin");
     }
 }

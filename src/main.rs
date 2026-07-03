@@ -473,6 +473,16 @@ async fn run_game(
     // the weather leans stormier (see `weather`). A notch beyond the isles, inside the
     // "1 to 2 km out" the design calls for.
     const HIGH_SEA_MARGIN: f32 = 1500.0;
+    // How hard a gale's seas shove the bow off course (1/s): the swell's twist
+    // (`ocean::swell_yaw`, ~0.07 rad at its full-storm peak; see the probe test)
+    // becomes real yaw rate, scaled by the storm's fury. At this gain the worst
+    // shove is ~0.10 rad/s, a bit under half the rudder's full authority
+    // (`sailing::MAX_YAW_RATE`): demanding helm work, never an uncontrollable spin.
+    const STORM_YAW_GAIN: f32 = 1.5;
+    // Past this fury the corner chart is unreadable in the gale and stops drawing;
+    // it returns as the storm eases. Sits between a squall's fury and a full
+    // storm's, so only a real storm takes the chart away.
+    const STORM_CHART_HIDE: f32 = 0.7;
     let mut tod: f32 = 0.40; // start mid-morning
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
@@ -1061,6 +1071,16 @@ async fn run_game(
             for _ in 0..time_steps {
                 let prev_pos = kin.pos;
                 kin = sailing::step_debuffed(kin, helm, wind, dt, top_speed, hull_debuff);
+                // In a gale the swell shoves the bow off course: the surface's twist
+                // along the hull (the same torque that sways the camera) is fed back
+                // as real heading change, scaled by the storm's fury, so a storm
+                // passage takes active helm work. A pure function of position and
+                // time (no RNG), so determinism is untouched.
+                if storm > 0.0 {
+                    let twist = ocean::swell_yaw(kin.pos, kin.heading_rad, t, sea);
+                    kin.heading_rad =
+                        wrap_angle(kin.heading_rad + twist * STORM_YAW_GAIN * storm * dt);
+                }
                 // A Dolphin's Draught burst is a flat push over the ground, on top of
                 // the sail's drive: nudge the hull forward along its heading before
                 // grounding clamps it, so the surge still won't drive her through a shore.
@@ -1932,10 +1952,12 @@ async fn run_game(
         let chart_marks: Vec<i32> = gs.active_missions.iter().map(|m| m.target_id).collect();
         let race_marks: Vec<i32> = gs.race.iter().map(|r| r.target_id).collect();
 
-        // Corner chart: the local cluster, top-right (tucked away with H).
+        // Corner chart: the local cluster, top-right (tucked away with H, and lost
+        // to the gale while the fury is past STORM_CHART_HIDE: no chart to steer by
+        // in a storm, so foul-weather navigation is done by eye).
         let map_size = (h * 0.24).clamp(px(140.0), px(200.0));
         let map_rect = Rect::new(w - map_size - px(16.0), px(16.0), map_size, map_size);
-        if !hud_hidden {
+        if !hud_hidden && storm <= STORM_CHART_HIDE {
             minimap::render(
                 &world,
                 &kin,
