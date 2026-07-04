@@ -22,6 +22,17 @@ impl Rng {
         }
     }
 
+    /// The raw generator state, for persisting a sequence mid-stream (the wind
+    /// schedule rides the voyage save); resume it with [`Rng::from_state`].
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
+    /// Rebuild a generator exactly where a [`Rng::state`] capture left it.
+    pub fn from_state(state: u64) -> Rng {
+        Rng { state }
+    }
+
     /// Advance once, returning a fresh 64-bit value.
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(GOLDEN);

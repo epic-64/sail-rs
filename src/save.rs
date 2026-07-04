@@ -5,7 +5,7 @@
 //! it, bit-identically — see `world.rs`), the [`GameState`] (gold, cargo, hull,
 //! missions, the booked race, where the captain is), the ship's [`Kinematics`]
 //! (position + trim), and a little ambient context (the day/night clock, the sail
-//! notch, the wind's quarter). Transient scenery — traders, flotsam, the eased
+//! notch, the wind's quarter and its shift schedule). Transient scenery — traders, flotsam, the eased
 //! weather — is reseeded fresh on load and needn't be stored.
 //!
 //! The format is a tiny versioned, line-based `key=value` text (no serde, to keep
@@ -53,6 +53,14 @@ pub struct Save {
     pub sail_mode: usize,
     /// The prevailing wind's bearing (the quarter it blows *toward*, radians).
     pub wind_toward: f32,
+    /// The wind RNG's raw state, so the shift schedule continues across a reload
+    /// instead of replaying from the world seed. `None` in an older save; the
+    /// RNG is then freshly reseeded, as it always was.
+    pub wind_rng: Option<u64>,
+    /// Seconds of the current wind period already sailed when saved, so the next
+    /// shift lands on schedule rather than a full period after loading. Zero when
+    /// an older save doesn't carry it.
+    pub wind_since: f32,
     /// The racing rival's live kinematics, if it is on the water (a booked race that
     /// has been cast off from a port). `None` when no race is afoot or it hasn't
     /// started — the rival is respawned at the line when the captain next sets sail.
@@ -94,6 +102,10 @@ impl Save {
         kv(&mut o, "tod", &self.tod.to_string());
         kv(&mut o, "sail_mode", &self.sail_mode.to_string());
         kv(&mut o, "wind", &self.wind_toward.to_string());
+        if let Some(state) = self.wind_rng {
+            kv(&mut o, "wind_rng", &state.to_string());
+        }
+        kv(&mut o, "wind_since", &self.wind_since.to_string());
         kv(&mut o, "kin", &fmt_kin(k));
         // The lifetime tally (see `Stats`). A single comma-joined line; absent from
         // pre-stats saves, which load with a zeroed ledger (see `deserialize`).
@@ -253,6 +265,13 @@ impl Save {
             tod: map.get("tod")?.parse().ok()?,
             sail_mode: map.get("sail_mode")?.parse().ok()?,
             wind_toward: map.get("wind")?.parse().ok()?,
+            // The wind schedule is optional (absent from older saves): without it
+            // the RNG reseeds and the period timer starts fresh, as before.
+            wind_rng: map.get("wind_rng").and_then(|v| v.parse().ok()),
+            wind_since: map
+                .get("wind_since")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
             rival,
             race_ready,
             race_running,
@@ -280,6 +299,8 @@ pub fn store(
     tod: f32,
     sail_mode: usize,
     wind_toward: f32,
+    wind_rng: u64,
+    wind_since: f32,
     rival: Option<Kinematics>,
     race_ready: bool,
     race_running: bool,
@@ -291,6 +312,8 @@ pub fn store(
         tod,
         sail_mode,
         wind_toward,
+        wind_rng: Some(wind_rng),
+        wind_since,
         rival,
         race_ready,
         race_running,
@@ -683,6 +706,8 @@ mod tests {
             tod: 0.37,
             sail_mode: 2,
             wind_toward: -2.1,
+            wind_rng: Some(0x1234_5678_9abc_def0),
+            wind_since: 173.25,
             rival: Some(Kinematics {
                 pos: Vec2::new(220.0, -90.0),
                 heading_rad: -0.5,
@@ -716,6 +741,8 @@ mod tests {
         assert!((back.kin.heading_rad - s.kin.heading_rad).abs() < 1e-6);
         assert!((back.tod - s.tod).abs() < 1e-6);
         assert!((back.wind_toward - s.wind_toward).abs() < 1e-6);
+        assert_eq!(back.wind_rng, s.wind_rng);
+        assert!((back.wind_since - s.wind_since).abs() < 1e-6);
         assert_eq!(back.race_ready, s.race_ready);
         assert_eq!(back.race_running, s.race_running);
         assert_eq!(back.rival.map(|r| r.pos), s.rival.map(|r| r.pos));
@@ -777,6 +804,23 @@ mod tests {
             .join("\n");
         let back = Save::deserialize(&stripped).expect("should parse");
         assert_eq!(back.gs.items, Inventory::default());
+    }
+
+    #[test]
+    fn a_save_without_a_wind_schedule_still_loads() {
+        // Older saves carry only the wind's quarter: the RNG then reseeds and the
+        // period timer starts fresh, exactly the pre-schedule behaviour.
+        let s = sample();
+        let text = s.serialize();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.starts_with("wind_rng=") && !l.starts_with("wind_since="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let back = Save::deserialize(&stripped).expect("should parse");
+        assert_eq!(back.wind_rng, None);
+        assert_eq!(back.wind_since, 0.0);
+        assert!((back.wind_toward - s.wind_toward).abs() < 1e-6);
     }
 
     #[test]
