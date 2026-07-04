@@ -87,6 +87,19 @@ const HORIZON: f32 = 0.54;
 /// exactly where it stands. Meaningless on a single-decked hull.
 const STAIR_RUN: f32 = 3.6;
 
+/// Athwart width of the companion flight's treads.
+const STAIR_W: f32 = 1.3;
+
+/// Athwart edges (inboard, outboard) of the companion stairs: the flight
+/// hangs just inside the starboard bulwark at the quarterdeck break, so every
+/// beam of hull lands its stairs on the wall rather than adrift mid-deck.
+/// Shared by the drawn flight, the breast rail's open end and the cargo
+/// fence. Only meaningful when the hull has a `qdeck_break` to climb to.
+fn stair_span(hull: &HullShape, qdeck: f32) -> (f32, f32) {
+    let x1 = hull.station_at(qdeck + 0.1).0 - 0.05;
+    (x1 - STAIR_W, x1)
+}
+
 /// How high the breast rail across the quarterdeck's forward edge rides off
 /// the platform (it stands just aft of the break).
 const BREAST_RAIL_H: f32 = 0.85;
@@ -1120,7 +1133,7 @@ impl ShipRenderer {
             // The companion stairs block the starboard run abaft the waist
             // (only where the hull has a quarterdeck to climb to).
             if let Some(qdeck) = hull.qdeck_break {
-                let stair_x = 2.0 - WALL_GAP - c.hw;
+                let stair_x = stair_span(hull, qdeck).0 - WALL_GAP - c.hw;
                 if c.z + c.hd > qdeck - STAIR_RUN && c.x > stair_x {
                     c.x = stair_x;
                     if c.vx > 0.0 {
@@ -1393,7 +1406,7 @@ impl ShipRenderer {
         // stands inboard of them, so it must paint over the starboard wall,
         // never hide behind it.
         let companion_stairs = |qdeck: f32| {
-            let (x0, x1) = (2.0f32, 3.3); // inboard / outboard edges
+            let (x0, x1) = stair_span(hull, qdeck); // inboard / outboard edges
             let steps = 6;
             let run = STAIR_RUN; // fore-aft reach of the flight
             let (_, qd_y, _) = hull.station_at(qdeck + 0.1);
@@ -1755,7 +1768,8 @@ impl ShipRenderer {
             let brk = qdeck + 0.1; // just aft of the quarterdeck break
             let (_, qd_y, _) = hull.station_at(brk);
             let rail_y = qd_y + BREAST_RAIL_H; // waist-high off the platform
-            let (rail_l, rail_r) = (-3.25f32, 1.6); // port bulwark → the stair head
+            // Port bulwark to just short of the stair head.
+            let (rail_l, rail_r) = (0.10 - hull.station_at(brk).0, stair_span(hull, qdeck).0 - 0.4);
             let mid_y = qd_y + 0.45; // the mid rail below the top board
             // The stair-head shoulder: the top board rounds down at its open
             // end (a quarter arc) and lands on the mid rail, so the rail
@@ -2922,38 +2936,43 @@ mod tests {
     }
 
     /// However hard the shaking, every crate stays inside the bulwarks, off
-    /// the stairs, clear of the mast and on (or above) the deck.
+    /// the stairs, clear of the mast and on (or above) the deck. Run for each
+    /// quarterdecked hull, so a new tier's stowage plan is fenced too.
     #[test]
     fn shaken_cargo_stays_on_deck() {
-        let mut r = ShipRenderer::new();
-        let mut input = rig(64, 20.0, crate::sailing::MAX_YAW_RATE, 0.8);
-        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
-        // A storm's worth of violence, swinging both ways.
-        for k in 0..8 {
-            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
-            input.yaw_rate = crate::sailing::MAX_YAW_RATE * side;
-            step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
-        }
-        let hull = &crate::hull_shape::BRIG;
-        let qdeck = hull.qdeck_break.unwrap();
-        for c in &r.crates {
-            if c.base.is_some() || c.over || c.gone {
-                continue; // riding a stack (fenced through its base), or lost to the sea
+        for level in [1, 2] {
+            let mut r = ShipRenderer::new();
+            r.set_hull_level(level);
+            let mut input = rig(64, 20.0, crate::sailing::MAX_YAW_RATE, 0.8);
+            r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+            // A storm's worth of violence, swinging both ways.
+            for k in 0..8 {
+                let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+                input.yaw_rate = crate::sailing::MAX_YAW_RATE * side;
+                step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
             }
-            let (b, d, _) = hull.station_at(c.z);
-            assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
-            assert!(c.z + c.hd <= qdeck + 1e-3, "crate through the riser");
-            assert!(c.z - c.hd >= hull.cargo_z_min - c.hd * 2.0, "crate off the bow");
-            assert!(c.y >= d - 1e-3, "crate under the deck");
-            if c.z + c.hd > qdeck - 4.0 {
-                assert!(c.x + c.hw <= 2.0 + 1e-3, "crate inside the stairs");
+            let hull = crate::hull_shape::for_level(level);
+            let qdeck = hull.qdeck_break.unwrap();
+            for c in &r.crates {
+                if c.base.is_some() || c.over || c.gone {
+                    continue; // riding a stack (fenced through its base), or lost to the sea
+                }
+                let (b, d, _) = hull.station_at(c.z);
+                assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
+                assert!(c.z + c.hd <= qdeck + 1e-3, "crate through the riser");
+                assert!(c.z - c.hd >= hull.cargo_z_min - c.hd * 2.0, "crate off the bow");
+                assert!(c.y >= d - 1e-3, "crate under the deck");
+                if c.z + c.hd > qdeck - 4.0 {
+                    let stair_x = stair_span(hull, qdeck).0;
+                    assert!(c.x + c.hw <= stair_x + 1e-3, "crate inside the stairs");
+                }
             }
+            // The books stay square: live crates plus the reported losses cover
+            // every unit the hold started with.
+            let washed = r.cargo_washed_overboard();
+            let live = r.crates.iter().filter(|c| !c.gone).count() as i32;
+            assert_eq!(live + washed, 64);
         }
-        // The books stay square: live crates plus the reported losses cover
-        // every unit the hold started with.
-        let washed = r.cargo_washed_overboard();
-        let live = r.crates.iter().filter(|c| !c.gone).count() as i32;
-        assert_eq!(live + washed, 64);
     }
 
     /// The sloop's flush deck fences its own cargo run: shaken crates stay

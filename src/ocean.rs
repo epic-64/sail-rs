@@ -208,7 +208,7 @@ pub fn swell_yaw(pos: Vec2, heading: f32, t: f32, sea: f32, hull: &HullShape) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hull_shape::{BRIG, SLOOP};
+    use crate::hull_shape::{BRIG, GALLEON, SLOOP};
 
     #[test]
     fn probe_swell_yaw_envelope() {
@@ -276,5 +276,15 @@ mod tests {
             storm_ratio < calm_ratio,
             "long storm swells should even the hulls out relative to the chop"
         );
+    }
+
+    /// The same ordering carried up a tier: the galleon's still longer probed
+    /// waterline rides light chop easier than the brig (her heavier feel on
+    /// top of that lives in `sway_response`, outside this fit).
+    #[test]
+    fn the_galleon_filters_what_still_works_the_brig() {
+        let calm_ratio = pitch_rate_rms(&BRIG, 0.35) / pitch_rate_rms(&GALLEON, 0.35);
+        println!("brig/galleon pitch-rate ratio: calm {calm_ratio:.2}");
+        assert!(calm_ratio > 1.1, "the galleon should filter chop the brig still feels");
     }
 }
