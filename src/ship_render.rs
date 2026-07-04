@@ -3032,7 +3032,7 @@ mod tests {
     /// quarterdecked hull, so a new tier's stowage plan is fenced too.
     #[test]
     fn shaken_cargo_stays_on_deck() {
-        for level in [1, 2] {
+        for level in [1, 2, 3] {
             let mut r = ShipRenderer::new();
             r.set_hull_level(level);
             let mut input = rig(64, 20.0, crate::sailing::MAX_YAW_RATE, 0.8);
