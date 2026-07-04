@@ -32,6 +32,16 @@ pub struct Mast {
     /// course yard hangs below its shared height, for a hull that flies its
     /// sail low on the same mast.
     pub yard_drop: f32,
+    /// Extra pole above the shared masthead (design-space metres, like
+    /// `yard_drop`), for a mast rigged taller without recutting its canvas.
+    pub mast_up: f32,
+    /// Metres both yards are hung above their shared heights; the canvas
+    /// keeps its cut and rides up with them (`yard_drop` still lowers the
+    /// course against this).
+    pub yard_up: f32,
+    /// Extra daylight opened between the course's head and the topsail's
+    /// foot, taken by hoisting the topsail yard alone.
+    pub sail_gap: f32,
     /// Square sails flown, stacked course upward: 1 is the course alone, 2
     /// adds a topsail on the pole above it (cut from `ship_render`'s shared
     /// topsail constants, again by `scale`).
@@ -174,7 +184,10 @@ pub static SLOOP: HullShape = HullShape {
         z: 0.0,
         scale: 1.0,
         cloth_w: 1.0,
-        yard_drop: 1.4,
+        yard_drop: 1.6,
+        mast_up: 0.0,
+        yard_up: 0.0,
+        sail_gap: 0.0,
         sails: 1,
         sheet_foot_z: 2.0,
         brace_foot_z: 4.5,
@@ -240,6 +253,9 @@ pub static BRIG: HullShape = HullShape {
         scale: 1.0,
         cloth_w: 1.0,
         yard_drop: 0.0,
+        mast_up: 0.0,
+        yard_up: 0.0,
+        sail_gap: 0.0,
         sails: 2,
         sheet_foot_z: 3.5,
         brace_foot_z: 6.5,
@@ -314,6 +330,9 @@ pub static GALLEON: HullShape = HullShape {
             scale: 0.78,
             cloth_w: 1.12,
             yard_drop: 0.0,
+            mast_up: 0.0,
+            yard_up: 0.0,
+            sail_gap: 0.0,
             sails: 2,
             sheet_foot_z: -4.8,
             brace_foot_z: -2.5,
@@ -323,6 +342,9 @@ pub static GALLEON: HullShape = HullShape {
             scale: 1.0,
             cloth_w: 1.12,
             yard_drop: 0.0,
+            mast_up: 0.0,
+            yard_up: 0.0,
+            sail_gap: 0.0,
             sails: 2,
             sheet_foot_z: 4.5,
             brace_foot_z: 9.0,
@@ -407,6 +429,9 @@ pub static INDIAMAN: HullShape = HullShape {
             scale: 0.72,
             cloth_w: 1.12,
             yard_drop: 0.0,
+            mast_up: 0.0,
+            yard_up: 0.0,
+            sail_gap: 0.0,
             sails: 2,
             sheet_foot_z: -11.3,
             brace_foot_z: -9.0,
@@ -416,15 +441,24 @@ pub static INDIAMAN: HullShape = HullShape {
             scale: 0.86,
             cloth_w: 1.12,
             yard_drop: 0.0,
+            mast_up: 0.0,
+            yard_up: 0.0,
+            sail_gap: 0.0,
             sails: 2,
             sheet_foot_z: -3.3,
             brace_foot_z: -1.0,
         },
+        // The flagship's main is rigged above the shared plan: a taller pole,
+        // both yards hoisted higher, and extra daylight between the cloths;
+        // the canvas itself keeps the shared cut.
         Mast {
             z: 0.0,
             scale: 1.0,
             cloth_w: 1.12,
             yard_drop: 0.0,
+            mast_up: 1.2,
+            yard_up: 0.7,
+            sail_gap: 0.2,
             sails: 2,
             sheet_foot_z: 5.0,
             brace_foot_z: 10.0,
@@ -549,6 +583,9 @@ mod tests {
                 assert!(m.sails >= 1, "{name}: a bare mast");
                 assert!(m.cloth_w > 0.0, "{name}: no cloth width");
                 assert!(m.yard_drop >= 0.0, "{name}: yard_drop hangs downward");
+                assert!(m.mast_up >= 0.0, "{name}: mast_up rigs taller");
+                assert!(m.yard_up >= 0.0, "{name}: yard_up hoists upward");
+                assert!(m.sail_gap >= 0.0, "{name}: sail_gap opens upward");
                 for z in [m.z, m.sheet_foot_z, m.brace_foot_z] {
                     assert!(
                         z > hull.z_bow() && z < hull.z_stern(),
