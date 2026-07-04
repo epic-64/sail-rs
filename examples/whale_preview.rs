@@ -17,6 +17,8 @@ mod minimap {
 mod map_kraken;
 #[path = "../src/map_whale.rs"]
 mod map_whale;
+#[path = "../src/map_wave.rs"]
+mod map_wave;
 
 fn conf() -> Conf {
     Conf { window_title: "beast preview".into(), window_width: 1280, window_height: 720, ..Default::default() }
@@ -30,11 +32,13 @@ async fn main() {
         clear_background(Color::new(0.86, 0.79, 0.64, 1.0));
         let ink = Color::new(0.23, 0.17, 0.11, 1.0);
         let (w, h) = (screen_width(), screen_height());
-        map_whale::draw_whale(w * 0.24, h * 0.35, 130.0, 3.3, ink);
-        map_kraken::draw_kraken(w * 0.68, h * 0.42, 220.0, 5.6, ink);
+        map_whale::draw_whale(w * 0.16, h * 0.30, 110.0, 2.8, ink);
+        map_kraken::draw_kraken(w * 0.75, h * 0.35, 170.0, 4.3, ink);
+        map_wave::draw_wave(w * 0.45, h * 0.32, 150.0, 3.8, ink);
         // Small, at roughly in-game map scale.
         map_whale::draw_whale(w * 0.15, h * 0.85, 36.0, 1.0, ink);
-        map_kraken::draw_kraken(w * 0.32, h * 0.82, 46.0, 1.0, ink);
+        map_kraken::draw_kraken(w * 0.35, h * 0.82, 46.0, 1.0, ink);
+        map_wave::draw_wave(w * 0.55, h * 0.84, 34.0, 1.0, ink);
         frames += 1;
         if frames >= 4 {
             get_screen_data().export_png(&out);
