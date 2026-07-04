@@ -132,6 +132,8 @@ fn launch_fullscreen() -> bool {
 /// - `weather=NAME` — a `Weather` rung by name (calm, clear, ... storm)
 /// - `rival=M` — a rival on the water M metres ahead, beam-on
 /// - `rival_hull=N` — the tier that rival sails (default 1)
+/// - `refit=N`: loop the shipyard rebuild animation (swap the tier between
+///   `hull` and N every few seconds, so a frame dump catches it mid-flight)
 /// - `hud=0` — start with the HUD tucked away for a clean frame
 struct SceneSpec {
     seed: i64,
@@ -144,6 +146,7 @@ struct SceneSpec {
     weather: Option<Weather>,
     rival: Option<f32>,
     rival_hull: i32,
+    refit: Option<i32>,
     hud: bool,
 }
 
@@ -160,6 +163,7 @@ fn scene_spec() -> Option<SceneSpec> {
         weather: None,
         rival: None,
         rival_hull: 1,
+        refit: None,
         hud: true,
     };
     for pair in raw.split(',') {
@@ -189,6 +193,7 @@ fn scene_spec() -> Option<SceneSpec> {
             }
             "rival" => sc.rival = v.parse().ok(),
             "rival_hull" => sc.rival_hull = v.parse().unwrap_or(sc.rival_hull),
+            "refit" => sc.refit = v.parse().ok(),
             "hud" => sc.hud = v != "0",
             other => eprintln!("SAIL_SCENE: unknown key {other:?}"),
         }
@@ -647,6 +652,15 @@ async fn run_game(
             ));
         }
     }
+
+    // A scene's looping refit (`refit=N`, see `scene_spec`): the tier to swap
+    // toward, the tier staged to swap back to, and the beat clock.
+    let scene_refit = scene
+        .as_ref()
+        .and_then(|sc| sc.refit)
+        .map(|to| to.clamp(0, game_state::HULL_MAX_LEVEL));
+    let scene_refit_base = gs.hull_level;
+    let mut scene_refit_t: f32 = 0.0;
 
     // Make the on-disk save match the voyage actually being played from the first
     // frame (a fresh start, a new-seed chart, or this restored save), so a quick
@@ -1245,6 +1259,17 @@ async fn run_game(
             if dev_mode && is_key_pressed(KeyCode::Period) {
                 gs.hull_level = (gs.hull_level + 1).min(game_state::HULL_MAX_LEVEL);
             }
+            // A staged scene's looping refit (`refit=N`): swap the tier back
+            // and forth on a beat comfortably longer than the rebuild runs,
+            // so the frame dump keeps catching the animation mid-flight.
+            if let Some(to) = scene_refit {
+                scene_refit_t += dt;
+                if scene_refit_t >= 4.0 {
+                    scene_refit_t = 0.0;
+                    gs.hull_level =
+                        if gs.hull_level == to { scene_refit_base } else { to };
+                }
+            }
             if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
                 log_open = !log_open;
                 // Open the book to its first spread each time (the original rewinds
@@ -1424,7 +1449,13 @@ async fn run_game(
         // then ease the parts that should rock with the long swell rather than
         // buzz with the chop.
         let ship_hull = hull_shape::for_level(gs.hull_level);
-        ship.set_hull_level(gs.hull_level);
+        // A tier change (shipyard buy or dev key) sets off the rebuild
+        // animation: the old hull's parts fly off and the new one's fly in
+        // (see `ShipRenderer::refit_to`). The buoyancy and camera above ride
+        // the new tier at once; the woosh marks the rebuild setting off.
+        if ship.refit_to(gs.hull_level) {
+            sounds.wind_shift();
+        }
         let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea, ship_hull);
         // The bow's lift above the hull's mean (metres): the sea height where the stem
         // parts the water, relative to the eye's heave. Drives the deck/camera heave
