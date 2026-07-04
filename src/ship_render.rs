@@ -36,6 +36,7 @@
 use macroquad::prelude::*;
 
 use crate::geometry::clamp;
+use crate::hull_shape::{self, HullShape};
 use crate::ocean::{deck_heave_px, pitch_response, ShipMotion, HEAVE_CAMERA_SHARE};
 use crate::sailing::wind_factor_rel;
 use crate::tavern::SpecialItem;
@@ -62,75 +63,33 @@ const YAW_SWAY_PX: f32 = 180.0; // px of pan per rad of hull yaw
 // Hull and rig are one real low-poly loft in metres, in the rig frame: +x
 // starboard, +y up, +z aft toward the eye, origin on the waist deck under the
 // mast. One perspective camera projects it all (see `helm_cam`), so the
-// woodwork and the spars foreshorten consistently: the eye stands on the
-// quarterdeck a stretch abaft the wheel. Sharing the camera is also what lets
-// the deck occlude the rig honestly: the deck draws in a fore and an aft phase
-// around the mast station with the rig between them, so the crates and rails
-// standing nearer the eye than the mast paint over its foot.
-const CAM_AFT: f32 = 10.0; // the eye: metres abaft the mast
-// Eye height above the waist deck: a helmsman's eye line (~1.75 m) stood on the
-// quarterdeck (see the raised stations). Raising this reads as a taller viewer.
-const CAM_UP: f32 = 2.75;
+// woodwork and the spars foreshorten consistently: the eye stands abaft the
+// wheel (on the quarterdeck where the hull has one). Sharing the camera is
+// also what lets the deck occlude the rig honestly: the deck draws in a fore
+// and an aft phase around the mast station with the rig between them, so the
+// crates and rails standing nearer the eye than the mast paint over its foot.
+//
+// The hull's shape itself (lofting stations, the eye's stand, the helm
+// furniture's stations, the cargo run) lives in `crate::hull_shape`: one
+// [`HullShape`] per shipyard tier, so the whole drawn ship follows the tier
+// the captain sails. The transom always lies behind the eye, which is what
+// keeps the woodwork running off-screen through any sway: there is simply
+// more ship back there.
 const CAM_F: f32 = 0.58; // focal length, ×w (~80° horizontal field of view)
 const CAM_NEAR: f32 = 0.8; // metres; geometry nearer the eye than this is dropped
 /// The horizon row the camera is levelled on, ×h (`ocean_renderer` draws the
 /// sea's horizon at this same row).
 const HORIZON: f32 = 0.54;
 
-/// The hull's lofting stations, bow → stern: (z aft of the mast, half-beam,
-/// deck height, bulwark height), all metres. This table *is* the ship's shape —
-/// the sheer that dips amidships and climbs to the stemhead, the beam swelling
-/// to its fullest at the mast, the raised quarterdeck aft (the doubled station
-/// is its riser) — and everything drawn is lofted from it, so reshaping the
-/// ship means editing numbers here and nowhere else. The transom lies behind
-/// the eye (`CAM_AFT`), which is what keeps the woodwork running off-screen
-/// through any sway: there is simply more ship back there.
-pub(crate) const STATIONS: [(f32, f32, f32, f32); 13] = [
-    (-15.0, 0.05, 1.55, 0.50), // stem tip
-    (-13.5, 0.95, 1.22, 0.72),
-    (-11.5, 1.95, 0.88, 0.70),
-    (-9.0, 2.65, 0.55, 0.68),
-    (-6.0, 3.15, 0.26, 0.66),
-    (-3.0, 3.40, 0.10, 0.65),
-    (0.0, 3.50, 0.02, 0.65), // the mast station: full beam
-    (3.0, 3.45, 0.00, 0.66),
-    (4.0, 3.40, 0.005, 0.68), // the sheer starts its climb to the quarterdeck...
-    (QDECK_BREAK, 3.36, 0.01, 1.67), // ...topping out level with the platform's wall
-    (QDECK_BREAK, 3.36, 1.00, 0.68), // quarterdeck side of the break (the riser)
-    (9.0, 3.05, 1.06, 0.74),
-    (11.0, 2.72, 1.10, 0.80), // transom, behind the eye
-];
-
-/// Where the deck steps up onto the helm's raised platform (the doubled
-/// station above). The deck loft splits into waist and quarterdeck phases
-/// here, with the companion stairs drawn between them.
-const QDECK_BREAK: f32 = 5.0;
-
-/// Fore-aft reach of the companion stairs' flight down from the break; the
-/// shorter the run, the steeper the climb. Shared with the cargo fence in
-/// `step_cargo`, so sliding crates fetch up against the flight exactly where
-/// it stands.
+/// Fore-aft reach of the companion stairs' flight down from the quarterdeck
+/// break; the shorter the run, the steeper the climb. Shared with the cargo
+/// fence in `step_cargo`, so sliding crates fetch up against the flight
+/// exactly where it stands. Meaningless on a single-decked hull.
 const STAIR_RUN: f32 = 3.6;
 
-/// The breast rail across the quarterdeck's forward edge: where it stands and
-/// how high its top rail rides off the platform.
-const BREAST_RAIL_Z: f32 = QDECK_BREAK + 0.1;
+/// How high the breast rail across the quarterdeck's forward edge rides off
+/// the platform (it stands just aft of the break).
 const BREAST_RAIL_H: f32 = 0.85;
-
-/// Hull data (half-beam, deck height, bulwark height) interpolated at fore-aft
-/// z, for placing furniture and rope feet between stations.
-pub(crate) fn station_at(z: f32) -> (f32, f32, f32) {
-    for pair in STATIONS.windows(2) {
-        let (z0, b0, d0, w0) = pair[0];
-        let (z1, b1, d1, w1) = pair[1];
-        if z >= z0 && z <= z1 && z1 > z0 {
-            let t = (z - z0) / (z1 - z0);
-            return (b0 + (b1 - b0) * t, d0 + (d1 - d0) * t, w0 + (w1 - w0) * t);
-        }
-    }
-    let (_, b, d, wh) = STATIONS[STATIONS.len() - 1];
-    (b, d, wh)
-}
 
 /// A tiny deterministic hash to [0,1): per-slot jitter for the deck cargo's
 /// sizes, offsets and stacking rolls. Render-side only; the world's seeded
@@ -145,19 +104,29 @@ fn slot_rand(seed: u32) -> f32 {
 
 /// Project a hull point (metres) through the helm camera: the fore-aft nod is a
 /// true rotation about the mast foot (`sp`/`cp` its sin/cos, shared with the
-/// rig), then a perspective divide from the eye. Returns the unswayed screen
-/// point and the px-per-metre scale at that depth, or None inside the near
-/// plane — such a point is below or behind the eye, always off-screen, so a
-/// caller dropping its face never leaves a visible hole.
-fn helm_cam(x: f32, y: f32, z: f32, sp: f32, cp: f32, w: f32, h: f32) -> Option<(Vec2, f32)> {
+/// rig), then a perspective divide from the eye (which stands where the hull's
+/// shape puts it). Returns the unswayed screen point and the px-per-metre scale
+/// at that depth, or None inside the near plane; such a point is below or
+/// behind the eye, always off-screen, so a caller dropping its face never
+/// leaves a visible hole.
+fn helm_cam(
+    hull: &HullShape,
+    x: f32,
+    y: f32,
+    z: f32,
+    sp: f32,
+    cp: f32,
+    w: f32,
+    h: f32,
+) -> Option<(Vec2, f32)> {
     let py = y * cp - z * sp;
     let pz = y * sp + z * cp;
-    let d = CAM_AFT - pz;
+    let d = hull.cam_aft - pz;
     if d < CAM_NEAR {
         return None;
     }
     let s = w * CAM_F / d;
-    Some((vec2(w * 0.5 + x * s, h * HORIZON + (CAM_UP - py) * s), s))
+    Some((vec2(w * 0.5 + x * s, h * HORIZON + (hull.cam_up - py) * s), s))
 }
 
 /// A round spar between two points in the loft frame (metres): a tapered pole
@@ -168,10 +137,12 @@ fn helm_cam(x: f32, y: f32, z: f32, sp: f32, cp: f32, w: f32, h: f32) -> Option<
 /// pitch nod, which at worst pops an edge-on sliver a frame early), and a rim
 /// falloff toward the silhouette keeps the round form readable even when the
 /// key light strikes every lengthwise facet alike (dead overhead, say). `proj`
-/// projects a loft point to the swayed screen, `None` inside the near plane.
+/// projects a loft point to the swayed screen, `None` inside the near plane;
+/// `eye` is the helm eye's (y, z) stand in the loft frame, for the facet cull.
 fn draw_spar(
     proj: &impl Fn(f32, f32, f32) -> Option<Vec2>,
     lume: &Lume,
+    eye: (f32, f32),
     base: [f32; 3],
     a: (f32, f32, f32),
     b: (f32, f32, f32),
@@ -221,8 +192,8 @@ fn draw_spar(
         // helm (where `helm_cam` stands).
         let e = (
             -(mid.0 + n.0 * ra),
-            CAM_UP - (mid.1 + n.1 * ra),
-            CAM_AFT - (mid.2 + n.2 * ra),
+            eye.0 - (mid.1 + n.1 * ra),
+            eye.1 - (mid.2 + n.2 * ra),
         );
         let facing = n.0 * e.0 + n.1 * e.1 + n.2 * e.2;
         if facing <= 0.0 {
@@ -272,11 +243,8 @@ pub(crate) const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forwar
 const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is MAST_HW)
 const YARD_MID_R: f32 = 0.13; // the yard's radius at the slings (its middle)...
 const YARD_TIP_R: f32 = 0.07; // ...tapering out to the yardarms
-// The bowsprit's run, (height above the waist deck, z aft) at its heel and tip.
-// Shared with the rival's miniature (see [`crate::rival_render`]) so both ships
-// fly the same prow.
-pub(crate) const SPRIT_BASE: (f32, f32) = (1.5, -14.6);
-pub(crate) const SPRIT_TIP: (f32, f32) = (2.7, -18.2);
+// The bowsprit's run is part of each hull's shape (`HullShape::sprit_base` /
+// `sprit_tip`): a shorter hull flies a shorter prow.
 
 // --- Wood / canvas palette (harmonises with the island features' wood tones) --
 pub(crate) const SAIL_CLOTH: [f32; 3] = [226.0, 214.0, 188.0];
@@ -697,6 +665,9 @@ pub struct RigInput<'a> {
 
 /// Holds the eased animation state (wheel spin, yard brace, canvas set) between frames.
 pub struct ShipRenderer {
+    /// The hull tier's shape everything is lofted from (see [`crate::hull_shape`]);
+    /// swapped by `set_hull_level` when the shipyard rebuilds the ship.
+    hull: &'static HullShape,
     wheel_angle: f32,
     brace_angle: f32,
     /// Visually-eased sail set, chasing the chosen notch so the canvas furls/unfurls
@@ -751,6 +722,7 @@ fn point_in_poly(poly: &[Vec2], p: Vec2) -> bool {
 impl ShipRenderer {
     pub fn new() -> Self {
         ShipRenderer {
+            hull: &hull_shape::BRIG,
             wheel_angle: 0.0,
             brace_angle: 0.0,
             set: 0.0,
@@ -760,6 +732,18 @@ impl ShipRenderer {
             washed: 0,
             over_cooldown: 0.0,
             deck_grain: None,
+        }
+    }
+
+    /// Loft the ship from the given shipyard tier's hull (see
+    /// [`hull_shape::for_level`]). A tier change re-stows the deck cargo, since
+    /// the new waist has its own stowage plan.
+    pub fn set_hull_level(&mut self, hull_level: i32) {
+        let hull = hull_shape::for_level(hull_level);
+        if !std::ptr::eq(hull, self.hull) {
+            self.hull = hull;
+            self.crates.clear();
+            self.stowed = -1;
         }
     }
 
@@ -775,24 +759,27 @@ impl ShipRenderer {
     }
 
     /// Lay out the deck cargo afresh for `target` hold units: one crate per
-    /// unit. Slots fill from the quarterdeck break forward toward the bow (the
-    /// slots nearest the helm are stowed first); sizes and offsets jitter by a
-    /// per-slot hash (`slot_rand`), so the pile reads as stowed by hand yet
-    /// lays out identically for the same count. A first pass lays one crate
-    /// per slot with some rolling a second stacked on top straight away; a
-    /// second pass returns aft to top up the slots left single, so a full hold
-    /// buries the waist two crates deep. The sequence is fixed and only ever
-    /// *extended* by more cargo: crates already stowed keep their slots.
+    /// unit. Slots fill from the aft end of the hull's cargo run forward
+    /// toward the bow (the slots nearest the helm are stowed first); sizes and
+    /// offsets jitter by a per-slot hash (`slot_rand`), so the pile reads as
+    /// stowed by hand yet lays out identically for the same count. A first
+    /// pass lays one crate per slot with some rolling a second stacked on top
+    /// straight away; a second pass returns aft to top up the slots left
+    /// single, so a full hold buries the waist two crates deep. The sequence
+    /// is fixed and only ever *extended* by more cargo: crates already stowed
+    /// keep their slots. A hold bigger than the waist's slots (a small hull
+    /// under a big hold upgrade) simply shows a deck stowed to its brim.
     fn rebuild_crates(&mut self, target: usize) {
         self.crates.clear();
         // Fill-order slots: (hash key, centre x, centre z). Rows march from
-        // just short of the break toward the bow; the columns are shuffled
+        // just short of the aft fence toward the bow; the columns are shuffled
         // per row so the pile doesn't fill in tidy stripes.
-        let cols = [-2.4f32, -1.2, 0.0, 1.2]; // clear of the stairs at x 2.0
+        let hull = self.hull;
+        let cols = hull.cargo_cols;
         let mut slots: Vec<(u32, f32, f32)> = Vec::new();
-        let mut zrow = 4.2f32;
+        let mut zrow = hull.cargo_z_max - 0.8;
         let mut row = 0u32;
-        while zrow > -6.0 {
+        while zrow > hull.cargo_z_min + 0.4 {
             let spin = (slot_rand(row.wrapping_mul(31).wrapping_add(7)) * cols.len() as f32)
                 as usize;
             for c in 0..cols.len() {
@@ -842,7 +829,7 @@ impl ShipRenderer {
                 let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
                 let (hw, hd) = (0.40 + 0.16 * j(2), 0.35 + 0.15 * j(3));
                 let ht = 0.55 + 0.40 * j(4);
-                let deck = station_at(z).1; // the deck rises toward the bow
+                let deck = hull.station_at(z).1; // the deck rises toward the bow
                 let stacked_early = j(5) < 0.38;
                 let top = crate_at(
                     k.wrapping_mul(5).wrapping_add(3),
@@ -882,6 +869,7 @@ impl ShipRenderer {
             self.rebuild_crates(rig.cargo.max(0) as usize);
             self.stowed = rig.cargo;
         }
+        let hull = self.hull;
         let n = self.crates.len();
         if n == 0 {
             return;
@@ -944,7 +932,7 @@ impl ShipRenderer {
                     }
                     continue;
                 }
-                let deck = station_at(c.z).1;
+                let deck = hull.station_at(c.z).1;
                 if c.y <= deck {
                     c.y = deck;
                     c.vy = 0.0;
@@ -1022,7 +1010,7 @@ impl ShipRenderer {
                     c.vz = 0.0;
                 }
             }
-            c.y = station_at(c.z).1;
+            c.y = hull.station_at(c.z).1;
         }
 
         // --- Neighbours: keep grounded crates from interpenetrating -----------
@@ -1092,7 +1080,7 @@ impl ShipRenderer {
             let c = &mut self.crates[i];
             let mut kick = (0.0f32, 0.0f32);
             // The bulwarks, following the hull's curve at this station.
-            let limit = station_at(c.z).0 - WALL_GAP - c.hw;
+            let limit = hull.station_at(c.z).0 - WALL_GAP - c.hw;
             if c.x.abs() > limit {
                 let s = c.x.signum();
                 // Slammed in hard enough, the crate carries the rail instead
@@ -1112,9 +1100,10 @@ impl ShipRenderer {
                     c.vx = -c.vx * CRATE_BOUNCE;
                 }
             }
-            // The quarterdeck riser aft; the rising bow forward.
-            let z_max = QDECK_BREAK - WALL_GAP - c.hd;
-            let z_min = -6.5 + c.hd;
+            // The aft fence (the quarterdeck riser, or the clear space kept
+            // before the helm); the rising bow forward.
+            let z_max = hull.cargo_z_max - WALL_GAP - c.hd;
+            let z_min = hull.cargo_z_min + c.hd;
             if c.z > z_max {
                 c.z = z_max;
                 if c.vz > 0.0 {
@@ -1128,13 +1117,16 @@ impl ShipRenderer {
                     c.vz = -c.vz * CRATE_BOUNCE;
                 }
             }
-            // The companion stairs block the starboard run abaft the waist.
-            let stair_x = 2.0 - WALL_GAP - c.hw;
-            if c.z + c.hd > QDECK_BREAK - STAIR_RUN && c.x > stair_x {
-                c.x = stair_x;
-                if c.vx > 0.0 {
-                    kick.0 = c.vx;
-                    c.vx = -c.vx * CRATE_BOUNCE;
+            // The companion stairs block the starboard run abaft the waist
+            // (only where the hull has a quarterdeck to climb to).
+            if let Some(qdeck) = hull.qdeck_break {
+                let stair_x = 2.0 - WALL_GAP - c.hw;
+                if c.z + c.hd > qdeck - STAIR_RUN && c.x > stair_x {
+                    c.x = stair_x;
+                    if c.vx > 0.0 {
+                        kick.0 = c.vx;
+                        c.vx = -c.vx * CRATE_BOUNCE;
+                    }
                 }
             }
             // The mast's foot: shove out along the shallower overlap.
@@ -1260,7 +1252,7 @@ impl ShipRenderer {
     }
 
     /// The hull: deck floor, quarterdeck, bulwarks, railing, cargo and bowsprit,
-    /// lofted from [`STATIONS`] through the helm camera and drawn bow → stern so
+    /// lofted from the hull's stations through the helm camera and drawn bow → stern so
     /// nearer woodwork paints over farther (macroquad has no depth buffer).
     /// Called twice a frame, split by `aft` around the mast station so the rig
     /// slots into the painter's order between the calls: the fore pass draws
@@ -1278,9 +1270,10 @@ impl ShipRenderer {
         w: f32,
         aft: bool,
     ) -> DeckPoints {
+        let hull = self.hull;
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
-            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+            helm_cam(hull, x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
         };
         let pt = |x: f32, y: f32, z: f32| cam(x, y, z).map(|(p, _)| p);
         let quad = |a: Vec2, b: Vec2, c: Vec2, d: Vec2, col: Color| {
@@ -1321,8 +1314,8 @@ impl ShipRenderer {
         // The grain's lengthwise axis maps the hull's whole station run, so a
         // strip's texture rows continue seamlessly from one lofted pair to the
         // next.
-        let z_bow = STATIONS[0].0;
-        let z_stern = STATIONS[STATIONS.len() - 1].0;
+        let z_bow = hull.z_bow();
+        let z_stern = hull.z_stern();
         let plank_v = move |z: f32| (z - z_bow) / (z_stern - z_bow);
         let deck_diff = lume.diff(n_deck);
         // A lofted face wearing the plank grain: four corners with their texture
@@ -1377,10 +1370,13 @@ impl ShipRenderer {
             }
         };
         // A station belongs to the quarterdeck run if it lies aft of the break
-        // (the raised twin of the doubled break station included).
-        let is_aft = |z: f32, d: f32| z > QDECK_BREAK || (z == QDECK_BREAK && d > 0.4);
+        // (the raised twin of the doubled break station included). A hull with
+        // no quarterdeck has no aft run: its whole deck lofts in the fore pass.
+        let is_aft = |z: f32, d: f32| {
+            hull.qdeck_break.is_some_and(|q| z > q || (z == q && d > 0.4))
+        };
         if !aft {
-            for pair in STATIONS.windows(2).filter(|p| !is_aft(p[0].0, p[0].2)) {
+            for pair in hull.stations.windows(2).filter(|p| !is_aft(p[0].0, p[0].2)) {
                 floor_pair(pair);
             }
         }
@@ -1396,11 +1392,11 @@ impl ShipRenderer {
         // Deferred until the waist walls and railing are down: the flight
         // stands inboard of them, so it must paint over the starboard wall,
         // never hide behind it.
-        let companion_stairs = || {
+        let companion_stairs = |qdeck: f32| {
             let (x0, x1) = (2.0f32, 3.3); // inboard / outboard edges
             let steps = 6;
             let run = STAIR_RUN; // fore-aft reach of the flight
-            let (_, qd_y, _) = station_at(QDECK_BREAK + 0.1);
+            let (_, qd_y, _) = hull.station_at(qdeck + 0.1);
             let side_col = lume.col(RAIL_DK, lume.diff(n_wall(1.0)), 0.9);
             // The carriage's grain runs fore-aft down the flight: one band of
             // the texture spread bottom to top, its plank-edge seams landing
@@ -1411,8 +1407,8 @@ impl ShipRenderer {
             let carr_u = move |yy: f32| (carr_band + (yy / qd_y).min(1.0)) / PLANKS as f32;
             for k in (1..steps).rev() {
                 let y = qd_y * (1.0 - k as f32 / steps as f32);
-                let za = QDECK_BREAK - run * k as f32 / steps as f32;
-                let zb = QDECK_BREAK - run * (k as f32 - 1.0) / steps as f32;
+                let za = qdeck - run * k as f32 / steps as f32;
+                let zb = qdeck - run * (k as f32 - 1.0) / steps as f32;
                 // The carriage: the solid side wall under this tread.
                 grain_quad(
                     [pt(x0, 0.0, za), pt(x0, 0.0, zb), pt(x0, y, zb), pt(x0, y, za)],
@@ -1440,7 +1436,7 @@ impl ShipRenderer {
             }
             // The handrail down the inboard carriage: head post height off the
             // platform, foot height off the lowest tread.
-            let rail_at = |f: f32| (QDECK_BREAK - run * f, (qd_y + 0.8) + (0.75 - (qd_y + 0.8)) * f);
+            let rail_at = |f: f32| (qdeck - run * f, (qd_y + 0.8) + (0.75 - (qd_y + 0.8)) * f);
             for f in [0.3f32, 0.7] {
                 let (z, ry) = rail_at(f);
                 let ty = qd_y * (1.0 - f); // the tread the post stands on
@@ -1505,12 +1501,12 @@ impl ShipRenderer {
                 let (x0, z0) = (t0 * mast_h * tx, t0 * mast_h * tz);
                 let (x1, z1) = (t1 * mast_h * tx, t1 * mast_h * tz);
                 let (zm, xm) = ((z0 + z1) * 0.5, (x0 + x1) * 0.5);
-                let (bm, _, _) = station_at(zm);
+                let (bm, _, _) = hull.station_at(zm);
                 if xm.abs() > bm - 0.1 || !(z_lo..z_hi).contains(&zm) {
                     continue;
                 }
-                let (_, d0, _) = station_at(z0);
-                let (_, d1, _) = station_at(z1);
+                let (_, d0, _) = hull.station_at(z0);
+                let (_, d1, _) = hull.station_at(z1);
                 try_quad(
                     pt(x0 - qx * w0, d0 + 0.02, z0 - qz * w0),
                     pt(x0 + qx * w0, d0 + 0.02, z0 + qz * w0),
@@ -1522,13 +1518,13 @@ impl ShipRenderer {
         };
 
         // --- Bulwarks: a planked wall up each side riding the deck edge, its
-        // height running the sheer in `STATIONS`, with strakes and a cap board.
-        // Called once per deck level.
+        // height running the sheer in the station table, with strakes and a
+        // cap board. Called once per deck level.
         let bulwarks = |aft: bool| {
             for side in [-1.0f32, 1.0] {
                 let wall_col = lume.col(RAIL, lume.diff(n_wall(side)), 0.9);
                 let seam_col = lume.col(RAIL_DK, lume.diff(n_wall(side)), 0.9);
-                for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2) == aft) {
+                for pair in hull.stations.windows(2).filter(|p| is_aft(p[0].0, p[0].2) == aft) {
                     let (z0, b0, d0, w0) = pair[0];
                     let (z1, b1, d1, w1) = pair[1];
                     let base0 = pt(side * b0, d0, z0);
@@ -1567,7 +1563,7 @@ impl ShipRenderer {
         // keeps its knots untouched.
         let rail_profile: Vec<(f32, f32)> = {
             let mut knots: Vec<(f32, f32)> = Vec::new();
-            for &(z, _, d, wh) in STATIONS.iter() {
+            for &(z, _, d, wh) in hull.stations.iter() {
                 if knots.last().is_some_and(|&(pz, _)| z - pz < 0.2) {
                     continue;
                 }
@@ -1623,11 +1619,11 @@ impl ShipRenderer {
                 for pair in rail_profile.windows(2) {
                     let (z0, y0) = pair[0];
                     let (z1, y1) = pair[1];
-                    if ((z0 + z1) * 0.5 > QDECK_BREAK) != aft {
+                    if hull.qdeck_break.is_some_and(|q| (z0 + z1) * 0.5 > q) != aft {
                         continue;
                     }
-                    let b0 = station_at(z0).0;
-                    let b1 = station_at(z1).0;
+                    let b0 = hull.station_at(z0).0;
+                    let b1 = hull.station_at(z1).0;
                     if let (Some((p0, s0)), Some((p1, s1))) =
                         (cam(side * b0, y0, z0), cam(side * b1, y1, z1))
                     {
@@ -1641,7 +1637,7 @@ impl ShipRenderer {
                     }
                 }
                 // The stanchions, cap to the rounded rail line.
-                for &(z, b, d, wh) in STATIONS.iter().filter(|s| is_aft(s.0, s.2) == aft) {
+                for &(z, b, d, wh) in hull.stations.iter().filter(|s| is_aft(s.0, s.2) == aft) {
                     let (Some((cap_p, s)), Some((rail_p, _))) =
                         (cam(side * b, d + wh, z), cam(side * b, rail_y_at(z), z))
                     else {
@@ -1660,12 +1656,15 @@ impl ShipRenderer {
         };
 
         // Waist level: shadow on its planks, then its walls and rails, then the
-        // companion stairs over them (the flight is inboard of the walls).
+        // companion stairs over them (the flight is inboard of the walls). On a
+        // single-decked hull this pass is the whole deck, stem to transom.
         if !aft {
-            mast_shadow(-14.5, QDECK_BREAK);
+            mast_shadow(z_bow + 0.5, hull.qdeck_break.unwrap_or(z_stern));
             bulwarks(false);
             railing(false);
-            companion_stairs();
+            if let Some(qdeck) = hull.qdeck_break {
+                companion_stairs(qdeck);
+            }
         }
 
         // --- Deck cargo: the lashed crates. Their layout and motion live in
@@ -1707,10 +1706,10 @@ impl ShipRenderer {
                     SIDE_N[f].0 * ys + SIDE_N[f].1 * yc,
                 );
                 // Cull faces turned away from the eye (it stands at the origin
-                // of x, CAM_AFT aft; height doesn't matter for vertical faces).
+                // of x, `cam_aft` aft; height doesn't matter for vertical faces).
                 let fcx = (corners[f].0 + corners[g2].0) * 0.5;
                 let fcz = (corners[f].1 + corners[g2].1) * 0.5;
-                if n.0 * -fcx + n.1 * (CAM_AFT - fcz) <= 0.0 {
+                if n.0 * -fcx + n.1 * (hull.cam_aft - fcz) <= 0.0 {
                     continue;
                 }
                 let tone = if n.1 > 0.55 { CRATE_MID } else { CRATE_DK };
@@ -1735,11 +1734,14 @@ impl ShipRenderer {
         // Quarterdeck level: the platform floor over the waist detail, then its
         // own shadow run, walls and rails. All of it stands nearer the eye
         // than the mast, so it belongs to the aft pass, painted over the rig.
-        if aft {
-            for pair in STATIONS.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
+        // A single-decked hull has nothing raised: the pass draws only the
+        // crates abaft the mast (handled above).
+        if aft && hull.qdeck_break.is_some() {
+            let qdeck = hull.qdeck_break.unwrap();
+            for pair in hull.stations.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
                 floor_pair(pair);
             }
-            mast_shadow(QDECK_BREAK, 8.5);
+            mast_shadow(qdeck, z_stern - 2.5);
             bulwarks(true);
             railing(true);
 
@@ -1750,8 +1752,8 @@ impl ShipRenderer {
             // end stays open where the companion stairs come up. Drawn after
             // the crates and the rig, since it stands nearer the eye than
             // everything forward of the break (the mast included).
-            let brk = BREAST_RAIL_Z; // just aft of the quarterdeck break
-            let (_, qd_y, _) = station_at(brk);
+            let brk = qdeck + 0.1; // just aft of the quarterdeck break
+            let (_, qd_y, _) = hull.station_at(brk);
             let rail_y = qd_y + BREAST_RAIL_H; // waist-high off the platform
             let (rail_l, rail_r) = (-3.25f32, 1.6); // port bulwark → the stair head
             let mid_y = qd_y + 0.45; // the mid rail below the top board
@@ -1855,9 +1857,10 @@ impl ShipRenderer {
             draw_spar(
                 &pt,
                 lume,
+                (hull.cam_up, hull.cam_aft),
                 SPAR,
-                (0.0, SPRIT_BASE.0, SPRIT_BASE.1),
-                (0.0, SPRIT_TIP.0, SPRIT_TIP.1),
+                (0.0, hull.sprit_base.0, hull.sprit_base.1),
+                (0.0, hull.sprit_tip.0, hull.sprit_tip.1),
                 0.18,
                 0.08,
             );
@@ -1866,21 +1869,21 @@ impl ShipRenderer {
         // --- Screen anchors for the rig's ropes and the rain -------------------
         // A point atop the rail (the stanchion tops) at fore-aft z.
         let rail_top = |side: f32, z: f32| -> Option<Vec2> {
-            let (b, d, wh) = station_at(z);
+            let (b, d, wh) = hull.station_at(z);
             pt(side * b, d + wh + post_h, z)
         };
         let off = vec2(w * 0.5, h * 2.0); // fallback: parked far off-screen
         let foot = |side: f32, z: f32| rail_top(side, z).unwrap_or(off);
-        let sheet_foot = [foot(-1.0, 3.5), foot(1.0, 3.5)];
-        let brace_foot = [foot(-1.0, 6.5), foot(1.0, 6.5)];
-        let bowsprit_tip = pt(0.0, SPRIT_TIP.0, SPRIT_TIP.1).unwrap_or(off);
+        let sheet_foot = [foot(-1.0, hull.sheet_foot_z), foot(1.0, hull.sheet_foot_z)];
+        let brace_foot = [foot(-1.0, hull.brace_foot_z), foot(1.0, hull.brace_foot_z)];
+        let bowsprit_tip = pt(0.0, hull.sprit_tip.0, hull.sprit_tip.1).unwrap_or(off);
 
         // Outer silhouette for rain occlusion: down each rail bow → stern (as
         // far aft as the near plane allows), then straight off the bottom of the
         // screen, so the polygon encloses every plank, wall and rail drawn.
         // Built through the same projection and `sway`, so it tracks the hull.
         let rail_line = |side: f32| -> Vec<Vec2> {
-            STATIONS
+            hull.stations
                 .iter()
                 .filter_map(|&(z, b, d, wh)| pt(side * b * 1.04, d + wh + post_h, z))
                 .collect()
@@ -1897,7 +1900,7 @@ impl ShipRenderer {
         DeckPoints { silhouette, sheet_foot, brace_foot, bowsprit_tip }
     }
 
-    /// The ship's wheel, standing on the quarterdeck just ahead of the eye and
+    /// The ship's wheel, standing at the hull's helm just ahead of the eye and
     /// spun toward the rudder: a spoked ring on a short pedestal. The pedestal
     /// is projected through the helm camera like the deck it stands on; the
     /// ring itself is drawn flat at the hub's projected scale (it faces the
@@ -1912,18 +1915,20 @@ impl ShipRenderer {
     ) {
         // Where the helm stands: the wheel's plane, hub height and radius (m).
         // Sized so the rim stays under the horizon: the wheel should command the
-        // foreground without blocking the view dead ahead you navigate by.
-        const WHEEL_Z: f32 = 6.6;
-        // Hub about waist height off the quarterdeck, far under the eye line:
-        // the helmsman looks down onto the wheel, its lower rim running off the
-        // bottom of the screen.
-        const HUB_Y: f32 = 1.43; // above the waist deck; the pedestal adds the rest
+        // foreground without blocking the view dead ahead you navigate by. The
+        // hub rides its hull's stand (`wheel_z` / `hub_above_deck`), far under
+        // the eye line: the helmsman looks down onto the wheel, its lower rim
+        // running off the bottom of the screen.
         const WHEEL_R: f32 = 0.52;
+        let hull = self.hull;
+        let wheel_z = hull.wheel_z;
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
-            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+            helm_cam(hull, x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
         };
-        let Some((hub, s)) = cam(0.0, HUB_Y, WHEEL_Z) else {
+        let (_, deck_y, _) = hull.station_at(wheel_z);
+        let hub_y = deck_y + hull.hub_above_deck;
+        let Some((hub, s)) = cam(0.0, hub_y, wheel_z) else {
             return; // nod swung the wheel inside the near plane: nothing to draw
         };
         let a = self.wheel_angle;
@@ -1932,9 +1937,8 @@ impl ShipRenderer {
         let rim_col = lume.face(WHEEL_C, (0.0, 0.2, 0.98));
         let spoke_col = lume.face(WHEEL_DK, (0.0, 0.2, 0.98));
 
-        // Pedestal: a tapered post from the quarterdeck up to the hub.
-        let (_, deck_y, _) = station_at(WHEEL_Z);
-        if let Some((base, _)) = cam(0.0, deck_y, WHEEL_Z) {
+        // Pedestal: a tapered post from the deck up to the hub.
+        if let Some((base, _)) = cam(0.0, deck_y, wheel_z) {
             let (bw, tw) = (0.14 * s, 0.09 * s);
             let (b0, b1) = (vec2(base.x - bw, base.y), vec2(base.x + bw, base.y));
             let (t1, t0) = (vec2(hub.x + tw, hub.y), vec2(hub.x - tw, hub.y));
@@ -1975,7 +1979,7 @@ impl ShipRenderer {
     }
 
     /// The deck chart aboard: a parchment board on a pedestal stand on the
-    /// quarterdeck just port of the wheel, leaned like a chart desk so its face
+    /// helm's deck just port of the wheel, leaned like a chart desk so its face
     /// tips up toward the helmsman's eye. Inked with the current archipelago's
     /// isles and a sepia heading arrow for the ship (see [`DeckChart`]), in the
     /// log's parchment palette, so the local waters are a glance away from the helm.
@@ -1990,30 +1994,31 @@ impl ShipRenderer {
     ) {
         // The board in metres: a square chart (width == length, so the isotropic
         // plot keeps the isles' true spacing) leaned back like a chart desk so its
-        // face tips up toward the helmsman's eye. It stands on its own pedestal on
-        // the quarterdeck just port of the wheel (clear of the view dead ahead),
-        // pulled aft near the helm rather than clipped to the forward rail.
+        // face tips up toward the helmsman's eye. It stands on its own pedestal
+        // just port of the wheel (clear of the view dead ahead), pulled aft near
+        // the helm rather than clipped to the forward rail.
         const XL: f32 = -2.15;
         const BOARD_SIDE: f32 = 0.95;
         const XR: f32 = XL + BOARD_SIDE;
         const BOARD_H: f32 = BOARD_SIDE;
-        const STAND_Z: f32 = 5.85; // aft of the breast rail, nearer the wheel
-        const STAND_H: f32 = 0.74; // the board's near edge above the quarterdeck
+        const STAND_H: f32 = 0.74; // the board's near edge above the deck
         const LEAN: f32 = 0.5; // radians off vertical, top toward the bow
 
-        let deck_y = station_at(STAND_Z).1;
+        let hull = self.hull;
+        let stand_z = hull.wheel_z - 0.75; // a step fore of the wheel
+        let deck_y = hull.station_at(stand_z).1;
         let y0 = deck_y + STAND_H; // the near (bottom) edge, atop the stand
         let (ls, lc) = LEAN.sin_cos();
-        let (y1, z1) = (y0 + BOARD_H * lc, STAND_Z - BOARD_H * ls);
+        let (y1, z1) = (y0 + BOARD_H * lc, stand_z - BOARD_H * ls);
 
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
-            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+            helm_cam(hull, x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
         };
         // Every corner must clear the near plane, or the board is off-screen.
         let (Some((bl, s)), Some((br, _)), Some((tl, _)), Some((tr, _))) = (
-            cam(XL, y0, STAND_Z),
-            cam(XR, y0, STAND_Z),
+            cam(XL, y0, stand_z),
+            cam(XR, y0, stand_z),
             cam(XL, y1, z1),
             cam(XR, y1, z1),
         ) else {
@@ -2051,7 +2056,7 @@ impl ShipRenderer {
         // before the face so the board rests on top of the post. The helmsman sits
         // aft and to starboard of it, so its aft, right and top faces show.
         let xc = (XL + XR) * 0.5;
-        let zc = (STAND_Z + z1) * 0.5; // under the board's mid-line
+        let zc = (stand_z + z1) * 0.5; // under the board's mid-line
         let post_top = (y0 + y1) * 0.5; // meets the board underside at its centre
         let boxy = |x0: f32, x1b: f32, ylo: f32, yhi: f32, z_near: f32, z_far: f32| {
             let c = |x: f32, y: f32, z: f32| cam(x, y, z).map(|(p, _)| p);
@@ -2286,22 +2291,23 @@ impl ShipRenderer {
         // edge so the wares ride out a sea.
         const X0: f32 = 1.35;
         const X1: f32 = 2.15;
-        const RACK_Z: f32 = 5.85;
-        const SHELF_H: f32 = 0.72; // shelf top above the quarterdeck
+        const SHELF_H: f32 = 0.72; // shelf top above the deck
         const SHELF_T: f32 = 0.05; // shelf plank thickness
         const SHELF_D: f32 = 0.17; // half-depth fore-aft
         const FIDDLE_H: f32 = 0.03; // the fiddle rail's lip
 
-        let deck_y = station_at(RACK_Z).1;
+        let hull = self.hull;
+        let rack_z = hull.wheel_z - 0.75; // the chart stand's station, to starboard
+        let deck_y = hull.station_at(rack_z).1;
         let y_top = deck_y + SHELF_H;
 
         let (sp, cp) = pitch_ang.sin_cos();
         let cam = |x: f32, y: f32, z: f32| {
-            helm_cam(x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
+            helm_cam(hull, x, y, z, sp, cp, w, h).map(|(p, s)| (sway(p.x, p.y), s))
         };
         let pt = |x: f32, y: f32, z: f32| cam(x, y, z).map(|(p, _)| p);
         // px-per-metre at the rack, sizing the line widths and the round bits.
-        let Some((_, s)) = cam((X0 + X1) * 0.5, y_top, RACK_Z) else {
+        let Some((_, s)) = cam((X0 + X1) * 0.5, y_top, rack_z) else {
             return; // nod swung the rack inside the near plane: nothing to draw
         };
 
@@ -2340,9 +2346,9 @@ impl ShipRenderer {
 
         // Foot, post, then the shelf across the top (the chart pedestal's build).
         let xc = (X0 + X1) * 0.5;
-        boxy(xc - 0.16, xc + 0.16, deck_y, deck_y + 0.06, RACK_Z + 0.13, RACK_Z - 0.13);
-        boxy(xc - 0.05, xc + 0.05, deck_y + 0.06, y_top - SHELF_T, RACK_Z + 0.05, RACK_Z - 0.05);
-        boxy(X0, X1, y_top - SHELF_T, y_top, RACK_Z + SHELF_D, RACK_Z - SHELF_D);
+        boxy(xc - 0.16, xc + 0.16, deck_y, deck_y + 0.06, rack_z + 0.13, rack_z - 0.13);
+        boxy(xc - 0.05, xc + 0.05, deck_y + 0.06, y_top - SHELF_T, rack_z + 0.05, rack_z - 0.05);
+        boxy(X0, X1, y_top - SHELF_T, y_top, rack_z + SHELF_D, rack_z - SHELF_D);
 
         // One shade for the wares (they face aft-and-up like the shelf), dimmed
         // to half strength while spent so readiness reads at a glance from the helm.
@@ -2369,7 +2375,7 @@ impl ShipRenderer {
         // the tag's own horizontal (two projected reference points give the
         // baseline's screen angle), so the label leans and sways with the shelf
         // it is pinned to. Shrunk to the tag's width when a word runs long.
-        let zt = RACK_Z + SHELF_D + 0.002; // a whisker proud of the shelf's apron
+        let zt = rack_z + SHELF_D + 0.002; // a whisker proud of the shelf's apron
         let tag_face = lume.face(CHART_PARCH, (0.0, 0.2, 0.98));
         let tag_ink = lume.face(CHART_INK, (0.0, 0.2, 0.98));
         let letter = |text: &str, cx: f32, base_y: f32, size_m: f32| {
@@ -2399,7 +2405,7 @@ impl ShipRenderer {
             );
         };
 
-        let z = RACK_Z;
+        let z = rack_z;
         for (slot, k) in trinkets.iter().enumerate() {
             if !k.owned {
                 continue;
@@ -2497,7 +2503,7 @@ impl ShipRenderer {
 
         // The fiddle rail last, so its lip laps the wares' feet like real
         // furniture rather than hiding behind them.
-        boxy(X0, X1, y_top, y_top + FIDDLE_H, RACK_Z + SHELF_D, RACK_Z + SHELF_D - 0.02);
+        boxy(X0, X1, y_top, y_top + FIDDLE_H, rack_z + SHELF_D, rack_z + SHELF_D - 0.02);
     }
 
     /// Mast, yard and the square sail: the articulating rig. The sail is built
@@ -2527,15 +2533,16 @@ impl ShipRenderer {
         // shared with the deck. The rig stands metres clear of the near plane
         // at any pitch the swell can throw, so the off-screen park below is a
         // formality (the same fallback the deck's rope feet use).
+        let hull = self.hull;
         let (sp, cp) = pitch_ang.sin_cos();
         let off = vec2(w * 0.5, h * 3.0);
         let proj = |x: f32, y: f32, z: f32| -> Option<Vec2> {
-            helm_cam(x, y, z, sp, cp, w, h).map(|(p, _)| sway(p.x, p.y))
+            helm_cam(hull, x, y, z, sp, cp, w, h).map(|(p, _)| sway(p.x, p.y))
         };
         let project = |x: f32, y: f32, z: f32| -> Vec2 { proj(x, y, z).unwrap_or(off) };
         // px per metre at the mast plane, for the cloth shading's expected
         // cell span.
-        let s0 = w * CAM_F / CAM_AFT;
+        let s0 = w * CAM_F / hull.cam_aft;
 
         // --- Sail trim --------------------------------------------------------
         let draw_f = wind_factor_rel(rig.wind_rel); // wind harvested, 0..1 (same curve as the physics)
@@ -2743,8 +2750,8 @@ impl ShipRenderer {
             let tip_l = (lx, sail_top, lz);
             let slings = (mx, sail_top, mz);
             let tip_r = (rx, sail_top, rz);
-            draw_spar(&proj, lume, SPAR, tip_l, slings, YARD_TIP_R, YARD_MID_R);
-            draw_spar(&proj, lume, SPAR, slings, tip_r, YARD_MID_R, YARD_TIP_R);
+            draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, tip_l, slings, YARD_TIP_R, YARD_MID_R);
+            draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, slings, tip_r, YARD_MID_R, YARD_TIP_R);
         }
 
         // --- Mast: a tapered round spar, its facets lit by their true normals
@@ -2755,6 +2762,7 @@ impl ShipRenderer {
         draw_spar(
             &proj,
             lume,
+            (hull.cam_up, hull.cam_aft),
             SPAR,
             (0.0, 0.0, 0.0),
             (0.0, MAST_TOP_M, 0.0),
@@ -2818,6 +2826,7 @@ mod tests {
     #[test]
     fn storm_calibration() {
         use crate::geometry::Vec2;
+        use crate::hull_shape::BRIG;
         use crate::ocean;
         let sea = 1.3f32;
         let pos = Vec2::new(1000.0, 2000.0);
@@ -2828,8 +2837,8 @@ mod tests {
         for i in 0..(180 * 60) {
             let t = i as f32 * dt;
             let p = pos + Vec2::from_heading(heading) * (12.0 * t); // under way
-            let m = ocean::ship_motion(p, heading, t, sea);
-            let bow = ocean::height(p + Vec2::from_heading(heading) * ocean::BOW_REACH, t, sea)
+            let m = ocean::ship_motion(p, heading, t, sea, &BRIG);
+            let bow = ocean::height(p + Vec2::from_heading(heading) * BRIG.bow_reach(), t, sea)
                 - m.heave;
             if i > 0 {
                 max_bow_vel = max_bow_vel.max((prev_bow - bow) / dt);
@@ -2925,16 +2934,18 @@ mod tests {
             input.yaw_rate = crate::sailing::MAX_YAW_RATE * side;
             step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
         }
+        let hull = &crate::hull_shape::BRIG;
+        let qdeck = hull.qdeck_break.unwrap();
         for c in &r.crates {
             if c.base.is_some() || c.over || c.gone {
                 continue; // riding a stack (fenced through its base), or lost to the sea
             }
-            let (b, d, _) = station_at(c.z);
+            let (b, d, _) = hull.station_at(c.z);
             assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
-            assert!(c.z + c.hd <= QDECK_BREAK + 1e-3, "crate through the riser");
-            assert!(c.z - c.hd >= -6.5 - c.hd * 2.0, "crate off the bow");
+            assert!(c.z + c.hd <= qdeck + 1e-3, "crate through the riser");
+            assert!(c.z - c.hd >= hull.cargo_z_min - c.hd * 2.0, "crate off the bow");
             assert!(c.y >= d - 1e-3, "crate under the deck");
-            if c.z + c.hd > QDECK_BREAK - 4.0 {
+            if c.z + c.hd > qdeck - 4.0 {
                 assert!(c.x + c.hw <= 2.0 + 1e-3, "crate inside the stairs");
             }
         }
@@ -2943,6 +2954,36 @@ mod tests {
         let washed = r.cargo_washed_overboard();
         let live = r.crates.iter().filter(|c| !c.gone).count() as i32;
         assert_eq!(live + washed, 64);
+    }
+
+    /// The sloop's flush deck fences its own cargo run: shaken crates stay
+    /// inside her (narrower) bulwarks and clear of the helm, with no riser or
+    /// stairs to lean on. A tier change also re-stows the deck.
+    #[test]
+    fn sloop_cargo_stays_on_its_single_deck() {
+        let hull = &crate::hull_shape::SLOOP;
+        let mut r = ShipRenderer::new();
+        let mut input = rig(24, 20.0, crate::sailing::MAX_YAW_RATE, 0.8);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        let brig_layout = poses(&r);
+        r.set_hull_level(0);
+        r.step_cargo(&input, 0.0, 0.0, 1.0 / 60.0);
+        assert_ne!(brig_layout, poses(&r), "the sloop kept the brig's stowage plan");
+        for k in 0..8 {
+            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+            input.yaw_rate = crate::sailing::MAX_YAW_RATE * side;
+            step_for(&mut r, &input, 0.25 * side, -0.15 * side, 2.0);
+        }
+        for c in &r.crates {
+            if c.base.is_some() || c.over || c.gone {
+                continue;
+            }
+            let (b, d, _) = hull.station_at(c.z);
+            assert!(c.x.abs() + c.hw <= b + 1e-3, "crate through the bulwark");
+            assert!(c.z + c.hd <= hull.cargo_z_max + 1e-3, "crate into the helm");
+            assert!(c.z - c.hd >= hull.cargo_z_min - c.hd * 2.0, "crate off the bow");
+            assert!(c.y >= d - 1e-3, "crate under the deck");
+        }
     }
 
     /// Keeping full way on through a storm with the wheel hard over is exactly

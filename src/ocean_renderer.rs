@@ -311,8 +311,10 @@ impl OceanRenderer {
         islands: &[(&Island, &[IsleFeature])],
         // The racing rival, if one is on the water, slotted into the same depth
         // march so nearer wave crests and islands occlude it. `rival_light` dims it
-        // into the night with the rest of the scene.
+        // into the night with the rest of the scene; `rival_hull` is the shape she
+        // sails (the tier her race demands, see `crate::hull_shape`).
         rival: Option<Kinematics>,
+        rival_hull: &'static crate::hull_shape::HullShape,
         rival_light: f32,
         // Visible floating salvage (position + kind), sorted *descending* by
         // distance (farthest first) like the islands, so each piece slots into the
@@ -483,14 +485,21 @@ impl OceanRenderer {
             }
             if let (Some(rk), Some(d)) = (rival, rival_dist) {
                 if d >= f {
-                    crate::rival_render::draw(&rk, &scene, crate::rival_render::RIVAL_PENNANT);
+                    crate::rival_render::draw(
+                        &rk,
+                        &scene,
+                        crate::rival_render::RIVAL_PENNANT,
+                        rival_hull,
+                    );
                     rival_done = true;
                 }
             }
         };
         // Traders march in alongside the islands and salvage: each is drawn once the
         // band march descends past its distance (farthest first), so nearer bands
-        // then paint over it. `trd_idx` walks the farthest-first list.
+        // then paint over it. `trd_idx` walks the farthest-first list. They are
+        // small trading craft, so they sail the shipyard's smallest hull.
+        let trader_hull = crate::hull_shape::for_level(0);
         let mut trd_idx = 0;
 
         // Even screen-row spacing: linear in the depression angle of the flat sea.
@@ -555,6 +564,7 @@ impl OceanRenderer {
                     &traders[trd_idx],
                     &scene,
                     crate::rival_render::TRADER_PENNANT,
+                    trader_hull,
                 );
                 trd_idx += 1;
             }
@@ -598,7 +608,12 @@ impl OceanRenderer {
         draw_rival(0.0);
         // Any traders nearer than the closest band stand in front of all the water.
         while trd_idx < traders.len() {
-            crate::rival_render::draw(&traders[trd_idx], &scene, crate::rival_render::TRADER_PENNANT);
+            crate::rival_render::draw(
+                &traders[trd_idx],
+                &scene,
+                crate::rival_render::TRADER_PENNANT,
+                trader_hull,
+            );
             trd_idx += 1;
         }
         // Any salvage nearer than the closest band floats in front of all the water.

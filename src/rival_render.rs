@@ -1,10 +1,12 @@
-//! Drawing the racing rival and the wandering traders: the *same* ship the
-//! player sails, as a true low-poly 3-D miniature. The hull is lofted from
-//! [`crate::ship_render`]'s station table and the rig from its spar and sail
-//! dimensions, so a rival crossing the bay is recognisably the player's own
-//! vessel seen from without, and reshaping the ship there reshapes her here.
-//! Replaces the flat two-tone sloop billboard (itself a stand-in for the
-//! original's `ship.svg`/`ship-bow.svg`/`ship-stern.svg` sprites).
+//! Drawing the racing rival and the wandering traders as true low-poly 3-D
+//! miniatures. The hull is lofted from a [`crate::hull_shape`] station table
+//! (the rival sails the tier her race demands, the traders their small
+//! single-decked coasters) and the rig from [`crate::ship_render`]'s spar and
+//! sail dimensions, so a ship crossing the bay is recognisably one of the
+//! shipyard's own hulls seen from without, and reshaping a hull there
+//! reshapes her here. Replaces the flat two-tone sloop billboard (itself a
+//! stand-in for the original's `ship.svg`/`ship-bow.svg`/`ship-stern.svg`
+//! sprites).
 //!
 //! Every vertex is projected through the same cylindrical map the waves and
 //! islands use (column = bearing, row = depression angle; see
@@ -21,14 +23,15 @@
 use macroquad::prelude::*;
 
 use crate::geometry::{clamp, wrap_angle, Vec2};
+use crate::hull_shape::HullShape;
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
 use crate::projection::{curve_dip, BASE_EYE, MAX_VIEW};
 use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
-    station_at, BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH,
-    SAIL_H_M, SAIL_STANDOFF_M, SAIL_W_M, SPAR, SPRIT_BASE, SPRIT_TIP, STATIONS, YARD_H_M,
+    BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH, SAIL_H_M,
+    SAIL_STANDOFF_M, SAIL_W_M, SPAR, YARD_H_M,
 };
 
 use std::f32::consts::PI;
@@ -44,8 +47,7 @@ const RIVAL_MIN_PX: f32 = 10.0;
 const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
 
 // The exterior the player's first-person loft never shows, so these live here
-// rather than in ship_render's palette.
-const FREEBOARD: f32 = 1.3; // metres the waist deck stands above her waterline
+// rather than in ship_render's palette (the freeboard is the hull shape's own).
 const WL_TUCK: f32 = 0.62; // half-beam left at the waterline as the hull tucks toward the keel
 const HULL: [f32; 3] = [96.0, 68.0, 42.0];
 const HULL_DK: [f32; 3] = [62.0, 44.0, 28.0];
@@ -86,7 +88,9 @@ type Prims = Vec<(f32, [ScreenV; 3], Color)>;
 /// the world-camera pass (after the wave mesh) so she rides the camera ride and
 /// sits on the painted sea. `heave` is the player's heave (the camera's rise);
 /// the scene's `light` and `sun` shade her into the night with everything else.
-pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
+/// `hull` is the shape she sails (see [`crate::hull_shape`]): the racing rival
+/// lofts the tier her race demands, the traders their small coasters.
+pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullShape) {
     let SceneView {
         kin,
         t,
@@ -114,7 +118,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     // The model magnification: larger than life, grown further when the true
     // perspective masthead would drop under the visibility floor, so a far
     // rival scales up as one shape instead of degenerating to a smear.
-    let mast_m = (FREEBOARD + MAST_TOP_M) * RIVAL_MAG;
+    let mast_m = (hull.freeboard + MAST_TOP_M) * RIVAL_MAG;
     // Fake planetary curvature: past `CURVE_START` a distant sail sinks hull-first
     // under the swell (the nearer opaque water swallows her from the waterline up)
     // rather than fading to a ghost. One depression drops every lofted point alike,
@@ -128,7 +132,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     // View-cone gate on her centre, slackened by her own longest reach so she
     // doesn't pop while partly on screen.
     let phi_c = wrap_angle(kin.pos.bearing_to(rk.pos) - kin.heading_rad);
-    let slack = (SPRIT_TIP.1.abs() * s / d).atan();
+    let slack = (hull.sprit_tip.1.abs() * s / d).atan();
     if phi_c.abs() > half_fov_h_view * FOV_MARGIN + slack {
         return;
     }
@@ -139,15 +143,18 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
 
     // Her attitude in the swell: heel from the sea sampled off each beam, pitch
     // from ahead and astern along her keel line, by the same gain the mesh uses.
+    // The spans follow her own hull, so a short coaster answers chop a longer
+    // ship's baselines average out (the exterior echo of the buoyancy probes
+    // in `ocean::ship_motion`).
     let fwd = Vec2::from_heading(rk.heading_rad);
     let right = Vec2::new(rk.heading_rad.cos(), -rk.heading_rad.sin());
-    let bspan = 7.0;
+    let bspan = hull.half_beam() * 2.0;
     let heel = {
         let z_r = ocean::height(rk.pos + right * bspan, t, sea);
         let z_l = ocean::height(rk.pos - right * bspan, t, sea);
         clamp(((z_l - z_r) * WAVE_GAIN / (2.0 * bspan)).atan() * 0.7, -0.4, 0.4)
     };
-    let lspan = 10.0;
+    let lspan = hull.half_length() * 0.77;
     let pitch = {
         let z_f = ocean::height(rk.pos + fwd * lspan, t, sea);
         let z_a = ocean::height(rk.pos - fwd * lspan, t, sea);
@@ -167,7 +174,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         let x1 = x * cr + y1 * sr; // heel about the keel line (starboard positive)
         let y2 = y1 * cr - x * sr;
         let wp = rk.pos + fwd * (-z1 * s) + right * (x1 * s);
-        let elev = (y2 + FREEBOARD) * s;
+        let elev = (y2 + hull.freeboard) * s;
         let dv = kin.pos.distance_to(wp).max(1.0);
         let phi = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
         P3 {
@@ -268,18 +275,18 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     // lighter wale on up to the cap rail, so the sheer line reads; the deck
     // spans between the sheer lines (the doubled break station makes the
     // quarterdeck riser of its own accord), and a dark transom closes the stern.
-    let mut port: Vec<(P3, P3, P3)> = Vec::with_capacity(STATIONS.len());
-    let mut stbd: Vec<(P3, P3, P3)> = Vec::with_capacity(STATIONS.len());
-    for &(z, b, dk, wall) in STATIONS.iter() {
+    let mut port: Vec<(P3, P3, P3)> = Vec::with_capacity(hull.stations.len());
+    let mut stbd: Vec<(P3, P3, P3)> = Vec::with_capacity(hull.stations.len());
+    for &(z, b, dk, wall) in hull.stations.iter() {
         for (side, out) in [(-1.0f32, &mut port), (1.0f32, &mut stbd)] {
             out.push((
-                vert(side * b * WL_TUCK, -FREEBOARD, z),
+                vert(side * b * WL_TUCK, -hull.freeboard, z),
                 vert(side * b, dk, z),
                 vert(side * b, dk + wall, z),
             ));
         }
     }
-    for i in 0..STATIONS.len() - 1 {
+    for i in 0..hull.stations.len() - 1 {
         for side in [&port, &stbd] {
             let (wl0, dk0, cap0) = side[i];
             let (wl1, dk1, cap1) = side[i + 1];
@@ -288,7 +295,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         }
         quad(&mut prims, port[i].1, stbd[i].1, stbd[i + 1].1, port[i + 1].1, DECK_B, -1.0);
     }
-    let aftmost = STATIONS.len() - 1;
+    let aftmost = hull.stations.len() - 1;
     quad(
         &mut prims,
         port[aftmost].0,
@@ -309,7 +316,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     let (sb, cb) = brace.sin_cos();
     line3(
         &mut prims,
-        vert(0.0, station_at(0.0).1, 0.0),
+        vert(0.0, hull.station_at(0.0).1, 0.0),
         vert(0.0, MAST_TOP_M, 0.0),
         MAST_HW * 0.8,
     );
@@ -322,8 +329,8 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     );
     line3(
         &mut prims,
-        vert(0.0, SPRIT_BASE.0, SPRIT_BASE.1),
-        vert(0.0, SPRIT_TIP.0, SPRIT_TIP.1),
+        vert(0.0, hull.sprit_base.0, hull.sprit_base.1),
+        vert(0.0, hull.sprit_tip.0, hull.sprit_tip.1),
         0.13,
     );
 

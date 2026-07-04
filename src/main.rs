@@ -18,6 +18,7 @@ mod game_state;
 mod geometry;
 mod guide;
 mod hud;
+mod hull_shape;
 mod isle_features;
 mod isle_terrain;
 mod islands_render;
@@ -899,7 +900,13 @@ async fn run_game(
                 // passage takes active helm work. A pure function of position and
                 // time (no RNG), so determinism is untouched.
                 if storm > 0.0 {
-                    let twist = ocean::swell_yaw(kin.pos, kin.heading_rad, t, sea);
+                    let twist = ocean::swell_yaw(
+                        kin.pos,
+                        kin.heading_rad,
+                        t,
+                        sea,
+                        hull_shape::for_level(gs.hull_level),
+                    );
                     kin.heading_rad =
                         wrap_angle(kin.heading_rad + twist * STORM_YAW_GAIN * storm * dt);
                 }
@@ -1256,14 +1263,18 @@ async fn run_game(
         sounds.update(dt, harbor.is_open() || shore.is_open(), kin.speed() / sailing::KNOT, storm);
 
         // --- Ship motion + camera ride -----------------------------------------
-        // Sample how the swell throws the hull this frame, then ease the parts that
-        // should rock with the long swell rather than buzz with the chop.
-        let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea);
+        // Sample how the swell throws the hull this frame (with the shipyard
+        // tier's own buoyancy probes: a bigger hull filters more of the chop),
+        // then ease the parts that should rock with the long swell rather than
+        // buzz with the chop.
+        let ship_hull = hull_shape::for_level(gs.hull_level);
+        ship.set_hull_level(gs.hull_level);
+        let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea, ship_hull);
         // The bow's lift above the hull's mean (metres): the sea height where the stem
         // parts the water, relative to the eye's heave. Drives the deck/camera heave
         // bob, split between the two by `ocean::HEAVE_CAMERA_SHARE`.
         let bow_z = ocean::height(
-            kin.pos + Vec2::from_heading(kin.heading_rad) * ocean::BOW_REACH,
+            kin.pos + Vec2::from_heading(kin.heading_rad) * ship_hull.bow_reach(),
             t,
             sea,
         );
@@ -1282,10 +1293,15 @@ async fn run_game(
         // starboard (positive roll) — and the drive curve scales it by the press.
         let heel_target =
             HEEL_GAIN * helm.throttle * sailing::wind_factor_rel(wind_rel) * wind_rel.sin();
-        let ease = clamp(ROLL_EASE * dt, 0.0, 1.0);
+        // The ease rates scale by the hull's mass character (`sway_response`):
+        // a light tier-0 hull snaps to the sea's plane where the brig leans
+        // into it, so the chop the probes can't filter (a wave dead abeam
+        // spans no waterline) still works a small ship harder.
+        let ease = clamp(ROLL_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
         smooth_roll += (motion.roll - smooth_roll) * ease;
         smooth_yaw += (motion.yaw - smooth_yaw) * ease;
-        smooth_pitch += (motion.pitch - smooth_pitch) * clamp(PITCH_EASE * dt, 0.0, 1.0);
+        smooth_pitch +=
+            (motion.pitch - smooth_pitch) * clamp(PITCH_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
         smooth_heel += (heel_target - smooth_heel) * clamp(HEEL_EASE * dt, 0.0, 1.0);
 
         // The hull's lean (swell roll + wind heel) tilts the horizon the *other* way
@@ -1492,7 +1508,10 @@ async fn run_game(
             &visible,
             // The racing rival rides the same sea, depth-sorted into the wave march
             // so nearer crests and islands occlude it like any other world object.
+            // She sails a hull of exactly the tier her race demands, so the model
+            // the player races is the model the harbour told them about.
             rival,
+            hull_shape::for_level(gs.race.map_or(1, |r| r.required_level)),
             day_lit,
             &flot_vis,
             &trader_kins,
