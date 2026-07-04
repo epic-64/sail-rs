@@ -1452,9 +1452,9 @@ async fn run_game(
         // A tier change (shipyard buy or dev key) sets off the rebuild
         // animation: the old hull's parts fly off and the new one's fly in
         // (see `ShipRenderer::refit_to`). The buoyancy and camera above ride
-        // the new tier at once; the woosh marks the rebuild setting off.
+        // the new tier at once; the transform clip rides under the swap.
         if ship.refit_to(gs.hull_level) {
-            sounds.wind_shift();
+            sounds.refit();
         }
         let motion = ocean::ship_motion(kin.pos, kin.heading_rad, t, sea, ship_hull);
         // The bow's lift above the hull's mean (metres): the sea height where the stem

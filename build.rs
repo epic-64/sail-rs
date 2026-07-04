@@ -35,6 +35,7 @@ const CLIPS: &[(&str, u8, &str)] = &[
     ("lightyeartraxx-kl-peach-game-over-iii-142453.mp3", 1, "80k"),
     ("invalid-input.mp3", 1, "80k"),
     ("charged_laser.mp3", 1, "80k"),
+    ("transform.mp3", 1, "80k"),
 ];
 
 fn main() {
