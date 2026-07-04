@@ -266,15 +266,22 @@ const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is M
 /// A mast's canvas plan, course upward (see `hull_shape::Mast::sails`): the
 /// course on the main yard and, on a two-sail rig, the topsail on the pole
 /// above it. Per sail: the yard's height, the hoist, and the cloth's width at
-/// head and foot (a course is square, a topsail tapers toward its head).
-/// Shared by the rig drawing and the deck's sail shadows, so the shadow always
+/// head and foot (a course is square, a topsail tapers toward its head). The
+/// mast's own cut adjusts the shared plan: `cloth_w` broadens every width,
+/// `yard_drop` hangs the course lower on its pole. Shared by the rig drawing,
+/// the rival's miniature and the deck's sail shadows, so the shadow always
 /// matches the cloth it falls from.
-fn sail_cuts(mast: &hull_shape::Mast, foot_y: f32) -> Vec<(f32, f32, f32, f32)> {
-    let course_w = SAIL_W_M * mast.scale;
+pub(crate) fn sail_cuts(mast: &hull_shape::Mast, foot_y: f32) -> Vec<(f32, f32, f32, f32)> {
+    let course_w = SAIL_W_M * mast.scale * mast.cloth_w;
     (0..mast.sails)
         .map(|si| {
             if si == 0 {
-                (foot_y + YARD_H_M * mast.scale, SAIL_H_M * mast.scale, course_w, course_w)
+                (
+                    foot_y + (YARD_H_M - mast.yard_drop) * mast.scale,
+                    SAIL_H_M * mast.scale,
+                    course_w,
+                    course_w,
+                )
             } else {
                 (
                     foot_y + TOP_YARD_H_M * mast.scale,
@@ -2702,7 +2709,6 @@ impl ShipRenderer {
         for (mi, mast) in hull.masts.iter().enumerate() {
             // The trunk stands on its local deck (a foremast rides the bow's sheer).
             let foot_y = hull.station_at(mast.z).1;
-            let course_w = SAIL_W_M * mast.scale;
             let mast_top = foot_y + MAST_TOP_M * mast.scale;
             // px per metre at this mast's plane, for the cloth shading's
             // expected cell span.
@@ -2864,7 +2870,7 @@ impl ShipRenderer {
                     } else {
                         // Down to the course's yardarm: a short taut lead, its sag
                         // its own length's small fraction rather than a deck run's.
-                        let x0 = side * 0.54 * course_w;
+                        let x0 = side * 0.54 * cuts[0].2;
                         let (ax, az) = (x0 * cb - stand_off * sb, -x0 * sb - stand_off * cb);
                         let tip = at(ax, cuts[0].0, az);
                         ropes.push(lead(clew, kz, tip, clew.distance(tip) * 0.06));
@@ -2991,6 +2997,22 @@ mod tests {
         assert!(TOP_YARD_H_M < MAST_TOP_M);
         assert!(TOP_YARD_H_M - TOPSAIL_H_M > YARD_H_M);
         assert!(TOPSAIL_HEAD_W < TOPSAIL_FOOT_W && TOPSAIL_FOOT_W <= 1.0);
+    }
+
+    /// A mast that hangs its course low (`Mast::yard_drop`) must still keep
+    /// the cloth's foot clear of the tallest cargo stack on the waist (see
+    /// `rebuild_crates`: a stacked pair tops out under 1.7 m over the deck).
+    #[test]
+    fn every_course_clears_the_cargo_stacks() {
+        use crate::hull_shape::{BRIG, GALLEON, INDIAMAN, SLOOP};
+        for (name, hull) in
+            [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON), ("indiaman", &INDIAMAN)]
+        {
+            for m in hull.masts {
+                let foot = (YARD_H_M - m.yard_drop - SAIL_H_M) * m.scale;
+                assert!(foot > 1.7, "{name}: a course foot brushing the deck cargo");
+            }
+        }
     }
 
     /// Calibration probe for the cargo-physics constants: the deck motion a

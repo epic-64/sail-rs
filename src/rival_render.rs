@@ -30,9 +30,8 @@ use crate::projection::{curve_dip, BASE_EYE, MAX_VIEW};
 use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
-    BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH, SAIL_H_M,
-    SAIL_STANDOFF_M, SAIL_W_M, SPAR, TOPSAIL_FOOT_W, TOPSAIL_HEAD_W, TOPSAIL_H_M, TOP_YARD_H_M,
-    YARD_H_M,
+    sail_cuts, BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH,
+    SAIL_STANDOFF_M, SPAR,
 };
 
 use std::f32::consts::PI;
@@ -329,7 +328,6 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
     );
     for mast in hull.masts {
         let foot_y = hull.station_at(mast.z).1;
-        let course_w = SAIL_W_M * mast.scale;
         let mast_top = foot_y + MAST_TOP_M * mast.scale;
         line3(
             &mut prims,
@@ -338,20 +336,10 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
             MAST_HW * 0.8,
         );
 
-        // The mast's sails, course upward (see `hull_shape::Mast::sails`),
-        // each its yard and cloth at the player's own dimensions: the course
-        // square, the topsail above it tapering toward its head.
-        for si in 0..mast.sails {
-            let (yard_y, hoist, w_head, w_foot) = if si == 0 {
-                (foot_y + YARD_H_M * mast.scale, SAIL_H_M * mast.scale, course_w, course_w)
-            } else {
-                (
-                    foot_y + TOP_YARD_H_M * mast.scale,
-                    TOPSAIL_H_M * mast.scale,
-                    course_w * TOPSAIL_HEAD_W,
-                    course_w * TOPSAIL_FOOT_W,
-                )
-            };
+        // The mast's sails, course upward, each its yard and cloth at the
+        // player's own dimensions (the canvas plan shared via `sail_cuts`):
+        // the course square, the topsail above it tapering toward its head.
+        for &(yard_y, hoist, w_head, w_foot) in &sail_cuts(mast, foot_y) {
             let yhw = w_head * 0.5 + 0.4; // the yardarms run a touch past the cloth
             line3(
                 &mut prims,
