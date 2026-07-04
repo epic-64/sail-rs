@@ -25,6 +25,13 @@ pub struct Mast {
     pub z: f32,
     /// Rig scale on the shared dimensions: mast height, yard span, cloth.
     pub scale: f32,
+    /// Extra width factor on the canvas and its yards alone (1.0 flies the
+    /// shared cut): a hull can spread broader cloth without a taller mast.
+    pub cloth_w: f32,
+    /// Metres (in the shared rig's design space, so scaled like the rest) the
+    /// course yard hangs below its shared height, for a hull that flies its
+    /// sail low on the same mast.
+    pub yard_drop: f32,
     /// Square sails flown, stacked course upward: 1 is the course alone, 2
     /// adds a topsail on the pole above it (cut from `ship_render`'s shared
     /// topsail constants, again by `scale`).
@@ -160,7 +167,17 @@ pub static SLOOP: HullShape = HullShape {
     cargo_z_min: -4.6,
     cargo_z_max: 1.4, // clear water kept before the wheel
     cargo_cols: &[-1.5, -0.5, 0.5, 1.5],
-    masts: &[Mast { z: 0.0, scale: 1.0, sails: 1, sheet_foot_z: 2.0, brace_foot_z: 4.5 }],
+    // The single course hangs low on its mast: a workboat's cut, and it keeps
+    // the cloth's foot near the helmsman's eye line on the flush deck.
+    masts: &[Mast {
+        z: 0.0,
+        scale: 1.0,
+        cloth_w: 1.0,
+        yard_drop: 0.9,
+        sails: 1,
+        sheet_foot_z: 2.0,
+        brace_foot_z: 4.5,
+    }],
     sprit_base: (1.0, -9.7),
     sprit_tip: (2.0, -12.5),
     freeboard: 0.95,
@@ -217,7 +234,15 @@ pub static BRIG: HullShape = HullShape {
     cargo_z_min: -6.5,
     cargo_z_max: 5.0, // the quarterdeck riser
     cargo_cols: &[-2.4, -1.2, 0.0, 1.2], // clear of the stairs at x 2.0
-    masts: &[Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 3.5, brace_foot_z: 6.5 }],
+    masts: &[Mast {
+        z: 0.0,
+        scale: 1.0,
+        cloth_w: 1.0,
+        yard_drop: 0.0,
+        sails: 2,
+        sheet_foot_z: 3.5,
+        brace_foot_z: 6.5,
+    }],
     sprit_base: (1.5, -14.6),
     sprit_tip: (2.7, -18.2),
     freeboard: 1.3,
@@ -280,10 +305,27 @@ pub static GALLEON: HullShape = HullShape {
     cargo_cols: &[-3.2, -2.0, -0.8, 0.4, 1.6], // the wider beam buys a fifth column
     // Two-masted: a smaller foremast on the rising foredeck (clear forward of
     // the cargo run), the full-rigged main at the origin; both fly a topsail
-    // over the course.
+    // over the course, cut broader than the shared plan (the big hulls spread
+    // wider cloth without a taller rig).
     masts: &[
-        Mast { z: -9.5, scale: 0.78, sails: 2, sheet_foot_z: -4.8, brace_foot_z: -2.5 },
-        Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 4.5, brace_foot_z: 9.0 },
+        Mast {
+            z: -9.5,
+            scale: 0.78,
+            cloth_w: 1.12,
+            yard_drop: 0.0,
+            sails: 2,
+            sheet_foot_z: -4.8,
+            brace_foot_z: -2.5,
+        },
+        Mast {
+            z: 0.0,
+            scale: 1.0,
+            cloth_w: 1.12,
+            yard_drop: 0.0,
+            sails: 2,
+            sheet_foot_z: 4.5,
+            brace_foot_z: 9.0,
+        },
     ],
     sprit_base: (1.95, -19.4),
     sprit_tip: (3.5, -24.0),
@@ -354,13 +396,38 @@ pub static INDIAMAN: HullShape = HullShape {
     cargo_z_min: -9.5,
     cargo_z_max: 8.5, // the quarterdeck riser
     cargo_cols: &[-3.7, -2.5, -1.3, -0.1, 1.1, 2.3], // the widest beam buys a sixth column
-    // Three-masted, the rig stepping up bow to stern to the full-rigged main;
-    // the fore and middle masts stand clear enough that no course sweeps its
+    // Three-masted, the rig stepping up bow to stern to the full-rigged main,
+    // every cloth cut broader than the shared plan (like the galleon's); the
+    // fore and middle masts stand clear enough that no course sweeps its
     // neighbour's canvas at any brace.
     masts: &[
-        Mast { z: -16.0, scale: 0.72, sails: 2, sheet_foot_z: -11.3, brace_foot_z: -9.0 },
-        Mast { z: -8.0, scale: 0.86, sails: 2, sheet_foot_z: -3.3, brace_foot_z: -1.0 },
-        Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 5.0, brace_foot_z: 10.0 },
+        Mast {
+            z: -16.0,
+            scale: 0.72,
+            cloth_w: 1.12,
+            yard_drop: 0.0,
+            sails: 2,
+            sheet_foot_z: -11.3,
+            brace_foot_z: -9.0,
+        },
+        Mast {
+            z: -8.0,
+            scale: 0.86,
+            cloth_w: 1.12,
+            yard_drop: 0.0,
+            sails: 2,
+            sheet_foot_z: -3.3,
+            brace_foot_z: -1.0,
+        },
+        Mast {
+            z: 0.0,
+            scale: 1.0,
+            cloth_w: 1.12,
+            yard_drop: 0.0,
+            sails: 2,
+            sheet_foot_z: 5.0,
+            brace_foot_z: 10.0,
+        },
     ],
     sprit_base: (2.25, -23.2),
     sprit_tip: (4.0, -29.0),
@@ -479,6 +546,8 @@ mod tests {
             }
             for m in hull.masts {
                 assert!(m.sails >= 1, "{name}: a bare mast");
+                assert!(m.cloth_w > 0.0, "{name}: no cloth width");
+                assert!(m.yard_drop >= 0.0, "{name}: yard_drop hangs downward");
                 for z in [m.z, m.sheet_foot_z, m.brace_foot_z] {
                     assert!(
                         z > hull.z_bow() && z < hull.z_stern(),
