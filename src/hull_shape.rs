@@ -174,7 +174,7 @@ pub static SLOOP: HullShape = HullShape {
         z: 0.0,
         scale: 1.0,
         cloth_w: 1.0,
-        yard_drop: 0.9,
+        yard_drop: 1.4,
         sails: 1,
         sheet_foot_z: 2.0,
         brace_foot_z: 4.5,
