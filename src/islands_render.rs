@@ -24,7 +24,7 @@ use macroquad::prelude::*;
 use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::isle_features::{FeatureKind, IsleFeature};
 use crate::isle_terrain::IsleTerrain;
-use crate::projection::{BASE_EYE, EYE_HEIGHT, MAX_VIEW, SHORE_LIFT};
+use crate::projection::{curve_dip, BASE_EYE, EYE_HEIGHT, MAX_VIEW, SHORE_LIFT};
 use crate::sailing::Kinematics;
 use crate::world::{Island, IsleKind};
 
@@ -269,10 +269,17 @@ fn project(wp: Vec2, z: f32, waterline: bool, kin: &Kinematics, v: &IslandView) 
     let d = kin.pos.distance_to(wp).max(1.0);
     let rp = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
     let sx = v.w * 0.5 + rp * v.px_per_rad_h;
+    // Fake planetary curvature: past `CURVE_START` the world sinks below the swell,
+    // so a distant shore is swallowed hull-first by the nearer opaque water instead
+    // of fading out. One depression added to every point at this range drops the
+    // whole isle rigidly, base-first into the sea.
+    let dip = curve_dip(d) * v.px_per_rad;
     let sy = if waterline {
-        v.horizon + (((BASE_EYE + v.eye_rise) / d).atan() - (SHORE_LIFT / d).atan()) * v.px_per_rad
+        v.horizon
+            + (((BASE_EYE + v.eye_rise) / d).atan() - (SHORE_LIFT / d).atan()) * v.px_per_rad
+            + dip
     } else {
-        v.horizon - ((z - EYE_HEIGHT - v.eye_rise) / d).atan() * v.px_per_rad
+        v.horizon - ((z - EYE_HEIGHT - v.eye_rise) / d).atan() * v.px_per_rad + dip
     };
     (sx, sy)
 }
@@ -341,7 +348,10 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
     if terrain.on_land(kin.pos, 0.0) {
         return;
     }
-    let alpha = clamp((1.0 - dist / MAX_VIEW) * 1.5, 0.0, 1.0);
+    // The island body stays fully opaque right to the cull: distance now removes it
+    // by sinking it under the horizon (see `project`/`curve_dip`), not by fading it
+    // out. Its scenery still dims over its own shorter range (see `feat_alpha`).
+    let alpha = 1.0;
 
     // --- Floor disc: shadow + sand rim, following the lumpy coast -------------
     let mut xs = [0.0f32; FLOOR_SEG];
