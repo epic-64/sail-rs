@@ -157,15 +157,16 @@ pub static SLOOP: HullShape = HullShape {
         (0.0, 2.60, 0.02, 0.58), // the mast station: full beam
         (2.5, 2.52, 0.00, 0.60),
         (4.8, 2.35, 0.05, 0.64),
-        (7.0, 2.00, 0.12, 0.70), // transom, behind the eye
+        (7.0, 2.00, 0.12, 0.70),
+        (9.0, 1.60, 0.20, 0.76), // transom, behind the eye
     ],
     qdeck_break: None,
-    cam_aft: 5.5,
-    cam_up: 1.9, // a helmsman's eye line, stood on the flush deck
-    wheel_z: 2.3,
+    cam_aft: 7.5, // stood well aft, so the mast doesn't crowd the view ahead
+    cam_up: 1.9,  // a helmsman's eye line, stood on the flush deck
+    wheel_z: 4.3,
     hub_above_deck: 0.55,
     cargo_z_min: -4.6,
-    cargo_z_max: 1.4, // clear water kept before the wheel
+    cargo_z_max: 3.4, // clear water kept before the wheel
     cargo_cols: &[-1.5, -0.5, 0.5, 1.5],
     // The single course hangs low on its mast: a workboat's cut, and it keeps
     // the cloth's foot near the helmsman's eye line on the flush deck.

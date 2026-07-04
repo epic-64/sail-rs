@@ -73,6 +73,9 @@ const INVALID_MP3: &[u8] = snd!("invalid-input.mp3");
 // The charging whine as a Dolphin's Draught is quaffed: it builds for a beat before
 // the burst of speed lands (see `main`'s dolphin charge timer).
 const CHARGED_LASER_MP3: &[u8] = snd!("charged_laser.mp3");
+// The shipyard rebuild: rides under the refit animation as the hull swaps tier
+// piece by piece (see `ShipRenderer::refit_to`).
+const TRANSFORM_MP3: &[u8] = snd!("transform.mp3");
 
 // Loudness ceilings for the three beds (each bed's volume rides between 0 and its
 // ceiling) and the gain of the one-shot cues. These started from the per-clip
@@ -98,6 +101,8 @@ const RACE_LOST_VOL: f32 = 0.25;
 const INVALID_VOL: f32 = 0.4;
 // The Dolphin's Draught charge whine.
 const CHARGED_LASER_VOL: f32 = 0.6;
+// The shipyard rebuild, loud enough to carry the spectacle.
+const TRANSFORM_VOL: f32 = 0.8;
 // The boat speed (knots) at which the water-wash (calm) bed reaches full voice.
 const SAIL_FULL_KN: f32 = 12.0;
 // How fast a bed's volume chases its target (per second), so weather and speed
@@ -120,6 +125,7 @@ pub struct SoundBank {
     race_lost: Sound,
     invalid: Sound,
     charged_laser: Sound,
+    transform: Sound,
     sailing_vol: f32,
     calm_vol: f32,
     storm_vol: f32,
@@ -147,6 +153,7 @@ impl SoundBank {
         let race_lost = load_clip(RACE_LOST_MP3).await;
         let invalid = load_clip(INVALID_MP3).await;
         let charged_laser = load_clip(CHARGED_LASER_MP3).await;
+        let transform = load_clip(TRANSFORM_MP3).await;
 
         // Kick off the beds at zero volume so they're already running and in sync;
         // the per-frame update simply opens them up.
@@ -169,6 +176,7 @@ impl SoundBank {
             race_lost,
             invalid,
             charged_laser,
+            transform,
             sailing_vol: 0.0,
             calm_vol: 0.0,
             storm_vol: 0.0,
@@ -313,6 +321,17 @@ impl SoundBank {
         );
     }
 
+    /// The shipyard rebuild: cued as a hull refit's animation sets off, so the
+    /// clip rides under the piece-by-piece swap. Restarted so a queued rebuild
+    /// (dev keys) retriggers cleanly rather than piling up.
+    pub fn refit(&self) {
+        stop_sound(&self.transform);
+        play_sound(
+            &self.transform,
+            PlaySoundParams { looped: false, volume: TRANSFORM_VOL * self.master },
+        );
+    }
+
     /// The charging whine of a Dolphin's Draught being quaffed — it winds up for a
     /// beat before the speed burst lands. Restarted so a re-quaff retriggers cleanly.
     pub fn dolphin_dash(&self) {
@@ -436,6 +455,7 @@ mod tests {
             ("race_lost", RACE_LOST_MP3),
             ("invalid", INVALID_MP3),
             ("charged_laser", CHARGED_LASER_MP3),
+            ("transform", TRANSFORM_MP3),
         ] {
             let wav = decode_mp3_to_wav(mp3);
             assert!(wav.len() > 44, "{name}: no audio decoded");
