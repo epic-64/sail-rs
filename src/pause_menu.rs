@@ -28,6 +28,7 @@ use std::cell::RefCell;
 
 use macroquad::prelude::*;
 
+use crate::pad::Pad;
 use crate::sound::SoundBank;
 use crate::touch::TouchState;
 // The parchment palette and the UI scale are shared design tokens; see `crate::ui`.
@@ -47,16 +48,18 @@ struct Nav {
 }
 
 impl Nav {
-    fn read(touch: &TouchState) -> Nav {
+    fn read(touch: &TouchState, pad: &Pad) -> Nav {
         // The pause menu always has a highlighted, actionable row, so the ✓ stands.
         let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
         Nav {
-            up: is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up),
-            down: is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down),
-            left: is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left),
-            right: is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right),
-            confirm: is_key_pressed(KeyCode::Enter) || touch.tapped_in(n.confirm),
-            back: is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back),
+            up: is_key_pressed(KeyCode::Up) || pad.up() || touch.tapped_in(n.up),
+            down: is_key_pressed(KeyCode::Down) || pad.down() || touch.tapped_in(n.down),
+            left: is_key_pressed(KeyCode::Left) || pad.left() || touch.tapped_in(n.left),
+            right: is_key_pressed(KeyCode::Right) || pad.right() || touch.tapped_in(n.right),
+            confirm: is_key_pressed(KeyCode::Enter) || pad.confirm() || touch.tapped_in(n.confirm),
+            // Start closes the menu (Resume) just as it opened it, so the pad's back (B)
+            // and pause (Start) both count as backing out.
+            back: is_key_pressed(KeyCode::Escape) || pad.back() || pad.pause() || touch.tapped_in(n.back),
         }
     }
 }
@@ -230,9 +233,9 @@ impl PauseMenu {
     /// The Options values are persisted the moment the Options view is left (see
     /// `crate::save::Settings`), batching a session's tweaks into a single write so
     /// the audio and graphics preferences survive a relaunch.
-    pub fn handle_input(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
+    pub fn handle_input(&mut self, sounds: &mut SoundBank, touch: &TouchState, pad: &Pad) -> PauseAction {
         let was_options = self.view == View::Options;
-        let action = self.handle_input_inner(sounds, touch);
+        let action = self.handle_input_inner(sounds, touch, pad);
         // Leaving Options (the only exit is back to Main) flushes the current values.
         if was_options && self.view != View::Options {
             crate::save::store_settings(&crate::save::Settings {
@@ -246,8 +249,8 @@ impl PauseMenu {
         action
     }
 
-    fn handle_input_inner(&mut self, sounds: &mut SoundBank, touch: &TouchState) -> PauseAction {
-        let mut nav = Nav::read(touch);
+    fn handle_input_inner(&mut self, sounds: &mut SoundBank, touch: &TouchState, pad: &Pad) -> PauseAction {
+        let mut nav = Nav::read(touch, pad);
         // Direct taps on rows the last `render` recorded: a click on a menu item /
         // toggle focuses it and presses it (so it acts like the d-pad's ✓), and a
         // click on the volume track sets the gain. Both feed the same handlers below.

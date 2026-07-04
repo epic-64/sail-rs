@@ -29,6 +29,7 @@ mod minimap;
 mod mission;
 mod ocean;
 mod ocean_renderer;
+mod pad;
 mod palette;
 mod pause_menu;
 mod port_lights;
@@ -707,6 +708,7 @@ async fn run_game(
     // verbs the keyboard emits (see `touch.rs` / `touch_ui.rs`). Dormant until a
     // real touch is seen, so desktop play is unchanged.
     let mut touch = touch::TouchState::new();
+    let mut pad = pad::Pad::new();
 
     // Floating salvage drifting on the swell: crates, barrels and the rare
     // strongbox the captain scoops by sailing over them. Per-frame and seeded off
@@ -760,6 +762,8 @@ async fn run_game(
         // Refresh the touch pointers for this frame, then lay out the sailing HUD
         // (the same rects the draw below uses). Done before any input is read.
         touch.update(dt);
+        // Pump the gamepad the same way: it emits the same verbs the keyboard does.
+        pad.update();
         // Which active-ware HUD buttons to lay out: one per owned active ware, in
         // helm-slot order (see `crate::tavern`).
         let item_owned: [bool; 3] =
@@ -809,7 +813,7 @@ async fn run_game(
         // again by the helm's own Esc handler and reopen the menu the same frame.
         let paused = pause.open;
         if paused {
-            match pause.handle_input(sounds, &touch) {
+            match pause.handle_input(sounds, &touch, &pad) {
                 pause_menu::PauseAction::Resume => pause.open = false,
                 pause_menu::PauseAction::Quit => {
                     // Persist the voyage before leaving so quitting resumes here.
@@ -940,7 +944,7 @@ async fn run_game(
                         // Keep the board's dev stock in step with the cheat (the home
                         // tavern lays out every ware while it's live).
                         s.dev_wares = dev_mode;
-                        s.handle_input(&mut gs, &world, &market, sounds, &touch)
+                        s.handle_input(&mut gs, &world, &market, sounds, &touch, &pad)
                     })
                     .unwrap_or(true);
                 if set_sail {
@@ -968,7 +972,7 @@ async fn run_game(
             let put_to_sea = shore
                 .screen
                 .as_mut()
-                .map(|s| s.handle_input(&mut gs, sounds, &touch))
+                .map(|s| s.handle_input(&mut gs, sounds, &touch, &pad))
                 .unwrap_or(true);
             if put_to_sea {
                 shore.cast_off();
@@ -983,13 +987,18 @@ async fn run_game(
             // cluster takes that corner), so their taps are gated on `!log_open`,
             // just like the arrow keys.
             let overlay_open = log_open || guide_open;
+            // The pad's A/B trim sail only at the live helm: while the log or guide is
+            // open they fall back to confirm/back (as the arrows fall back to paging),
+            // so they're gated on `!overlay_open` alongside the arrows and touch buttons.
             if is_key_pressed(KeyCode::W)
-                || (!overlay_open && (is_key_pressed(KeyCode::Up) || touch.tapped_in(hud.sail_up)))
+                || (!overlay_open
+                    && (pad.sail_up() || is_key_pressed(KeyCode::Up) || touch.tapped_in(hud.sail_up)))
             {
                 sail_mode = (sail_mode + 1).min(SAIL_FRACTIONS.len() - 1);
             }
             if is_key_pressed(KeyCode::S)
-                || (!overlay_open && (is_key_pressed(KeyCode::Down) || touch.tapped_in(hud.sail_down)))
+                || (!overlay_open
+                    && (pad.sail_down() || is_key_pressed(KeyCode::Down) || touch.tapped_in(hud.sail_down)))
             {
                 sail_mode = sail_mode.saturating_sub(1);
             }
@@ -1005,11 +1014,15 @@ async fn run_game(
             if sail_mode == SAIL_FRACTIONS.len() - 1 && prev_sail < sail_mode {
                 gs.stats.sails_fully_opened += 1;
             }
-            // Steer with the keys, or with the touch wheel when a finger has it (the
-            // wheel is hidden — and so ignored — while the log is open).
+            // Steer with the keys, the touch wheel when a finger has it, or the pad's
+            // left stick. All three are hidden / ignored while the log is open (the
+            // stick and d-pad turn its pages there instead), so the keys alone hold a
+            // course mid-read, matching the wheel.
             let mut turn = read_turn(overlay_open);
             if !overlay_open {
                 if let Some(v) = touch.steering(hud.wheel) {
+                    turn = v;
+                } else if let Some(v) = pad.steer() {
                     turn = v;
                 }
             }
@@ -1185,7 +1198,8 @@ async fn run_game(
             // A portless isle instead offers to be landed on for a treasure dig,
             // but only when no port is on offer here and its field is unworked today.
             harbor.update_dockable(&world, &kin);
-            let want_ashore = (is_key_pressed(KeyCode::Space) || touch.tapped_in(hud.dock)) && sail_mode == 0;
+            let want_ashore =
+                (is_key_pressed(KeyCode::Space) || pad.dock() || touch.tapped_in(hud.dock)) && sail_mode == 0;
             if want_ashore && harbor.try_dock(&mut gs) {
                 log_open = false;
                 guide_open = false;
@@ -1270,7 +1284,7 @@ async fn run_game(
                         if gs.hull_level == to { scene_refit_base } else { to };
                 }
             }
-            if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
+            if is_key_pressed(KeyCode::L) || pad.log() || touch.tapped_in(hud.log) {
                 log_open = !log_open;
                 // Open the book to its first spread each time (the original rewinds
                 // to spread 0 on close).
@@ -1306,7 +1320,7 @@ async fn run_game(
             // no-ops. Gated to the live helm, so the keys stay free for the open log.
             if !overlay_open {
                 for (slot, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].into_iter().enumerate() {
-                    if !(is_key_pressed(key) || touch.tapped_in(hud.items[slot])) {
+                    if !(is_key_pressed(key) || pad.ware(slot) || touch.tapped_in(hud.items[slot])) {
                         continue;
                     }
                     let Some(item) = SpecialItem::from_active_slot(slot) else { continue };
@@ -1369,10 +1383,10 @@ async fn run_game(
                 if touch.tapped_in(n.back) {
                     guide_open = false;
                 }
-                if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
+                if is_key_pressed(KeyCode::Right) || pad.right() || touch.tapped_in(n.right) {
                     guide_page = (guide_page + 1).min(guide::NUM_PAGES - 1);
                 }
-                if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
+                if is_key_pressed(KeyCode::Left) || pad.left() || touch.tapped_in(n.left) {
                     guide_page = guide_page.saturating_sub(1);
                 }
             }
@@ -1388,11 +1402,11 @@ async fn run_game(
                 if touch.tapped_in(n.back) {
                     log_open = false;
                 }
-                if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
+                if is_key_pressed(KeyCode::Right) || pad.right() || touch.tapped_in(n.right) {
                     log_spread = (log_spread + 1).min(captains_log::num_spreads(&gs, dev_mode).saturating_sub(1));
                     log_sel = 0;
                 }
-                if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
+                if is_key_pressed(KeyCode::Left) || pad.left() || touch.tapped_in(n.left) {
                     log_spread = log_spread.saturating_sub(1);
                     log_sel = 0;
                 }
@@ -1402,13 +1416,13 @@ async fn run_game(
                 // caulks the hull with a plank; a no-op without timber or on a sound hull.
                 let buttons = captains_log::button_count(&gs, dev_mode, log_spread);
                 if buttons > 0 {
-                    if is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up) {
+                    if is_key_pressed(KeyCode::Up) || pad.up() || touch.tapped_in(n.up) {
                         log_sel = log_sel.saturating_sub(1);
                     }
-                    if is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down) {
+                    if is_key_pressed(KeyCode::Down) || pad.down() || touch.tapped_in(n.down) {
                         log_sel = (log_sel + 1).min(buttons - 1);
                     }
-                    if (is_key_pressed(KeyCode::Enter) || touch.tapped_in(n.confirm))
+                    if (is_key_pressed(KeyCode::Enter) || pad.confirm() || touch.tapped_in(n.confirm))
                         && log_spread == 1
                         && log_sel == 0
                     {
@@ -1428,8 +1442,11 @@ async fn run_game(
             }
             // The pause button raises the menu while sailing; it's hidden while the
             // log or guide is open (those close with Esc / the cluster's back instead).
+            // Start mirrors Esc (close an overlay, or raise the menu); the pad's B backs
+            // out of an open overlay but never opens the menu on its own.
             let pause_tap = !log_open && !guide_open && touch.tapped_in(hud.pause);
-            if is_key_pressed(KeyCode::Escape) || pause_tap {
+            let pad_back_overlay = pad.back() && (log_open || guide_open);
+            if is_key_pressed(KeyCode::Escape) || pause_tap || pad.pause() || pad_back_overlay {
                 if guide_open {
                     guide_open = false;
                 } else if log_open {
@@ -1563,7 +1580,7 @@ async fn run_game(
         // a view-only copy of the kinematics carries the flipped heading into every
         // bearing-relative draw below, and the forward deck/spray are hidden while it's
         // held. Suppressed when a board or the log owns the screen.
-        let look_back = (is_key_down(KeyCode::C) || touch.held_in(hud.astern))
+        let look_back = (is_key_down(KeyCode::C) || pad.astern() || touch.held_in(hud.astern))
             && !log_open
             && !harbor.is_open()
             && !pause.open;
