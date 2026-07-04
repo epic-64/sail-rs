@@ -500,9 +500,9 @@ async fn run_game(
     // A staged scene is watched, not played: no input ever comes, so it starts
     // dismissed (the darkened veil would sit over every screenshot).
     let mut need_focus_click = scene.is_none();
-    // The dev controls (nudge weather Q/E, fast-forward F, nudge clock T/Y, stave in
-    // the hull X, nudge wind [ ]) are off until unlocked by a cheat: type "banana"
-    // while the captain's log is open. Toggles, so typing it again locks them back.
+    // The dev controls (the `dev_mode` key handlers below) are off until unlocked
+    // by a cheat: type "banana" while the captain's log is open. Toggles, so
+    // typing it again locks them back.
     // A session flag (not saved), so every voyage starts honest.
     let mut dev_mode = false;
     // Rolling buffer of characters typed while the log is open, scanned for the cheat
@@ -1234,6 +1234,16 @@ async fn run_game(
             // Top up the purse (O): +10,000 gold, to test pricey wares and upgrades.
             if dev_mode && is_key_pressed(KeyCode::O) {
                 gs.gold += 10_000;
+            }
+            // Refit the hull a tier down (,) / up (.), to eyeball each tier's shape,
+            // rig and speed without buying through the shipyard. Hull points are
+            // clamped so a downgrade never leaves more planking than the tier holds.
+            if dev_mode && is_key_pressed(KeyCode::Comma) {
+                gs.hull_level = (gs.hull_level - 1).max(0);
+                gs.hull = gs.hull.min(gs.max_hull());
+            }
+            if dev_mode && is_key_pressed(KeyCode::Period) {
+                gs.hull_level = (gs.hull_level + 1).min(game_state::HULL_MAX_LEVEL);
             }
             if is_key_pressed(KeyCode::L) || touch.tapped_in(hud.log) {
                 log_open = !log_open;
