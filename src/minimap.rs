@@ -519,20 +519,31 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
     let grid_col = Color::new(pal.border.r, pal.border.g, pal.border.b, pal.border.a * 0.22);
 
     // A faint rectangular grid (graticule) over the chart: evenly spaced lines making
-    // roughly square cells. The interior line positions are kept so the compass can be
-    // pinned to a grid crossing.
+    // roughly square cells. The lines are laid out symmetrically outward from the chart's
+    // exact centre so that a crossing always lands dead centre, where the compass is pinned.
+    let (mx, my) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
     let cell = rect.h / 6.0;
-    let mut xs: Vec<f32> = Vec::new();
-    let mut x = rect.x + cell;
-    while x < rect.x + rect.w - 1.0 {
-        xs.push(x);
-        x += cell;
+    let mut xs: Vec<f32> = vec![mx];
+    let mut off = cell;
+    while mx - off > rect.x + 1.0 || mx + off < rect.x + rect.w - 1.0 {
+        if mx - off > rect.x + 1.0 {
+            xs.push(mx - off);
+        }
+        if mx + off < rect.x + rect.w - 1.0 {
+            xs.push(mx + off);
+        }
+        off += cell;
     }
-    let mut ys: Vec<f32> = Vec::new();
-    let mut y = rect.y + cell;
-    while y < rect.y + rect.h - 1.0 {
-        ys.push(y);
-        y += cell;
+    let mut ys: Vec<f32> = vec![my];
+    let mut off = cell;
+    while my - off > rect.y + 1.0 || my + off < rect.y + rect.h - 1.0 {
+        if my - off > rect.y + 1.0 {
+            ys.push(my - off);
+        }
+        if my + off < rect.y + rect.h - 1.0 {
+            ys.push(my + off);
+        }
+        off += cell;
     }
     for &gx in &xs {
         draw_line(gx, rect.y, gx, rect.y + rect.h, 1.0, grid_col);
@@ -541,27 +552,9 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
         draw_line(rect.x, gy, rect.x + rect.w, gy, 1.0, grid_col);
     }
 
-    // The compass hub, pinned to whichever grid crossing near the chart's middle sits
-    // farthest from any port, so the rose lands on an intersection and in free water
-    // rather than atop the central archipelago.
-    let (mx, my) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-    let mut hub = (mx, my);
-    let mut best_clear = -1.0f32;
-    for &hx in &xs {
-        for &hy in &ys {
-            if (hx - mx).abs() > rect.w * 0.28 || (hy - my).abs() > rect.h * 0.32 {
-                continue;
-            }
-            let mut clear = f32::MAX;
-            for &(ox, oy) in &ports_xy {
-                clear = clear.min((hx - ox).hypot(hy - oy));
-            }
-            if clear > best_clear {
-                best_clear = clear;
-                hub = (hx, hy);
-            }
-        }
-    }
+    // The compass hub sits on the central grid crossing, dead centre of the chart, so the
+    // rose lands squarely on an intersection with the rhumb lines fanning out symmetrically.
+    let hub = (mx, my);
 
     // Where a ray from `o` along `d` leaves the rect: the smallest positive crossing of
     // the four edges, so each line of bearing reaches the frame.
@@ -772,19 +765,87 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
         }
     }
 
-    // The compass rose sits at the hub where the rhumb lines converge, north up: faint
-    // cross and saltire with a filled north spike, the flourish of an old chart.
-    let rr = 13.0 * s;
+    // The compass rose sits at the hub where the rhumb lines converge, north up: a
+    // sixteen-point star inside a double ring, each point split down its axis into a
+    // parchment-lit face and a sepia-shaded face so the rose reads as embossed on the
+    // sheet. Cardinal points reach farthest, then the intercardinals, then the short
+    // half-wind points, with the four cardinals lettered in the heading face.
     let (ox, oy) = hub;
-    draw_line(ox - rr, oy, ox + rr, oy, 1.0, pal.wind_streak);
-    draw_line(ox, oy - rr, ox, oy + rr, 1.0, pal.wind_streak);
-    let d = rr * 0.42;
-    draw_line(ox - d, oy - d, ox + d, oy + d, 1.0, pal.wind_streak);
-    draw_line(ox - d, oy + d, ox + d, oy - d, 1.0, pal.wind_streak);
-    draw_triangle(vec2(ox, oy - rr), vec2(ox - 2.4 * s, oy), vec2(ox + 2.4 * s, oy), pal.border);
-    let nfs = ((10.0 * s) as u16).max(9);
-    let nd = measure_text("N", None, nfs, 1.0);
-    draw_text("N", ox - nd.width / 2.0, oy - rr - 2.0 * s, nfs as f32, pal.ship);
+    let r = 14.0 * s;
+    let dark = pal.ship;
+    let light = pal.panel;
+    let ring_o = r * 0.52;
+    let ring_i = r * 0.32;
+
+    // A star point: a slim rhombus from the hub out to `len`, split lengthwise into a
+    // lit half (`light`) and a shaded half (`dark`). Cardinal points are outlined so
+    // their edges stay crisp on the beige; the shorter points are left un-outlined so
+    // the centre of the rose doesn't clot with ink.
+    let point = |ang: f32, len: f32, wide: f32, outline: bool| {
+        let (dx, dy) = (ang.sin(), -ang.cos()); // north up, clockwise from N
+        let (px, py) = (-dy, dx); // perpendicular
+        let hub_v = vec2(ox, oy);
+        let tip = vec2(ox + dx * len, oy + dy * len);
+        let waist = len * 0.30;
+        let s1 = vec2(ox + dx * waist + px * wide, oy + dy * waist + py * wide);
+        let s2 = vec2(ox + dx * waist - px * wide, oy + dy * waist - py * wide);
+        draw_triangle(tip, s1, hub_v, light);
+        draw_triangle(tip, hub_v, s2, dark);
+        draw_line(hub_v.x, hub_v.y, tip.x, tip.y, 1.0, pal.border);
+        if outline {
+            draw_line(tip.x, tip.y, s1.x, s1.y, 1.0, pal.border);
+            draw_line(tip.x, tip.y, s2.x, s2.y, 1.0, pal.border);
+            draw_line(hub_v.x, hub_v.y, s1.x, s1.y, 1.0, pal.border);
+            draw_line(hub_v.x, hub_v.y, s2.x, s2.y, 1.0, pal.border);
+        }
+    };
+
+    // Faint degree ticks around the rim, then the double ring the star sits within.
+    for i in 0..32 {
+        let a = i as f32 / 32.0 * std::f32::consts::TAU;
+        let (dx, dy) = (a.sin(), -a.cos());
+        let t1 = ring_o + (if i % 4 == 0 { 2.6 } else { 1.4 }) * s;
+        draw_line(ox + dx * ring_o, oy + dy * ring_o, ox + dx * t1, oy + dy * t1, 1.0, pal.wind_streak);
+    }
+    draw_circle_lines(ox, oy, ring_o, 1.0, pal.border);
+    draw_circle_lines(ox, oy, ring_i, 1.0, pal.wind_streak);
+
+    // Sixteen points: half-winds and intercardinals first, the four cardinals last so
+    // they sit on top and reach farthest.
+    for i in 0..16 {
+        if i % 4 == 0 {
+            continue; // cardinals drawn below
+        }
+        let ang = i as f32 / 16.0 * std::f32::consts::TAU;
+        if i % 4 == 2 {
+            point(ang, r * 0.60, r * 0.070, false); // intercardinal (NE, SE, SW, NW)
+        } else {
+            point(ang, r * 0.44, r * 0.045, false); // half-wind
+        }
+    }
+    for i in 0..4 {
+        point(i as f32 / 4.0 * std::f32::consts::TAU, r, r * 0.10, true);
+    }
+
+    // A filled bead where the points meet, ringed by a parchment pip.
+    draw_circle(ox, oy, r * 0.09, dark);
+    draw_circle(ox, oy, r * 0.04, light);
+
+    // Cardinal letters just outside the rim, in the heading face; N a touch larger so
+    // north reads at a glance.
+    let lr = r + 3.0 * s;
+    let letter = |txt: &str, cx: f32, cy: f32, fs: u16| {
+        crate::font::heading(|| {
+            let d = measure_text(txt, None, fs, 1.0);
+            draw_text(txt, cx - d.width / 2.0, cy + d.offset_y / 2.0, fs as f32, pal.ship);
+        });
+    };
+    let cfs = ((9.0 * s) as u16).max(8);
+    let nfs = ((11.0 * s) as u16).max(9);
+    letter("N", ox, oy - lr, nfs);
+    letter("E", ox + lr, oy, cfs);
+    letter("S", ox, oy + lr, cfs);
+    letter("W", ox - lr, oy, cfs);
 }
 
 /// Find the large empty areas of the chart to drop the map's ornaments (kraken, whale,
