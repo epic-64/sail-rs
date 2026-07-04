@@ -46,6 +46,9 @@ const BEAM_ANGLE: f32 = PI / 2.0;
 const BEAT_EXP: f32 = 0.6;
 /// Shapes the gentler fall from the peak (beam reach) back to `RUN_DRIVE` (a run).
 const RUN_EXP: f32 = 1.4;
+/// The least a wind shift may turn the wind (see `Wind::shifted`): half a
+/// quarter, enough to move the HUD's compass point and change the trim.
+pub const MIN_SHIFT_RAD: f32 = PI / 4.0;
 
 impl Wind {
     /// A fully random quarter — the whole sky's worth of choices when the wind
@@ -53,6 +56,22 @@ impl Wind {
     pub fn random(rng: &mut Rng) -> Wind {
         Wind {
             toward_rad: rng.between(-PI as f64, PI as f64) as f32,
+        }
+    }
+
+    /// The quarter the wind backs/veers to on a shift: `random`, rerolled until it
+    /// lands at least `MIN_SHIFT_RAD` off the current wind, so every announced
+    /// shift is a real, feelable turn. Without the floor a draw can sit on (or
+    /// beside) the old quarter and the "winds are changing" cue changes nothing;
+    /// a reloaded old save (one whose wind RNG state predates riding the save
+    /// and so restarts from the world seed) hits that case reliably, because the
+    /// first shift redraws the very value the saved wind was left holding.
+    pub fn shifted(&self, rng: &mut Rng) -> Wind {
+        loop {
+            let next = Wind::random(rng);
+            if wrap_angle(next.toward_rad - self.toward_rad).abs() >= MIN_SHIFT_RAD {
+                return next;
+            }
         }
     }
 
@@ -459,6 +478,23 @@ mod tests {
         let mut rng = Rng::from_seed(42);
         let w = Wind::favorable(heading, &mut rng);
         assert!(w.factor(heading) >= RUN_DRIVE - 1e-6);
+    }
+
+    /// Every shift must turn the wind a real amount, including the reload case
+    /// (the wind RNG restarts with the seed, so an unfloored first shift redraws
+    /// whatever quarter the save restored; see `Wind::shifted`).
+    #[test]
+    fn wind_shift_always_turns_a_feelable_amount() {
+        for seed in [1, 2, 3, 42, 12345] {
+            let mut rng = Rng::from_seed(seed);
+            let mut w = Wind::favorable(0.0, &mut rng);
+            for _ in 0..200 {
+                let next = w.shifted(&mut rng);
+                let turn = wrap_angle(next.toward_rad - w.toward_rad).abs();
+                assert!(turn >= MIN_SHIFT_RAD, "seed {seed}: shift turned only {turn} rad");
+                w = next;
+            }
+        }
     }
 
     #[test]

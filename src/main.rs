@@ -261,8 +261,11 @@ fn change_wind(
     const WIND_FLASH_TIME: f32 = 5.0;
     const WIND_CHANGE_DELAY: f32 = 1.92;
     *last_wind_shift = clock;
-    // Draw the new wind now either way, so the RNG sequence is unchanged.
-    let next = Wind::random(wind_rng);
+    // Draw the new wind now either way, so the cue and no-cue paths consume the
+    // same draws. `shifted` guarantees a real turn away from the current wind:
+    // a plain redraw can land back on the old quarter (see its doc for the
+    // reloaded-save case that reliably did).
+    let next = wind.shifted(wind_rng);
     if cue {
         sounds.wind_shift();
         *wind_flash = WIND_FLASH_TIME;
@@ -460,7 +463,7 @@ async fn run_game(
     // If `main` handed us a save (its seed already chose this chart), overwrite the
     // fresh-start defaults with the persisted progress: the purse/cargo/hull/missions/
     // booked race, the ship's position and trim, the day clock, the sail notch, and
-    // the wind's quarter. The world itself was regenerated from the seed, so only
+    // the wind's quarter and shift schedule. The world itself was regenerated from the seed, so only
     // voyage state is restored — and this runs before the traders, flotsam and the
     // main loop read the ship's position, so they spawn around where she really is.
     if let Some(s) = restore {
@@ -469,6 +472,13 @@ async fn run_game(
         tod = s.tod;
         sail_mode = s.sail_mode.min(SAIL_FRACTIONS.len() - 1);
         wind.toward_rad = s.wind_toward;
+        // Resume the wind's shift schedule where it left off: the RNG mid-sequence
+        // (an older save without it just stays freshly reseeded) and the period
+        // timer mid-period, so the next shift lands when it would have.
+        if let Some(state) = s.wind_rng {
+            wind_rng = Rng::from_state(state);
+        }
+        last_wind_shift = -s.wind_since.clamp(0.0, WIND_PERIOD);
         // The rival and race phase ride along, so a race that was already under way
         // resumes mid-course (rival where it was, still running) rather than rewinding
         // to the approach.
@@ -502,6 +512,8 @@ async fn run_game(
         tod,
         sail_mode,
         wind.toward_rad,
+        wind_rng.state(),
+        clock - last_wind_shift,
         rival,
         race_ready,
         race_running,
@@ -647,6 +659,8 @@ async fn run_game(
                         tod,
                         sail_mode,
                         wind.toward_rad,
+                        wind_rng.state(),
+                        clock - last_wind_shift,
                         rival,
                         race_ready,
                         race_running,
@@ -1986,6 +2000,8 @@ async fn run_game(
                     tod,
                     sail_mode,
                     wind.toward_rad,
+                    wind_rng.state(),
+                    clock - last_wind_shift,
                     rival,
                     race_ready,
                     race_running,
