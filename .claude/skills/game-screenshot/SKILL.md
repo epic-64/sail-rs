@@ -30,7 +30,8 @@ units), `sail` (canvas notch, default full; `sail=0` parks the ship so the
 framing holds still), `tod` (0.25 sunrise, 0.5 noon, 0.75 sunset), `heading` /
 `wind` (bearings in degrees, 0 = north), `weather` (calm...storm by name),
 `rival=M` + `rival_hull=N` (a rival ship M metres ahead, beam-on, of tier N),
-`hud=0` (clean frame), `seed`.
+`refit=N` (loop the shipyard rebuild animation between `hull` and tier N every
+few seconds, so shots keep catching it mid-swap), `hud=0` (clean frame), `seed`.
 
 Staging tips, learned the slow way:
 

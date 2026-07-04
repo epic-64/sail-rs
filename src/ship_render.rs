@@ -81,6 +81,193 @@ const CAM_NEAR: f32 = 0.8; // metres; geometry nearer the eye than this is dropp
 /// sea's horizon at this same row).
 const HORIZON: f32 = 0.54;
 
+// --- Shipyard refit: the rebuild animation (see `ShipRenderer::refit_to`) -----
+/// Seconds the whole refit runs: the old hull flies apart over the first
+/// half, the new one flies together over the second.
+const REFIT_SECS: f32 = 2.6;
+/// Edge of the screen-space debris cells, as a fraction of the screen's
+/// short side: smaller cells cut more and finer debris.
+const SHATTER_CELL_FRAC: f32 = 0.085;
+/// How far a debris piece sails at full scatter, as a fraction of the
+/// screen's long side.
+const SHATTER_FLY_FRAC: f32 = 0.9;
+/// How far (radians) a piece may have spun at full scatter.
+const SHATTER_SPIN: f32 = 3.0;
+
+/// Fraction of the refit one debris piece spends in flight: each piece sets
+/// off (or arrives) inside its own hashed slice of the rebuild, so the ship
+/// swaps piece by piece in quick succession instead of bursting whole.
+const SHATTER_PIECE_FRAC: f32 = 0.2;
+/// Latest (fraction of the refit) a dying piece may set off; with the flight
+/// above, the old hull is gone with time to spare before the rebuild ends.
+/// Arrivals mirror it, so the first new pieces land while old ones still fly
+/// and the deck never sits empty.
+const SHATTER_LAST_OFF: f32 = 0.53;
+
+/// A refit under way (see [`ShipRenderer::refit_to`]): the rebuild's clock,
+/// the tiers being rebuilt from and toward, and the hash seed the debris
+/// patterns are drawn from (salted per hull tier, so each hull scatters as
+/// its own wreckage).
+struct Refit {
+    t: f32,
+    from: i32,
+    to: i32,
+    seed: u32,
+}
+
+/// The shatter the refit applies to everything the ship draws: the rebuild's
+/// clock (0..1 over the whole refit), whether this pass assembles (`flip`)
+/// rather than scatters, the debris pattern's seed, the debris cell edge and
+/// full-scatter flight (px), and the burst's screen origin. Lives in
+/// [`SHATTER`] only while a mid-refit `render` runs.
+#[derive(Clone, Copy)]
+struct Shatter {
+    clock: f32,
+    flip: bool,
+    seed: u32,
+    cell: f32,
+    fly: f32,
+    origin: Vec2,
+}
+
+std::thread_local! {
+    /// Live only while `render` draws a mid-refit ship: the draw shims below
+    /// read it, so every primitive the ship emits is thrown with its debris
+    /// piece without threading state through every draw call.
+    static SHATTER: std::cell::Cell<Option<Shatter>> = const { std::cell::Cell::new(None) };
+}
+
+/// Rigidly transform one drawn primitive by its debris piece, in place. The
+/// screen cell its centroid lands in picks the piece: a hashed slice of the
+/// rebuild to fly in (staggered by [`SHATTER_LAST_OFF`], so pieces set off or
+/// land one after another rather than all at once, and neighbouring
+/// primitives fly together as one clump), a hashed spin, and a flight
+/// outward from the burst origin. Through its slice the piece shrinks toward
+/// the cell's centre, gone entirely at the end (an assembling pass, `flip`,
+/// runs the same slice backward). Returns the piece's shrink factor, for
+/// scaling thicknesses and type along, or `None` either when the piece is
+/// gone (the caller skips the draw) or when no shatter is live (the caller
+/// draws untouched). Whole primitives move rigidly: no vertex is ever shared
+/// across pieces, so nothing smears between two chunks flying apart.
+fn shatter_pts(pts: &mut [Vec2]) -> Option<f32> {
+    let s = SHATTER.with(|c| c.get())?;
+    let n = pts.len().max(1) as f32;
+    let cen = pts.iter().fold(vec2(0.0, 0.0), |a, p| a + *p) / n;
+    let (ci, cj) = ((cen.x / s.cell).floor() as i32, (cen.y / s.cell).floor() as i32);
+    let key = (ci as u32).wrapping_mul(73_856_093) ^ (cj as u32).wrapping_mul(19_349_663) ^ s.seed;
+    let r = |m: u32| slot_rand(key.wrapping_add(m));
+    // The piece's slice of the rebuild. An assembling piece's window mirrors
+    // a dying one's exactly (flip both the window and the progress), which is
+    // what lets an interrupted rebuild reverse seamlessly (see `refit_to`).
+    let start = if s.flip {
+        (1.0 - SHATTER_PIECE_FRAC) - r(5) * SHATTER_LAST_OFF
+    } else {
+        r(5) * SHATTER_LAST_OFF
+    };
+    let p = ((s.clock - start) / SHATTER_PIECE_FRAC).clamp(0.0, 1.0);
+    let p = p * p * (3.0 - 2.0 * p);
+    let amt = if s.flip { 1.0 - p } else { p };
+    if amt <= 0.0 {
+        return Some(1.0); // not this piece's turn yet: drawn as built
+    }
+    let keep = 1.0 - amt;
+    if keep < 0.02 {
+        return None;
+    }
+    let cc = vec2((ci as f32 + 0.5) * s.cell, (cj as f32 + 0.5) * s.cell);
+    // The flight: outward from the burst origin with hashed jitter and a
+    // touch of upward lift, accelerating as the piece's scatter deepens.
+    let out = cc - s.origin;
+    let ol = out.length().max(s.cell);
+    let dir = vec2(out.x / ol + (r(1) - 0.5) * 0.8, out.y / ol - 0.4 * r(2));
+    let dl = dir.length().max(0.3);
+    let disp = dir / dl * (s.fly * (0.5 + 0.7 * r(3)) * amt * amt.sqrt());
+    let a = (r(4) - 0.5) * 2.0 * SHATTER_SPIN * amt;
+    let (sa, ca) = a.sin_cos();
+    for p in pts {
+        let l = (*p - cc) * keep;
+        *p = cc + vec2(l.x * ca - l.y * sa, l.x * sa + l.y * ca) + disp;
+    }
+    Some(keep)
+}
+
+// --- Shatter-aware draw shims --------------------------------------------------
+// Module-local shadows of the macroquad draw calls this renderer uses (a
+// local item wins over the prelude glob, the same trick `geometry::Vec2`
+// plays on the world maths): while a refit's [`SHATTER`] is live, every
+// primitive the ship draws is thrown rigidly with its debris piece, or
+// skipped once the piece has shrunk away; otherwise they pass straight
+// through. Only this module's own draws are touched.
+
+fn draw_triangle(a: Vec2, b: Vec2, c: Vec2, col: Color) {
+    if SHATTER.with(|s| s.get()).is_none() {
+        macroquad::shapes::draw_triangle(a, b, c, col);
+    } else {
+        let mut pts = [a, b, c];
+        if shatter_pts(&mut pts).is_some() {
+            macroquad::shapes::draw_triangle(pts[0], pts[1], pts[2], col);
+        }
+    }
+}
+
+fn draw_line(x1: f32, y1: f32, x2: f32, y2: f32, thick: f32, col: Color) {
+    let mut pts = [vec2(x1, y1), vec2(x2, y2)];
+    if SHATTER.with(|s| s.get()).is_none() {
+        macroquad::shapes::draw_line(x1, y1, x2, y2, thick, col);
+    } else if let Some(k) = shatter_pts(&mut pts) {
+        macroquad::shapes::draw_line(pts[0].x, pts[0].y, pts[1].x, pts[1].y, thick * k, col);
+    }
+}
+
+fn draw_circle(x: f32, y: f32, r: f32, col: Color) {
+    let mut pts = [vec2(x, y)];
+    if SHATTER.with(|s| s.get()).is_none() {
+        macroquad::shapes::draw_circle(x, y, r, col);
+    } else if let Some(k) = shatter_pts(&mut pts) {
+        macroquad::shapes::draw_circle(pts[0].x, pts[0].y, r * k, col);
+    }
+}
+
+fn draw_circle_lines(x: f32, y: f32, r: f32, thick: f32, col: Color) {
+    let mut pts = [vec2(x, y)];
+    if SHATTER.with(|s| s.get()).is_none() {
+        macroquad::shapes::draw_circle_lines(x, y, r, thick, col);
+    } else if let Some(k) = shatter_pts(&mut pts) {
+        macroquad::shapes::draw_circle_lines(pts[0].x, pts[0].y, r * k, thick * k, col);
+    }
+}
+
+fn draw_mesh(mesh: &Mesh) {
+    if SHATTER.with(|s| s.get()).is_none() {
+        return macroquad::models::draw_mesh(mesh);
+    }
+    let mut pts: Vec<Vec2> =
+        mesh.vertices.iter().map(|v| vec2(v.position.x, v.position.y)).collect();
+    if shatter_pts(&mut pts).is_some() {
+        let mut thrown = Mesh {
+            vertices: mesh.vertices.clone(),
+            indices: mesh.indices.clone(),
+            texture: mesh.texture.clone(),
+        };
+        for (v, p) in thrown.vertices.iter_mut().zip(&pts) {
+            v.position.x = p.x;
+            v.position.y = p.y;
+        }
+        macroquad::models::draw_mesh(&thrown);
+    }
+}
+
+fn draw_text_ex(text: &str, x: f32, y: f32, params: TextParams) {
+    let mut pts = [vec2(x, y)];
+    if SHATTER.with(|s| s.get()).is_none() {
+        macroquad::text::draw_text_ex(text, x, y, params);
+    } else if let Some(k) = shatter_pts(&mut pts) {
+        let mut params = params;
+        params.font_scale *= k;
+        macroquad::text::draw_text_ex(text, pts[0].x, pts[0].y, params);
+    }
+}
+
 /// Fore-aft reach of the companion stairs' flight down from the quarterdeck
 /// break; the shorter the run, the steeper the climb. Shared with the cargo
 /// fence in `step_cargo`, so sliding crates fetch up against the flight
@@ -721,6 +908,17 @@ pub struct ShipRenderer {
     /// The hull tier's shape everything is lofted from (see [`crate::hull_shape`]);
     /// swapped by `set_hull_level` when the shipyard rebuilds the ship.
     hull: &'static HullShape,
+    /// The shipyard tier `hull` was lofted from; `i32::MIN` until the first
+    /// `refit_to`/`set_hull_level` call pins it (that first call snaps, so a
+    /// fresh spawn or a restored save never plays the rebuild).
+    level: i32,
+    /// The rebuild animation under way, if any (see `refit_to`).
+    refit: Option<Refit>,
+    /// `refit`'s clock (0..1 over the rebuild) and debris seed for this
+    /// frame (refreshed by `step_refit`); `render` arms [`SHATTER`] from it.
+    scatter: Option<(f32, u32)>,
+    /// Refits begun so far, seeding each one's debris pattern differently.
+    refits: u32,
     wheel_angle: f32,
     brace_angle: f32,
     /// Visually-eased sail set, chasing the chosen notch so the canvas furls/unfurls
@@ -776,6 +974,10 @@ impl ShipRenderer {
     pub fn new() -> Self {
         ShipRenderer {
             hull: &hull_shape::BRIG,
+            level: i32::MIN,
+            refit: None,
+            scatter: None,
+            refits: 0,
             wheel_angle: 0.0,
             brace_angle: 0.0,
             set: 0.0,
@@ -789,15 +991,102 @@ impl ShipRenderer {
     }
 
     /// Loft the ship from the given shipyard tier's hull (see
-    /// [`hull_shape::for_level`]). A tier change re-stows the deck cargo, since
+    /// [`hull_shape::for_level`]), at once and without ceremony (any rebuild
+    /// under way is dropped). A tier change re-stows the deck cargo, since
     /// the new waist has its own stowage plan.
     pub fn set_hull_level(&mut self, hull_level: i32) {
+        self.level = hull_level;
+        self.refit = None;
+        self.scatter = None;
         let hull = hull_shape::for_level(hull_level);
         if !std::ptr::eq(hull, self.hull) {
             self.hull = hull;
             self.crates.clear();
             self.stowed = -1;
         }
+    }
+
+    /// Refit toward the given shipyard tier with the rebuild animation: the
+    /// hull she sails flies apart into debris over the first half of
+    /// [`REFIT_SECS`], and the new tier's hull flies together out of its own
+    /// over the second (the warp itself lives in [`scatter_point`]). The
+    /// first call ever snaps silently instead (a spawn or a restored save is
+    /// not a rebuild), as does a call naming the tier already sailed or
+    /// already being built toward, so calling this every frame is free.
+    /// Returns true when this call set a rebuild in motion, so the caller
+    /// may cue a sound.
+    pub fn refit_to(&mut self, hull_level: i32) -> bool {
+        if self.level == i32::MIN {
+            self.set_hull_level(hull_level);
+            return false;
+        }
+        let target = self.refit.as_ref().map_or(self.level, |r| r.to);
+        if hull_level == target {
+            return false;
+        }
+        match &mut self.refit {
+            // Early in the rebuild: simply retarget which hull assembles.
+            Some(r) if r.t < REFIT_SECS * 0.5 => {
+                r.to = hull_level;
+                false
+            }
+            // Mid-assembly: reverse course. Every piece's assembly window is
+            // the exact mirror of its fly-off window (see `shatter_pts`), so
+            // re-entering at the mirrored clock keeps each piece continuous:
+            // the half-built ship sheds again from exactly where it hangs.
+            Some(r) => {
+                r.from = r.to;
+                r.to = hull_level;
+                r.t = REFIT_SECS - r.t;
+                false
+            }
+            None => {
+                self.refits = self.refits.wrapping_add(1);
+                self.refit = Some(Refit {
+                    t: 0.0,
+                    from: self.level,
+                    to: hull_level,
+                    seed: self.refits.wrapping_mul(0x9E37_79B9) ^ ((hull_level as u32) << 8),
+                });
+                true
+            }
+        }
+    }
+
+    /// Advance a refit under way and refresh the rebuild clock the frame's
+    /// draw passes shatter by. The tier the game systems ride (crates, the
+    /// helm eye, `self.hull`) swaps at the midpoint, deep in the piece-by-
+    /// piece swap where both hulls are half-built debris anyway.
+    fn step_refit(&mut self, dt: f32) {
+        if let Some(r) = &mut self.refit {
+            r.t += dt;
+            if r.t >= REFIT_SECS {
+                self.refit = None;
+            } else if r.t >= REFIT_SECS * 0.5 && self.level != r.to {
+                self.level = r.to;
+                self.hull = hull_shape::for_level(r.to);
+                // Re-stow the deck for the new waist.
+                self.crates.clear();
+                self.stowed = -1;
+            }
+        }
+        self.scatter = self.refit.as_ref().map(|r| (r.t / REFIT_SECS, r.seed));
+    }
+
+    /// Arm [`SHATTER`] for one draw pass of the rebuild: the pass's hull tier
+    /// salts the seed, so each hull flies as its own debris pattern whichever
+    /// way the rebuild runs.
+    fn arm_shatter(clock: f32, seed: u32, level: i32, flip: bool, w: f32, h: f32) {
+        SHATTER.with(|c| {
+            c.set(Some(Shatter {
+                clock,
+                flip,
+                seed: seed ^ (level as u32).wrapping_mul(0x9E37_79B9),
+                cell: (w.min(h) * SHATTER_CELL_FRAC).max(24.0),
+                fly: w.max(h) * SHATTER_FLY_FRAC,
+                origin: vec2(w * 0.5, h * 0.8),
+            }))
+        });
     }
 
     /// Crates lost over the rail since the last call: the game applies them to
@@ -1250,6 +1539,11 @@ impl ShipRenderer {
         w: f32,
         h: f32,
     ) {
+        // A refit under way rebuilds the ship around the eye: advance it
+        // before anything is stepped or drawn, so a hull swapped this frame
+        // stows and lofts as itself throughout.
+        self.step_refit(dt);
+
         // Wheel chases the rudder; the yard hauls round toward the wind's bearing;
         // the canvas furls/unfurls toward the chosen notch.
         self.wheel_angle += (rig.turn * 2.4 - self.wheel_angle) * clamp(WHEEL_EASE * dt, 0.0, 1.0);
@@ -1286,25 +1580,59 @@ impl ShipRenderer {
 
         self.step_cargo(rig, roll, pitch_ang, dt);
         let grain = self.deck_grain.get_or_insert_with(build_deck_grain).clone();
-        // The ship draws far to near through the one camera: the deck forward
-        // of the mast, then the rig standing at the mast station, then the
-        // deck abaft it (near crates, quarterdeck, breast rail), so woodwork
-        // between the eye and the mast rightly covers its lower run.
-        let pts = self.draw_deck(&sway, pitch_ang, &lume, &grain, h, w, false);
-        self.draw_rig(&sway, rig, pitch_ang, &lume, t, h, w, &pts);
-        self.draw_deck(&sway, pitch_ang, &lume, &grain, h, w, true);
-        // The chart board after the rig, so no rope paints across the parchment;
-        // it stands on its pedestal by the wheel, nearer the eye than the deck.
-        if let Some(chart) = &rig.chart {
-            self.draw_chart(&sway, chart, pitch_ang, &lume, h, w);
-        }
-        // The trinket rack keeps the chart's depth on the other rail, so it joins
-        // the same painter's slot: over the aft deck, under the wheel.
-        self.draw_trinkets(&sway, &rig.trinkets, pitch_ang, &lume, t, h, w);
-        // The wheel last: it is the nearest thing on the ship, standing between
-        // the eye and everything else.
-        self.draw_wheel(&sway, pitch_ang, &lume, h, w);
+        // Mid-refit the ship draws twice: the dying hull first, its pieces
+        // setting off one after another, then the arriving hull assembling
+        // over the wreck piece by piece, so the deck never sits empty.
+        // Otherwise one plain pass. The shims shatter only while armed.
+        let refit_draw = match (&self.refit, self.scatter) {
+            (Some(r), Some((clock, seed))) => Some((r.from, r.to, clock, seed)),
+            _ => None,
+        };
+        let pts = if let Some((from, to, clock, seed)) = refit_draw {
+            let live = self.hull;
+            self.hull = hull_shape::for_level(from);
+            Self::arm_shatter(clock, seed, from, false, w, h);
+            self.draw_ship(&sway, rig, pitch_ang, &lume, &grain, t, h, w);
+            self.hull = hull_shape::for_level(to);
+            Self::arm_shatter(clock, seed, to, true, w, h);
+            let pts = self.draw_ship(&sway, rig, pitch_ang, &lume, &grain, t, h, w);
+            SHATTER.with(|c| c.set(None));
+            self.hull = live;
+            pts
+        } else {
+            self.draw_ship(&sway, rig, pitch_ang, &lume, &grain, t, h, w)
+        };
         self.deck_silhouette = pts.silhouette;
+    }
+
+    /// One full painter's pass of the ship through the helm camera, far to
+    /// near: the deck forward of the mast, then the rig standing at the mast
+    /// station, then the deck abaft it (near crates, quarterdeck, breast
+    /// rail), so woodwork between the eye and the mast rightly covers its
+    /// lower run; the chart board after the rig so no rope paints across the
+    /// parchment; the trinket rack at the chart's depth on the other rail;
+    /// and the wheel last, the nearest thing on the ship.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ship(
+        &self,
+        sway: &impl Fn(f32, f32) -> Vec2,
+        rig: &RigInput,
+        pitch_ang: f32,
+        lume: &Lume,
+        grain: &Texture2D,
+        t: f32,
+        h: f32,
+        w: f32,
+    ) -> DeckPoints {
+        let pts = self.draw_deck(sway, pitch_ang, lume, grain, h, w, false);
+        self.draw_rig(sway, rig, pitch_ang, lume, t, h, w, &pts);
+        self.draw_deck(sway, pitch_ang, lume, grain, h, w, true);
+        if let Some(chart) = &rig.chart {
+            self.draw_chart(sway, chart, pitch_ang, lume, h, w);
+        }
+        self.draw_trinkets(sway, &rig.trinkets, pitch_ang, lume, t, h, w);
+        self.draw_wheel(sway, pitch_ang, lume, h, w);
+        pts
     }
 
     /// The hull: deck floor, quarterdeck, bulwarks, railing, cargo and bowsprit,
@@ -3193,6 +3521,105 @@ mod tests {
             assert!(c.z - c.hd >= hull.cargo_z_min - c.hd * 2.0, "crate off the bow");
             assert!(c.y >= d - 1e-3, "crate under the deck");
         }
+    }
+
+    /// The refit animation's book-keeping: the first call snaps (a spawn is
+    /// not a rebuild), a real tier change flies the old hull apart and only
+    /// swaps lofts at the fully-scattered midpoint, and the whole thing
+    /// settles clean with nothing left warping.
+    #[test]
+    fn refit_animates_the_tier_swap() {
+        let mut r = ShipRenderer::new();
+        assert!(!r.refit_to(2), "the first call is a spawn, not a rebuild");
+        assert!(std::ptr::eq(r.hull, crate::hull_shape::for_level(2)));
+        assert!(r.refit_to(3), "a real tier change starts the rebuild");
+        r.step_refit(0.3);
+        let (clock, _) = r.scatter.expect("mid-refit, the shatter must be live");
+        assert!(clock > 0.0 && clock < 1.0);
+        assert!(
+            std::ptr::eq(r.hull, crate::hull_shape::for_level(2)),
+            "the old hull must fly apart before the swap"
+        );
+        r.step_refit(REFIT_SECS * 0.5);
+        assert!(
+            std::ptr::eq(r.hull, crate::hull_shape::for_level(3)),
+            "past the midpoint the new hull assembles"
+        );
+        r.step_refit(REFIT_SECS);
+        assert!(r.refit.is_none() && r.scatter.is_none(), "the rebuild must settle");
+        assert!(!r.refit_to(3), "the tier she already sails is no rebuild");
+    }
+
+    /// A rebuild interrupted mid-assembly reverses course seamlessly: the
+    /// clock re-enters at its mirror (every piece's assembly window is the
+    /// mirror of its fly-off window, so each piece sheds again from exactly
+    /// where it hangs), and the half-assembled hull becomes the dying one.
+    #[test]
+    fn interrupted_rebuild_reverses_smoothly() {
+        let mut r = ShipRenderer::new();
+        r.refit_to(0);
+        r.refit_to(1);
+        r.step_refit(REFIT_SECS * 0.75); // mid-assembly of the new hull
+        let (before, _) = r.scatter.unwrap();
+        r.refit_to(2); // interrupted: fly apart again, toward another tier
+        r.step_refit(0.0);
+        let (after, _) = r.scatter.unwrap();
+        assert!(
+            (after - (1.0 - before)).abs() < 1e-4,
+            "clock did not mirror: {before} -> {after}"
+        );
+        let refit = r.refit.as_ref().unwrap();
+        assert_eq!((refit.from, refit.to), (1, 2));
+    }
+
+    /// The shatter never smears a primitive: every point of one piece takes
+    /// the same rigid shrink + spin + flight, so its shape survives (edge
+    /// lengths all scale by exactly the piece's shrink factor). And the
+    /// pieces are staggered: over the rebuild the piece passes through
+    /// untouched, mid-flight and gone, not everything at once.
+    #[test]
+    fn shatter_throws_primitives_rigidly() {
+        let tri = [vec2(10.0, 10.0), vec2(46.0, 10.0), vec2(10.0, 46.0)];
+        let (mut seen_built, mut seen_flying, mut seen_gone) = (false, false, false);
+        for step in 0..=60 {
+            let clock = step as f32 / 60.0;
+            SHATTER.with(|c| {
+                c.set(Some(Shatter {
+                    clock,
+                    flip: false,
+                    seed: 3,
+                    cell: 48.0,
+                    fly: 800.0,
+                    origin: vec2(640.0, 576.0),
+                }))
+            });
+            let mut thrown = tri;
+            let Some(keep) = shatter_pts(&mut thrown) else {
+                seen_gone = true;
+                continue;
+            };
+            if keep > 0.999 {
+                seen_built = true;
+                assert_eq!(thrown, tri, "an unlaunched piece moved");
+                continue;
+            }
+            seen_flying = true;
+            for (i, j) in [(0, 1), (1, 2), (2, 0)] {
+                let d0 = (tri[i] - tri[j]).length();
+                let d1 = (thrown[i] - thrown[j]).length();
+                assert!((d1 / d0 - keep).abs() < 1e-3, "edge {i}-{j} smeared");
+            }
+            // Deep into its slice the piece must actually have flown.
+            if keep < 0.5 {
+                assert!((thrown[0] - tri[0]).length() > 10.0, "a dying piece never flew");
+            }
+        }
+        assert!(
+            seen_built && seen_flying && seen_gone,
+            "the piece must pass through built, flying and gone \
+             (built {seen_built}, flying {seen_flying}, gone {seen_gone})"
+        );
+        SHATTER.with(|c| c.set(None));
     }
 
     /// Keeping full way on through a storm with the wheel hard over is exactly
