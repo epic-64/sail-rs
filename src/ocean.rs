@@ -208,7 +208,7 @@ pub fn swell_yaw(pos: Vec2, heading: f32, t: f32, sea: f32, hull: &HullShape) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hull_shape::{BRIG, GALLEON, SLOOP};
+    use crate::hull_shape::{BRIG, GALLEON, INDIAMAN, SLOOP};
 
     #[test]
     fn probe_swell_yaw_envelope() {
@@ -286,5 +286,14 @@ mod tests {
         let calm_ratio = pitch_rate_rms(&BRIG, 0.35) / pitch_rate_rms(&GALLEON, 0.35);
         println!("brig/galleon pitch-rate ratio: calm {calm_ratio:.2}");
         assert!(calm_ratio > 1.1, "the galleon should filter chop the brig still feels");
+    }
+
+    /// And once more up the ladder: the indiaman's still longer probed
+    /// waterline rides light chop easier than the galleon.
+    #[test]
+    fn the_indiaman_filters_what_still_works_the_galleon() {
+        let calm_ratio = pitch_rate_rms(&GALLEON, 0.35) / pitch_rate_rms(&INDIAMAN, 0.35);
+        println!("galleon/indiaman pitch-rate ratio: calm {calm_ratio:.2}");
+        assert!(calm_ratio > 1.05, "the indiaman should filter chop the galleon still feels");
     }
 }

@@ -11,9 +11,9 @@
 //! same chop pitches and rolls a short hull it spans coherently.
 //!
 //! Tier 0 sails the [`SLOOP`] (a short single-decker), tier 1 the [`BRIG`]
-//! (the quarterdecked hull, formerly the only shape), and every higher tier
-//! the [`GALLEON`] (the high-charged flagship). Pick by tier with
-//! [`for_level`].
+//! (the quarterdecked hull, formerly the only shape), tier 2 the [`GALLEON`]
+//! (the high-charged two-master), and the top tier the [`INDIAMAN`] (the
+//! three-masted flagship). Pick by tier with [`for_level`].
 
 /// One mast of a hull's rig: where it stands, how large its course is cut,
 /// how much canvas it flies, and where its running rigging belays. The
@@ -245,14 +245,14 @@ pub static BRIG: HullShape = HullShape {
     ],
 };
 
-/// Tiers 2 and up: the galleon, the yard's flagship and its only two-master.
-/// A third again the brig's length with a beam to match, the deepest
-/// freeboard afloat, and a taller quarterdeck set further aft (the classic
-/// high stern, with the counter carried out over the transom): from her wheel
-/// you look down into a long waist that stows a fifth cargo column, past a
-/// smaller foremast riding the bow. The longest probed waterline in the yard
-/// plus the slowest sway response make her ride the same seas the other hulls
-/// answer: stately, leaning into the swell rather than snapping to it.
+/// Tier 2: the galleon, the yard's only two-master. A third again the brig's
+/// length with a beam to match, a deep freeboard, and a taller quarterdeck
+/// set further aft (the classic high stern, with the counter carried out over
+/// the transom): from her wheel you look down into a long waist that stows a
+/// fifth cargo column, past a smaller foremast riding the bow. A probed
+/// waterline well past the brig's plus a slower sway response make her ride
+/// the same seas the smaller hulls answer: stately, leaning into the swell
+/// rather than snapping to it.
 pub static GALLEON: HullShape = HullShape {
     stations: &[
         (-20.0, 0.05, 2.00, 0.55), // stem tip
@@ -280,7 +280,7 @@ pub static GALLEON: HullShape = HullShape {
     cargo_cols: &[-3.2, -2.0, -0.8, 0.4, 1.6], // the wider beam buys a fifth column
     // Two-masted: a smaller foremast on the rising foredeck (clear forward of
     // the cargo run), the full-rigged main at the origin; both fly a topsail
-    // over the course, the most canvas in the yard.
+    // over the course.
     masts: &[
         Mast { z: -9.5, scale: 0.78, sails: 2, sheet_foot_z: -4.8, brace_foot_z: -2.5 },
         Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 4.5, brace_foot_z: 9.0 },
@@ -320,16 +320,99 @@ pub static GALLEON: HullShape = HullShape {
     ],
 };
 
+/// The top tier: the East Indiaman, the yard's flagship and its only
+/// three-master. Longer again than the galleon with the deepest freeboard and
+/// the highest quarterdeck afloat, and a beam that stows a sixth cargo
+/// column. Her rig steps up bow to stern: a small foremast on the rising bow,
+/// a taller mast amidships, and the full-rigged main aft at the origin, every
+/// one flying a topsail over its course, the most canvas in the yard. From
+/// the helm the three tiers of cloth recede down the deck. The yard's longest
+/// probed waterline and its slowest sway response: she shrugs off seas that
+/// still work the galleon, and leans where lesser hulls snap.
+pub static INDIAMAN: HullShape = HullShape {
+    stations: &[
+        (-24.0, 0.05, 2.30, 0.60), // stem tip
+        (-21.5, 1.30, 1.82, 0.85),
+        (-18.5, 2.70, 1.32, 0.83),
+        (-15.0, 3.80, 0.85, 0.80),
+        (-10.0, 4.60, 0.40, 0.76),
+        (-5.0, 5.00, 0.14, 0.74),
+        (0.0, 5.10, 0.02, 0.74), // the main mast station: full beam
+        (4.0, 5.05, 0.00, 0.75),
+        (6.5, 4.98, 0.005, 0.77), // the sheer starts its climb to the quarterdeck...
+        (8.5, 4.90, 0.01, 2.46),  // ...topping out level with the platform's wall
+        (8.5, 4.90, 1.70, 0.77),  // quarterdeck side of the break (the riser)
+        (12.5, 4.45, 1.78, 0.85),
+        (15.5, 3.95, 1.84, 0.94),
+        (18.0, 3.50, 1.88, 1.02), // transom, behind the eye
+    ],
+    qdeck_break: Some(8.5),
+    cam_aft: 14.5,
+    cam_up: 3.55, // a helmsman's eye line, stood on the highest quarterdeck
+    wheel_z: 10.5,
+    hub_above_deck: 0.41,
+    cargo_z_min: -9.5,
+    cargo_z_max: 8.5, // the quarterdeck riser
+    cargo_cols: &[-3.7, -2.5, -1.3, -0.1, 1.1, 2.3], // the widest beam buys a sixth column
+    // Three-masted, the rig stepping up bow to stern to the full-rigged main;
+    // the fore and middle masts stand clear enough that no course sweeps its
+    // neighbour's canvas at any brace.
+    masts: &[
+        Mast { z: -16.0, scale: 0.72, sails: 2, sheet_foot_z: -11.3, brace_foot_z: -9.0 },
+        Mast { z: -8.0, scale: 0.86, sails: 2, sheet_foot_z: -3.3, brace_foot_z: -1.0 },
+        Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 5.0, brace_foot_z: 10.0 },
+    ],
+    sprit_base: (2.25, -23.2),
+    sprit_tip: (4.0, -29.0),
+    freeboard: 2.1,
+    sway_response: 0.6,
+    // Same row spacing rule as the smaller hulls; the yard's longest probed
+    // waterline filters chop that still works the galleon.
+    probes: &[
+        (21.0, 0.0),
+        (18.0, -1.45),
+        (18.0, 1.45),
+        (15.0, -2.7),
+        (15.0, 2.7),
+        (12.0, -3.6),
+        (12.0, 3.6),
+        (9.0, -4.1),
+        (9.0, 4.1),
+        (6.0, -4.5),
+        (6.0, 4.5),
+        (3.0, -4.75),
+        (3.0, 4.75),
+        (0.0, -4.9),
+        (0.0, 4.9),
+        (-3.0, -4.95),
+        (-3.0, 4.95),
+        (-6.0, -4.9),
+        (-6.0, 4.9),
+        (-9.0, -4.85),
+        (-9.0, 4.85),
+        (-12.0, -4.7),
+        (-12.0, 4.7),
+        (-15.0, -4.35),
+        (-15.0, 4.35),
+        (-18.0, -3.85),
+        (-18.0, 3.85),
+        (-21.0, -3.3),
+        (-21.0, 3.3),
+    ],
+};
+
 /// The hull a given shipyard tier sails (see `game_state::upgrades`): tier 0
-/// is the sloop, tier 1 the brig, and every higher tier the galleon until it
-/// grows a shape of its own.
+/// is the sloop, tier 1 the brig, tier 2 the galleon, and the top tier the
+/// indiaman.
 pub fn for_level(hull_level: i32) -> &'static HullShape {
     if hull_level <= 0 {
         &SLOOP
     } else if hull_level == 1 {
         &BRIG
-    } else {
+    } else if hull_level == 2 {
         &GALLEON
+    } else {
+        &INDIAMAN
     }
 }
 
@@ -347,13 +430,16 @@ mod tests {
     }
 
     /// The canvas each tier's hull flies: the sloop a single course, the brig
-    /// a topsail over hers, the galleon a topsail over the course on both
-    /// masts.
+    /// a topsail over hers, the galleon and the indiaman a topsail over the
+    /// course on every mast, and the mast count climbing with the tier.
     #[test]
     fn tier_rigs() {
         assert!(SLOOP.masts.iter().all(|m| m.sails == 1));
         assert!(BRIG.masts.iter().all(|m| m.sails == 2));
         assert!(GALLEON.masts.iter().all(|m| m.sails == 2));
+        assert!(INDIAMAN.masts.iter().all(|m| m.sails == 2));
+        assert_eq!(GALLEON.masts.len(), 2);
+        assert_eq!(INDIAMAN.masts.len(), 3);
     }
 
     /// Every hull's probes must lie inside its own lofted waterline (a probe
@@ -362,7 +448,9 @@ mod tests {
     /// break must be a real doubled station.
     #[test]
     fn shapes_are_self_consistent() {
-        for (name, hull) in [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON)] {
+        for (name, hull) in
+            [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON), ("indiaman", &INDIAMAN)]
+        {
             let hl = hull.half_length();
             let sum_x: f32 = hull.probes.iter().map(|p| p.1).sum();
             assert!(sum_x.abs() < 1e-4, "{name}: athwart probes don't cancel");
