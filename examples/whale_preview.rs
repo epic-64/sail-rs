@@ -30,10 +30,11 @@ async fn main() {
         clear_background(Color::new(0.86, 0.79, 0.64, 1.0));
         let ink = Color::new(0.23, 0.17, 0.11, 1.0);
         let (w, h) = (screen_width(), screen_height());
-        map_whale::draw_whale(w * 0.46, h * 0.42, 230.0, 5.8, ink);
+        map_whale::draw_whale(w * 0.24, h * 0.35, 130.0, 3.3, ink);
+        map_kraken::draw_kraken(w * 0.68, h * 0.42, 220.0, 5.6, ink);
         // Small, at roughly in-game map scale.
-        map_whale::draw_whale(w * 0.75, h * 0.85, 36.0, 1.0, ink);
-        map_kraken::draw_kraken(w * 0.90, h * 0.80, 60.0, 1.6, ink);
+        map_whale::draw_whale(w * 0.15, h * 0.85, 36.0, 1.0, ink);
+        map_kraken::draw_kraken(w * 0.32, h * 0.82, 46.0, 1.0, ink);
         frames += 1;
         if frames >= 4 {
             get_screen_data().export_png(&out);
