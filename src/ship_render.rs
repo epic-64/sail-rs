@@ -97,12 +97,15 @@ const SHATTER_SPIN: f32 = 3.0;
 /// Fraction of the refit one debris piece spends in flight: each piece sets
 /// off (or arrives) inside its own hashed slice of the rebuild, so the ship
 /// swaps piece by piece in quick succession instead of bursting whole.
-const SHATTER_PIECE_FRAC: f32 = 0.2;
-/// Latest (fraction of the refit) a dying piece may set off; with the flight
-/// above, the old hull is gone with time to spare before the rebuild ends.
-/// Arrivals mirror it, so the first new pieces land while old ones still fly
-/// and the deck never sits empty.
-const SHATTER_LAST_OFF: f32 = 0.53;
+const SHATTER_PIECE_FRAC: f32 = 0.16;
+/// Fraction of the refit a replacement piece lags the dying piece it stands
+/// in for. The two share their hashed slice (see `shatter_pts`), so every
+/// spot of the ship is bare only for this beat, not for whole phases: the
+/// swap reads as parts being exchanged one by one, never as a hull of holes.
+const SHATTER_LAG: f32 = 0.07;
+/// Latest (fraction of the refit) a dying piece may set off, derived so the
+/// last replacement lands exactly as the rebuild ends.
+const SHATTER_LAST_OFF: f32 = 1.0 - SHATTER_PIECE_FRAC - SHATTER_LAG;
 
 /// A refit under way (see [`ShipRenderer::refit_to`]): the rebuild's clock,
 /// the tiers being rebuilt from and toward, and the hash seed the debris
@@ -117,14 +120,18 @@ struct Refit {
 
 /// The shatter the refit applies to everything the ship draws: the rebuild's
 /// clock (0..1 over the whole refit), whether this pass assembles (`flip`)
-/// rather than scatters, the debris pattern's seed, the debris cell edge and
-/// full-scatter flight (px), and the burst's screen origin. Lives in
-/// [`SHATTER`] only while a mid-refit `render` runs.
+/// rather than scatters, the seeds, the debris cell edge and full-scatter
+/// flight (px), and the burst's screen origin. `seed` (salted per hull tier)
+/// drives each piece's spin and flight, so the two hulls fly as their own
+/// debris; `tseed` (unsalted, shared by both passes) drives each piece's
+/// timing slice, so a replacement lands right where and when its dying twin
+/// set off. Lives in [`SHATTER`] only while a mid-refit `render` runs.
 #[derive(Clone, Copy)]
 struct Shatter {
     clock: f32,
     flip: bool,
     seed: u32,
+    tseed: u32,
     cell: f32,
     fly: f32,
     origin: Vec2,
@@ -143,27 +150,26 @@ std::thread_local! {
 /// land one after another rather than all at once, and neighbouring
 /// primitives fly together as one clump), a hashed spin, and a flight
 /// outward from the burst origin. Through its slice the piece shrinks toward
-/// the cell's centre, gone entirely at the end (an assembling pass, `flip`,
-/// runs the same slice backward). Returns the piece's shrink factor, for
-/// scaling thicknesses and type along, or `None` either when the piece is
-/// gone (the caller skips the draw) or when no shatter is live (the caller
-/// draws untouched). Whole primitives move rigidly: no vertex is ever shared
-/// across pieces, so nothing smears between two chunks flying apart.
+/// the cell's centre, gone entirely at the end; an assembling pass (`flip`)
+/// runs the same slice backward, lagged by [`SHATTER_LAG`] behind the dying
+/// piece it replaces (both passes hash the slice from the shared `tseed`),
+/// so each spot of the ship is bare only for that beat. Returns the piece's
+/// shrink factor, for scaling thicknesses and type along, or `None` either
+/// when the piece is gone (the caller skips the draw) or when no shatter is
+/// live (the caller draws untouched). Whole primitives move rigidly: no
+/// vertex is ever shared across pieces, so nothing smears between two chunks
+/// flying apart.
 fn shatter_pts(pts: &mut [Vec2]) -> Option<f32> {
     let s = SHATTER.with(|c| c.get())?;
     let n = pts.len().max(1) as f32;
     let cen = pts.iter().fold(vec2(0.0, 0.0), |a, p| a + *p) / n;
     let (ci, cj) = ((cen.x / s.cell).floor() as i32, (cen.y / s.cell).floor() as i32);
-    let key = (ci as u32).wrapping_mul(73_856_093) ^ (cj as u32).wrapping_mul(19_349_663) ^ s.seed;
-    let r = |m: u32| slot_rand(key.wrapping_add(m));
-    // The piece's slice of the rebuild. An assembling piece's window mirrors
-    // a dying one's exactly (flip both the window and the progress), which is
-    // what lets an interrupted rebuild reverse seamlessly (see `refit_to`).
-    let start = if s.flip {
-        (1.0 - SHATTER_PIECE_FRAC) - r(5) * SHATTER_LAST_OFF
-    } else {
-        r(5) * SHATTER_LAST_OFF
-    };
+    let cell_key = (ci as u32).wrapping_mul(73_856_093) ^ (cj as u32).wrapping_mul(19_349_663);
+    let r = |m: u32| slot_rand((cell_key ^ s.seed).wrapping_add(m));
+    // The piece's slice of the rebuild: shared timing for the dying piece
+    // and its replacement, the replacement one beat behind.
+    let start = slot_rand(cell_key ^ s.tseed) * SHATTER_LAST_OFF
+        + if s.flip { SHATTER_LAG } else { 0.0 };
     let p = ((s.clock - start) / SHATTER_PIECE_FRAC).clamp(0.0, 1.0);
     let p = p * p * (3.0 - 2.0 * p);
     let amt = if s.flip { 1.0 - p } else { p };
@@ -914,6 +920,9 @@ pub struct ShipRenderer {
     level: i32,
     /// The rebuild animation under way, if any (see `refit_to`).
     refit: Option<Refit>,
+    /// A tier change asked for while `refit` ran: its rebuild sets off when
+    /// the running one lands (repeated changes keep only the latest).
+    refit_next: Option<i32>,
     /// `refit`'s clock (0..1 over the rebuild) and debris seed for this
     /// frame (refreshed by `step_refit`); `render` arms [`SHATTER`] from it.
     scatter: Option<(f32, u32)>,
@@ -976,6 +985,7 @@ impl ShipRenderer {
             hull: &hull_shape::BRIG,
             level: i32::MIN,
             refit: None,
+            refit_next: None,
             scatter: None,
             refits: 0,
             wheel_angle: 0.0,
@@ -997,6 +1007,7 @@ impl ShipRenderer {
     pub fn set_hull_level(&mut self, hull_level: i32) {
         self.level = hull_level;
         self.refit = None;
+        self.refit_next = None;
         self.scatter = None;
         let hull = hull_shape::for_level(hull_level);
         if !std::ptr::eq(hull, self.hull) {
@@ -1006,51 +1017,48 @@ impl ShipRenderer {
         }
     }
 
-    /// Refit toward the given shipyard tier with the rebuild animation: the
-    /// hull she sails flies apart into debris over the first half of
-    /// [`REFIT_SECS`], and the new tier's hull flies together out of its own
-    /// over the second (the warp itself lives in [`scatter_point`]). The
-    /// first call ever snaps silently instead (a spawn or a restored save is
-    /// not a rebuild), as does a call naming the tier already sailed or
-    /// already being built toward, so calling this every frame is free.
-    /// Returns true when this call set a rebuild in motion, so the caller
-    /// may cue a sound.
+    /// Refit toward the given shipyard tier with the rebuild animation: over
+    /// [`REFIT_SECS`] the hull she sails sheds its pieces one after another
+    /// while the new tier's land in their place (the shatter itself lives in
+    /// [`shatter_pts`]). The first call ever snaps silently instead (a spawn
+    /// or a restored save is not a rebuild), as does a call naming the tier
+    /// already sailed or already headed for, so calling this every frame is
+    /// free. A change asked for while a rebuild runs is queued behind it
+    /// (each piece's timing is laced with its replacement's, so a running
+    /// swap cannot be redirected without pieces popping). Returns true when
+    /// this call set a rebuild in motion, so the caller may cue a sound.
     pub fn refit_to(&mut self, hull_level: i32) -> bool {
         if self.level == i32::MIN {
             self.set_hull_level(hull_level);
             return false;
         }
-        let target = self.refit.as_ref().map_or(self.level, |r| r.to);
-        if hull_level == target {
-            return false;
-        }
-        match &mut self.refit {
-            // Early in the rebuild: simply retarget which hull assembles.
-            Some(r) if r.t < REFIT_SECS * 0.5 => {
-                r.to = hull_level;
-                false
-            }
-            // Mid-assembly: reverse course. Every piece's assembly window is
-            // the exact mirror of its fly-off window (see `shatter_pts`), so
-            // re-entering at the mirrored clock keeps each piece continuous:
-            // the half-built ship sheds again from exactly where it hangs.
+        match &self.refit {
             Some(r) => {
-                r.from = r.to;
-                r.to = hull_level;
-                r.t = REFIT_SECS - r.t;
+                if hull_level != self.refit_next.unwrap_or(r.to) {
+                    // Queue it; asking for the running rebuild's own target
+                    // simply cancels whatever was queued.
+                    self.refit_next = (hull_level != r.to).then_some(hull_level);
+                }
                 false
             }
+            None if hull_level == self.level => false,
             None => {
-                self.refits = self.refits.wrapping_add(1);
-                self.refit = Some(Refit {
-                    t: 0.0,
-                    from: self.level,
-                    to: hull_level,
-                    seed: self.refits.wrapping_mul(0x9E37_79B9) ^ ((hull_level as u32) << 8),
-                });
+                self.begin_refit(hull_level);
                 true
             }
         }
+    }
+
+    /// Set a rebuild toward `to` in motion (the caller has ruled out a
+    /// no-op), with a fresh debris seed so no two rebuilds shatter alike.
+    fn begin_refit(&mut self, to: i32) {
+        self.refits = self.refits.wrapping_add(1);
+        self.refit = Some(Refit {
+            t: 0.0,
+            from: self.level,
+            to,
+            seed: self.refits.wrapping_mul(0x9E37_79B9) ^ ((to as u32) << 8),
+        });
     }
 
     /// Advance a refit under way and refresh the rebuild clock the frame's
@@ -1058,30 +1066,41 @@ impl ShipRenderer {
     /// helm eye, `self.hull`) swaps at the midpoint, deep in the piece-by-
     /// piece swap where both hulls are half-built debris anyway.
     fn step_refit(&mut self, dt: f32) {
+        let mut landed = false;
         if let Some(r) = &mut self.refit {
             r.t += dt;
-            if r.t >= REFIT_SECS {
-                self.refit = None;
-            } else if r.t >= REFIT_SECS * 0.5 && self.level != r.to {
+            if r.t >= REFIT_SECS * 0.5 && self.level != r.to {
                 self.level = r.to;
                 self.hull = hull_shape::for_level(r.to);
                 // Re-stow the deck for the new waist.
                 self.crates.clear();
                 self.stowed = -1;
             }
+            landed = r.t >= REFIT_SECS;
+        }
+        if landed {
+            // A change queued while the rebuild ran sets off at once.
+            self.refit = None;
+            if let Some(next) = self.refit_next.take() {
+                if next != self.level {
+                    self.begin_refit(next);
+                }
+            }
         }
         self.scatter = self.refit.as_ref().map(|r| (r.t / REFIT_SECS, r.seed));
     }
 
     /// Arm [`SHATTER`] for one draw pass of the rebuild: the pass's hull tier
-    /// salts the seed, so each hull flies as its own debris pattern whichever
-    /// way the rebuild runs.
+    /// salts the motion seed, so each hull flies as its own debris pattern,
+    /// while the timing seed stays shared so replacements land on their dying
+    /// twins' beat.
     fn arm_shatter(clock: f32, seed: u32, level: i32, flip: bool, w: f32, h: f32) {
         SHATTER.with(|c| {
             c.set(Some(Shatter {
                 clock,
                 flip,
                 seed: seed ^ (level as u32).wrapping_mul(0x9E37_79B9),
+                tseed: seed,
                 cell: (w.min(h) * SHATTER_CELL_FRAC).max(24.0),
                 fly: w.max(h) * SHATTER_FLY_FRAC,
                 origin: vec2(w * 0.5, h * 0.8),
@@ -3550,26 +3569,30 @@ mod tests {
         assert!(!r.refit_to(3), "the tier she already sails is no rebuild");
     }
 
-    /// A rebuild interrupted mid-assembly reverses course seamlessly: the
-    /// clock re-enters at its mirror (every piece's assembly window is the
-    /// mirror of its fly-off window, so each piece sheds again from exactly
-    /// where it hangs), and the half-assembled hull becomes the dying one.
+    /// A tier change asked for mid-rebuild queues behind the running one
+    /// (a running swap cannot be redirected without pieces popping) and sets
+    /// off the moment it lands; asking for the running rebuild's own target
+    /// just cancels the queue.
     #[test]
-    fn interrupted_rebuild_reverses_smoothly() {
+    fn interrupted_rebuild_queues_the_next() {
         let mut r = ShipRenderer::new();
         r.refit_to(0);
         r.refit_to(1);
         r.step_refit(REFIT_SECS * 0.75); // mid-assembly of the new hull
-        let (before, _) = r.scatter.unwrap();
-        r.refit_to(2); // interrupted: fly apart again, toward another tier
-        r.step_refit(0.0);
-        let (after, _) = r.scatter.unwrap();
-        assert!(
-            (after - (1.0 - before)).abs() < 1e-4,
-            "clock did not mirror: {before} -> {after}"
-        );
+        r.refit_to(2);
         let refit = r.refit.as_ref().unwrap();
-        assert_eq!((refit.from, refit.to), (1, 2));
+        assert_eq!((refit.from, refit.to), (0, 1), "the running rebuild was redirected");
+        assert_eq!(r.refit_next, Some(2));
+        r.refit_to(1); // changed his mind: back to the running target
+        assert_eq!(r.refit_next, None);
+        r.refit_to(3);
+        r.step_refit(REFIT_SECS * 0.3); // past the landing: the queued rebuild begins
+        let refit = r.refit.as_ref().unwrap();
+        assert_eq!((refit.from, refit.to), (1, 3));
+        assert!(refit.t < 1e-6, "the queued rebuild must start from rest");
+        r.step_refit(REFIT_SECS * 1.01);
+        assert!(r.refit.is_none() && r.scatter.is_none());
+        assert!(std::ptr::eq(r.hull, crate::hull_shape::for_level(3)));
     }
 
     /// The shatter never smears a primitive: every point of one piece takes
@@ -3588,6 +3611,7 @@ mod tests {
                     clock,
                     flip: false,
                     seed: 3,
+                    tseed: 11,
                     cell: 48.0,
                     fly: 800.0,
                     origin: vec2(640.0, 576.0),
@@ -3619,6 +3643,43 @@ mod tests {
             "the piece must pass through built, flying and gone \
              (built {seen_built}, flying {seen_flying}, gone {seen_gone})"
         );
+        SHATTER.with(|c| c.set(None));
+    }
+
+    /// The replacement piece is laced to its dying twin: both hash their
+    /// timing slice from the shared `tseed`, the replacement one lag behind,
+    /// and the lag is shorter than a piece's flight, so the replacement is
+    /// already landing before the twin has fully gone. No spot of the ship
+    /// is ever bare, at any point of the rebuild.
+    #[test]
+    fn replacement_lands_on_its_twins_beat() {
+        let tri = [vec2(100.0, 100.0), vec2(130.0, 100.0), vec2(100.0, 130.0)];
+        for step in 0..=200 {
+            let clock = step as f32 / 200.0;
+            // The two passes of one rebuild: same timing seed, each hull's
+            // own motion salt.
+            let keep_of = |flip: bool, salt: u32| {
+                SHATTER.with(|c| {
+                    c.set(Some(Shatter {
+                        clock,
+                        flip,
+                        seed: 7 ^ salt,
+                        tseed: 7,
+                        cell: 48.0,
+                        fly: 800.0,
+                        origin: vec2(640.0, 576.0),
+                    }))
+                });
+                let mut thrown = tri;
+                shatter_pts(&mut thrown)
+            };
+            let dying = keep_of(false, 0xA);
+            let arriving = keep_of(true, 0xB);
+            assert!(
+                dying.is_some() || arriving.is_some(),
+                "the spot sat bare at clock {clock}"
+            );
+        }
         SHATTER.with(|c| c.set(None));
     }
 
