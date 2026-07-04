@@ -12,6 +12,13 @@ macroquad = { version = "0.4.15", features = ["audio"] }
 # PCM at load; see `sound.rs`. Only the MP3 codec/demuxer is pulled in.
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 
+# Gamepad support, native only. gilrs' wasm backend pulls in wasm-bindgen/web-sys,
+# which macroquad's own JS glue (no wasm-bindgen) can't satisfy, so it's gated off the
+# web build; `pad.rs` compiles to a no-op stub there and the web keeps its touch HUD.
+# The default `wgi` feature is the Windows.Gaming.Input backend (Windows 10+).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gilrs = "0.10"
+
 # MP3 decoding is far too slow unoptimized — a debug build would stall for several
 # seconds decoding the clips at startup. Optimize just the decoder crates so the
 # dev `cargo run` starts promptly; the game's own crate stays debug for fast

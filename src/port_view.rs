@@ -27,6 +27,7 @@ use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
 use crate::mission;
 use crate::race;
+use crate::pad::Pad;
 use crate::sailing::{Kinematics, Wind};
 use crate::sound::SoundBank;
 use crate::tavern;
@@ -672,6 +673,7 @@ impl PortScreen {
         market: &Market,
         sounds: &SoundBank,
         touch: &TouchState,
+        pad: &Pad,
     ) -> bool {
         // The board always has a focused, actionable cell (a tab to drill into, or a
         // row to trade / commit), so the ✓ stands.
@@ -680,26 +682,36 @@ impl PortScreen {
         // Back out: Esc, or the cluster's ✕. With the cursor down in a tab's rows
         // it first lifts back up to the tab bar; pressed again on the bar it casts
         // off and closes the board.
-        if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
+        if is_key_pressed(KeyCode::Escape) || pad.back() || touch.tapped_in(n.back) {
             if self.focus == Focus::TabBar {
                 return true;
             }
             self.focus = Focus::TabBar;
             return false;
         }
-        // Tab cycles the board (keyboard only — touch taps the tab labels direct).
+        // Tab cycles the board: keyboard Tab, or the pad's bumpers (touch taps the tab
+        // labels direct).
         if is_key_pressed(KeyCode::Tab) {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             self.cycle_tab(world, if back { -1 } else { 1 });
         }
+        if pad.tab_next() {
+            self.cycle_tab(world, 1);
+        }
+        if pad.tab_prev() {
+            self.cycle_tab(world, -1);
+        }
 
-        // Directional verbs: keyboard arrows or the nav cluster's d-pad / ✓.
-        let up = is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up);
-        let down = is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down);
-        let left = is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left);
-        let right = is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right);
-        let confirm =
-            is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || touch.tapped_in(n.confirm);
+        // Directional verbs: keyboard arrows, the pad's d-pad / stick, or the nav
+        // cluster's d-pad / ✓.
+        let up = is_key_pressed(KeyCode::Up) || pad.up() || touch.tapped_in(n.up);
+        let down = is_key_pressed(KeyCode::Down) || pad.down() || touch.tapped_in(n.down);
+        let left = is_key_pressed(KeyCode::Left) || pad.left() || touch.tapped_in(n.left);
+        let right = is_key_pressed(KeyCode::Right) || pad.right() || touch.tapped_in(n.right);
+        let confirm = is_key_pressed(KeyCode::Enter)
+            || is_key_pressed(KeyCode::Space)
+            || pad.confirm()
+            || touch.tapped_in(n.confirm);
 
         if up {
             self.move_cursor(gs, world, -1);

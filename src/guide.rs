@@ -55,6 +55,9 @@ const PAGES: &[GuidePage] = &[
             "\u{2022} Wares: 1 / 2 / 3 call on your active tavern wares, once a day each.",
             "\u{2022} Hide HUD: H tucks it away; press again to bring it back.",
             "\u{2022} Guide: G opens this guide. Pause: Escape.",
+            "A gamepad works too: the left stick steers, A and B deploy and furl sail, \
+             X enters port, Y opens the log, the right stick clicks to look astern, and \
+             Start pauses.",
         ],
     },
     GuidePage {

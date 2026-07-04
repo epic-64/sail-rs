@@ -16,6 +16,7 @@ use crate::font;
 use crate::game_state::GameState;
 use crate::geometry::{wrap_angle, Vec2};
 use crate::sailing::Kinematics;
+use crate::pad::Pad;
 use crate::sound::SoundBank;
 use crate::touch::TouchState;
 use crate::ui::{dim_ink, fs_body, fs_heading, fs_small, fs_title, ink, line_h, parchment, parchment_edge, px};
@@ -138,32 +139,32 @@ impl DigScreen {
     }
 
     /// Read input and drive the board. Returns true when the captain puts to sea.
-    pub fn handle_input(&mut self, gs: &mut GameState, sounds: &SoundBank, touch: &TouchState) -> bool {
+    pub fn handle_input(&mut self, gs: &mut GameState, sounds: &SoundBank, touch: &TouchState, pad: &Pad) -> bool {
         let n = crate::touch_ui::nav_cluster(screen_width(), screen_height(), true);
 
-        if is_key_pressed(KeyCode::Escape) || touch.tapped_in(n.back) {
+        if is_key_pressed(KeyCode::Escape) || pad.back() || touch.tapped_in(n.back) {
             return true;
         }
 
         // Move the cursor over the grid: up/down a row, left/right a column,
         // each clamped to the field edges.
         let (mut row, mut col) = (self.cursor / GRID, self.cursor % GRID);
-        if is_key_pressed(KeyCode::Up) || touch.tapped_in(n.up) {
+        if is_key_pressed(KeyCode::Up) || pad.up() || touch.tapped_in(n.up) {
             row = row.saturating_sub(1);
         }
-        if is_key_pressed(KeyCode::Down) || touch.tapped_in(n.down) {
+        if is_key_pressed(KeyCode::Down) || pad.down() || touch.tapped_in(n.down) {
             row = (row + 1).min(GRID - 1);
         }
-        if is_key_pressed(KeyCode::Left) || touch.tapped_in(n.left) {
+        if is_key_pressed(KeyCode::Left) || pad.left() || touch.tapped_in(n.left) {
             col = col.saturating_sub(1);
         }
-        if is_key_pressed(KeyCode::Right) || touch.tapped_in(n.right) {
+        if is_key_pressed(KeyCode::Right) || pad.right() || touch.tapped_in(n.right) {
             col = (col + 1).min(GRID - 1);
         }
         self.cursor = row * GRID + col;
 
         // Dig the cursor tile: Enter/Space or the cluster's ✓.
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || touch.tapped_in(n.confirm) {
+        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || pad.confirm() || touch.tapped_in(n.confirm) {
             self.dig(self.cursor, gs, sounds);
         }
 
