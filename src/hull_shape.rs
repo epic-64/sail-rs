@@ -10,9 +10,10 @@
 //! the probed waterline averages out (a big ship shrugs off chop) while the
 //! same chop pitches and rolls a short hull it spans coherently.
 //!
-//! Tier 0 sails the [`SLOOP`] (a short single-decker); every higher tier sails
-//! the [`BRIG`] (the quarterdecked hull, formerly the only shape) until it gets
-//! a model of its own. Pick by tier with [`for_level`].
+//! Tier 0 sails the [`SLOOP`] (a short single-decker), tier 1 the [`BRIG`]
+//! (the quarterdecked hull, formerly the only shape), and every higher tier
+//! the [`GALLEON`] (the high-charged flagship). Pick by tier with
+//! [`for_level`].
 
 /// One hull's geometry, shared by the renderers and the buoyancy sampling.
 /// All lengths are metres in the loft frame: +x starboard, +y up from the
@@ -225,14 +226,85 @@ pub static BRIG: HullShape = HullShape {
     ],
 };
 
+/// Tiers 2 and up: the galleon, the yard's flagship. A third again the brig's
+/// length with a beam to match, the deepest freeboard afloat, and a taller
+/// quarterdeck set further aft (the classic high stern, with the counter
+/// carried out over the transom): from her wheel you look down into a long
+/// waist that stows a fifth cargo column. The longest probed waterline in the
+/// yard plus the slowest sway response make her ride the same seas the other
+/// hulls answer: stately, leaning into the swell rather than snapping to it.
+pub static GALLEON: HullShape = HullShape {
+    stations: &[
+        (-20.0, 0.05, 2.00, 0.55), // stem tip
+        (-18.0, 1.15, 1.58, 0.80),
+        (-15.5, 2.40, 1.14, 0.78),
+        (-12.5, 3.30, 0.72, 0.75),
+        (-8.5, 3.95, 0.34, 0.72),
+        (-4.0, 4.30, 0.12, 0.70),
+        (0.0, 4.40, 0.02, 0.70), // the mast station: full beam
+        (3.5, 4.36, 0.00, 0.71),
+        (5.5, 4.30, 0.005, 0.73), // the sheer starts its climb to the quarterdeck...
+        (7.0, 4.24, 0.01, 2.07),  // ...topping out level with the platform's wall
+        (7.0, 4.24, 1.35, 0.73),  // quarterdeck side of the break (the riser)
+        (11.0, 3.85, 1.42, 0.80),
+        (13.5, 3.45, 1.47, 0.88),
+        (15.0, 3.10, 1.50, 0.95), // transom, behind the eye
+    ],
+    qdeck_break: Some(7.0),
+    cam_aft: 12.5,
+    cam_up: 3.2, // a helmsman's eye line, stood on the taller quarterdeck
+    wheel_z: 8.8,
+    hub_above_deck: 0.41,
+    cargo_z_min: -8.0,
+    cargo_z_max: 7.0, // the quarterdeck riser
+    cargo_cols: &[-3.2, -2.0, -0.8, 0.4, 1.6], // the wider beam buys a fifth column
+    sheet_foot_z: 4.5,
+    brace_foot_z: 9.0,
+    sprit_base: (1.95, -19.4),
+    sprit_tip: (3.5, -24.0),
+    freeboard: 1.75,
+    sway_response: 0.75,
+    // Same row spacing rule as the smaller hulls; the yard's longest probed
+    // waterline filters swell that still works the brig.
+    probes: &[
+        (17.5, 0.0),
+        (14.6, -1.55),
+        (14.6, 1.55),
+        (11.7, -2.7),
+        (11.7, 2.7),
+        (8.75, -3.4),
+        (8.75, 3.4),
+        (5.8, -3.85),
+        (5.8, 3.85),
+        (2.9, -4.05),
+        (2.9, 4.05),
+        (0.0, -4.2),
+        (0.0, 4.2),
+        (-2.9, -4.25),
+        (-2.9, 4.25),
+        (-5.8, -4.2),
+        (-5.8, 4.2),
+        (-8.75, -4.1),
+        (-8.75, 4.1),
+        (-11.7, -3.9),
+        (-11.7, 3.9),
+        (-14.6, -3.5),
+        (-14.6, 3.5),
+        (-17.5, -2.95),
+        (-17.5, 2.95),
+    ],
+};
+
 /// The hull a given shipyard tier sails (see `game_state::upgrades`): tier 0
-/// is the sloop; every higher tier keeps the brig until it grows a shape of
-/// its own.
+/// is the sloop, tier 1 the brig, and every higher tier the galleon until it
+/// grows a shape of its own.
 pub fn for_level(hull_level: i32) -> &'static HullShape {
     if hull_level <= 0 {
         &SLOOP
-    } else {
+    } else if hull_level == 1 {
         &BRIG
+    } else {
+        &GALLEON
     }
 }
 
@@ -255,7 +327,7 @@ mod tests {
     /// break must be a real doubled station.
     #[test]
     fn shapes_are_self_consistent() {
-        for (name, hull) in [("sloop", &SLOOP), ("brig", &BRIG)] {
+        for (name, hull) in [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON)] {
             let hl = hull.half_length();
             let sum_x: f32 = hull.probes.iter().map(|p| p.1).sum();
             assert!(sum_x.abs() < 1e-4, "{name}: athwart probes don't cancel");
