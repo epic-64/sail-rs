@@ -671,54 +671,66 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
     }
 
     // Sea-monsters to fill the open water, the way old charts crammed a kraken or a
-    // whale into their empty quarters. `find` returns the roomiest spot (farthest from
-    // every port, the compass hub, the frame, and any beast already placed) by sampling
-    // a grid; we put the kraken in the best gap, then the whale in the next.
+    // whale into their empty quarters. Each is inked in the roomiest empty pocket of
+    // sea: the point farthest from every charted port, the compass hub, an archipelago
+    // name, the sheet border, and the beasts already placed (see [`ornament_slots`]), so
+    // the beasts settle into the widest gaps of open water instead of crowding the isles.
     {
-        let m = pad + 8.0 * s;
-        let (ix, iy) = (rect.x + m, rect.y + m);
-        let (iw, ih) = ((rect.w - 2.0 * m).max(1.0), (rect.h - 2.0 * m).max(1.0));
-        // `extra` holds (centre, radius) of beasts already drawn, so the clearance keeps
-        // its distance from their whole footprint, not just their centre point.
-        let find = |extra: &[((f32, f32), f32)]| -> ((f32, f32), f32) {
-            let mut best = (ix + iw / 2.0, iy + ih / 2.0);
-            let mut best_clear = -1.0f32;
-            const G: i32 = 12;
-            for gy in 0..=G {
-                for gx in 0..=G {
-                    let px = ix + iw * gx as f32 / G as f32;
-                    let py = iy + ih * gy as f32 / G as f32;
-                    let mut clear = (px - ix).min(ix + iw - px).min(py - iy).min(iy + ih - py);
-                    for &(ox, oy) in &ports_xy {
-                        clear = clear.min((px - ox).hypot(py - oy));
-                    }
-                    for &((ox, oy), rad) in extra {
-                        clear = clear.min((px - ox).hypot(py - oy) - rad);
-                    }
-                    if clear > best_clear {
-                        best_clear = clear;
-                        best = (px, py);
-                    }
-                }
+        // The drawable sea, inset a little off the double frame line. Kept generous (only
+        // `pad`, not a wider berth) so a broad empty margin still earns an ornament rather
+        // than being left blank.
+        let sea = Rect::new(
+            rect.x + pad,
+            rect.y + pad,
+            (rect.w - 2.0 * pad).max(1.0),
+            (rect.h - 2.0 * pad).max(1.0),
+        );
+
+        // What the beasts must stand clear of, each a centre + keep-out radius: every
+        // charted port (a touch past its blob so a harbour is never crowded), the compass
+        // rose at the hub, and the name inked beneath each archipelago, so no ornament is
+        // drawn across a label. The name geometry mirrors the label pass further below.
+        let mut blocked: Vec<((f32, f32), f32)> = ports_xy.iter().map(|&p| (p, 3.6 * s)).collect();
+        blocked.push((hub, 15.0 * s));
+        let name_fs = ((11.0 * s) as u16).max(10);
+        for c in &world.clusters {
+            let isles = world.cluster_islands(c);
+            if isles.is_empty() {
+                continue;
             }
-            (best, best_clear)
-        };
-        // The kraken, in the roomiest quarter (the compass hub is treated as occupied too).
-        let (kspot, kclear) = find(&[(hub, 16.0 * s)]);
-        let ksize = (kclear * 0.78).min(46.0 * s);
-        if kclear > 22.0 * s {
-            crate::map_kraken::draw_kraken(kspot.0, kspot.1, ksize, s, pal.ship);
+            let mut cminx = f32::MAX;
+            let mut cmaxx = f32::MIN;
+            let mut cmaxy = f32::MIN;
+            for i in &isles {
+                let p = disp_pos[i.id as usize];
+                cminx = cminx.min(sx(p));
+                cmaxx = cmaxx.max(sx(p));
+                cmaxy = cmaxy.max(sy(p));
+            }
+            let mid = (cminx + cmaxx) / 2.0;
+            let ty = (cmaxy + name_fs as f32 + 3.0 * s).min(rect.y + rect.h - 4.0 * s);
+            let half_w = crate::font::heading(|| measure_text(&c.name, None, name_fs, 1.0).width) * 0.5;
+            blocked.push(((mid, ty - name_fs as f32 * 0.35), half_w + 2.0 * s));
         }
-        // The whale, in the next roomiest, kept clear of the kraken's footprint.
-        let (wspot, wclear) = find(&[(hub, 16.0 * s), (kspot, ksize)]);
-        let wsize = (wclear * 0.8).min(40.0 * s);
-        if wclear > 20.0 * s {
-            crate::map_whale::draw_whale(wspot.0, wspot.1, wsize, s, pal.ship);
-        }
-        // A breaking wave, in the third roomiest gap, clear of both beasts.
-        let (vspot, vclear) = find(&[(hub, 16.0 * s), (kspot, ksize), (wspot, wsize)]);
-        if vclear > 18.0 * s {
-            crate::map_wave::draw_wave(vspot.0, vspot.1, (vclear * 0.8).min(34.0 * s), s, pal.ship);
+
+        // One pocket per beast, roomiest first. A beast's bulk spans about `FILL_REACH`
+        // times its `size`, so a pocket of radius `clear` draws one of `clear /
+        // FILL_REACH` to fill it (its thinnest fluke/arm tips may reach a touch further,
+        // into the berth already baked into each blocked radius), capped so a vast empty
+        // sheet doesn't blow one monster out of all proportion, and skipped when a gap is
+        // too cramped to read the flourish. The beasts share a signature (`cx, cy, size,
+        // s, col`), so one loop inks them all.
+        const FILL_REACH: f32 = 1.25;
+        let draw: [(fn(f32, f32, f32, f32, Color), f32, f32); 3] = [
+            (crate::map_kraken::draw_kraken, 52.0, 22.0),
+            (crate::map_whale::draw_whale, 46.0, 20.0),
+            (crate::map_wave::draw_wave, 40.0, 18.0),
+        ];
+        let slots = ornament_slots(sea, &blocked, draw.len());
+        for (&((cx, cy), clear), &(ink, cap, floor)) in slots.iter().zip(&draw) {
+            if clear > floor * s {
+                ink(cx, cy, (clear / FILL_REACH).min(cap * s), s, pal.ship);
+            }
         }
     }
 
@@ -773,4 +785,151 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
     let nfs = ((10.0 * s) as u16).max(9);
     let nd = measure_text("N", None, nfs, 1.0);
     draw_text("N", ox - nd.width / 2.0, oy - rr - 2.0 * s, nfs as f32, pal.ship);
+}
+
+/// Find the large empty areas of the chart to drop the map's ornaments (kraken, whale,
+/// wave) into, so they fill open water instead of crowding the isles, and return `n`
+/// slots as (centre, radius). For each ornament the method is the plain one:
+///
+///   1. **Identify a large empty area.** Rasterise the drawable `sea` into a grid and
+///      score every cell by how open it is (its distance to the nearest island, the
+///      compass hub, a name in `blocked`, or the sea border). The open water is the
+///      positive-scoring cells; the emptiest area is the connected patch of them around
+///      the single widest cell (cells nearly as open as that peak).
+///   2. **Determine the centre of that area.** Take the patch's centroid, so a broad or
+///      long pocket is centred in its middle rather than pinned to one end.
+///   3. **Place the artwork there.** The slot's `radius` is the openness at that centre
+///      (how big an ornament fits); the caller sizes and skips off it.
+///
+/// The chosen area is then struck off so the next ornament lands in a different pocket.
+/// `radius` can come back small (a tight chart) or `0` (no room); the caller decides
+/// what is roomy enough to draw. Deterministic (a fixed grid, no RNG), so the chart
+/// looks the same every time the captain opens the log.
+pub(crate) fn ornament_slots(
+    sea: Rect,
+    blocked: &[((f32, f32), f32)],
+    n: usize,
+) -> Vec<((f32, f32), f32)> {
+    // Rasterise the sea. `cols` sets the resolution across the wider run of the sheet;
+    // the cell is square, so the row count follows from the sheet's height.
+    let cols = 64usize;
+    let cell = (sea.w / cols as f32).max(1.0);
+    let rows = ((sea.h / cell).round() as usize).max(1);
+    let ccx = |c: usize| sea.x + (c as f32 + 0.5) * cell;
+    let ccy = |r: usize| sea.y + (r as f32 + 0.5) * cell;
+
+    // How open a point is: its distance to the nearest island/hub/name rim or the sea
+    // border. Positive is open water; negative is inside something an ornament must miss.
+    let openness = |px: f32, py: f32| -> f32 {
+        let mut c = (px - sea.x).min(sea.x + sea.w - px).min(py - sea.y).min(sea.y + sea.h - py);
+        for &((ox, oy), rad) in blocked {
+            c = c.min((px - ox).hypot(py - oy) - rad);
+        }
+        c
+    };
+    let score: Vec<f32> = (0..rows * cols).map(|k| openness(ccx(k % cols), ccy(k / cols))).collect();
+    // Which cells are still free to take an ornament (open water, not yet struck off).
+    let mut free: Vec<bool> = score.iter().map(|&s| s > 0.0).collect();
+
+    let neighbours = |k: usize| {
+        let (r, c) = (k / cols, k % cols);
+        let mut v = [usize::MAX; 4];
+        let mut i = 0;
+        for (ok, nb) in [(r > 0, k.wrapping_sub(cols)), (r + 1 < rows, k + cols), (c > 0, k.wrapping_sub(1)), (c + 1 < cols, k + 1)] {
+            if ok {
+                v[i] = nb;
+                i += 1;
+            }
+        }
+        (v, i)
+    };
+
+    let mut slots = Vec::with_capacity(n);
+    for _ in 0..n {
+        // (1) The widest point of the open water still free.
+        let peak = (0..rows * cols).filter(|&k| free[k]).max_by(|&a, &b| score[a].total_cmp(&score[b]));
+        let Some(peak) = peak else {
+            slots.push(((sea.x + sea.w / 2.0, sea.y + sea.h / 2.0), 0.0));
+            continue;
+        };
+        // The large empty area around it: the connected patch of free cells nearly as
+        // open as the peak (a broad pocket, not just that one cell).
+        let thresh = score[peak] * 0.85;
+        let mut area = Vec::new();
+        let mut seen = vec![false; rows * cols];
+        let mut stack = vec![peak];
+        seen[peak] = true;
+        while let Some(k) = stack.pop() {
+            area.push(k);
+            let (nb, cnt) = neighbours(k);
+            for &m in &nb[..cnt] {
+                if free[m] && !seen[m] && score[m] >= thresh {
+                    seen[m] = true;
+                    stack.push(m);
+                }
+            }
+        }
+        // (2) Its centre: the centroid of the patch.
+        let (mut sxp, mut syp) = (0.0f32, 0.0f32);
+        for &k in &area {
+            sxp += ccx(k % cols);
+            syp += ccy(k / cols);
+        }
+        let centre = (sxp / area.len() as f32, syp / area.len() as f32);
+        let radius = openness(centre.0, centre.1).max(0.0);
+        // (3) The slot. Then strike off the pocket around it (the inscribed circle) so
+        // the next ornament finds a different empty area.
+        slots.push((centre, radius));
+        for k in 0..rows * cols {
+            if free[k] && (ccx(k % cols) - centre.0).hypot(ccy(k / cols) - centre.1) <= radius {
+                free[k] = false;
+            }
+        }
+    }
+    slots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each placement sits in open water (its reported `radius` is the real clearance to
+    /// the border and every blocked rim), and the three land in distinct areas rather
+    /// than piling into one.
+    #[test]
+    fn ornaments_fill_the_gaps() {
+        let sea = Rect::new(0.0, 0.0, 300.0, 200.0);
+        // Two clumps of "ports" near the left and right, leaving open water down the
+        // middle and top/bottom bands.
+        let blocked = [
+            ((60.0, 100.0), 10.0),
+            ((80.0, 90.0), 10.0),
+            ((240.0, 110.0), 10.0),
+            ((220.0, 95.0), 10.0),
+        ];
+        let slots = ornament_slots(sea, &blocked, 3);
+        assert_eq!(slots.len(), 3);
+        for &((x, y), radius) in &slots {
+            // Inside the sea.
+            assert!(x >= sea.x && x <= sea.x + sea.w && y >= sea.y && y <= sea.y + sea.h);
+            // The reported radius is real: the centre truly is that far from the border
+            // and every blocked circle's rim.
+            let edge = (x - sea.x).min(sea.x + sea.w - x).min(y - sea.y).min(sea.y + sea.h - y);
+            assert!(radius <= edge + 1e-3);
+            for &((ox, oy), rad) in &blocked {
+                assert!((x - ox).hypot(y - oy) - rad >= radius - 1e-3);
+            }
+            // A pocket wide enough to be worth an ornament was found.
+            assert!(radius > 20.0, "pocket too small: {radius}");
+        }
+        // The three don't stack: each pair is well separated (a struck-off pocket bars
+        // the next ornament from landing on top of it).
+        for i in 0..slots.len() {
+            for j in i + 1..slots.len() {
+                let (a, b) = (slots[i], slots[j]);
+                let d = (a.0 .0 - b.0 .0).hypot(a.0 .1 - b.0 .1);
+                assert!(d > a.1.min(b.1), "slots {i}/{j} too close: {d}");
+            }
+        }
+    }
 }
