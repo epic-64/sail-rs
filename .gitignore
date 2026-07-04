@@ -4,5 +4,6 @@
 # built). The web shell source lives in web/.
 /dist
 /.tools
+/builds
 /sail-rs-web.zip
 /sail-rs-linux-x86_64.zip

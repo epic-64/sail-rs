@@ -3,7 +3,8 @@
 #
 #   ./build-web.sh          # build + serve at http://127.0.0.1:8080
 #   ./build-web.sh --build  # build only (no server)
-#   ./build-web.sh --zip    # build + package an itch.io-ready zip (no server)
+#   ./build-web.sh --zip    # build + package versioned artifacts into builds/
+#                           # (itch.io-ready web zip; on Windows also the native exe)
 #
 # All assets (fonts/sounds) are baked into the binary via include_bytes!, so the
 # dist/ folder is self-contained: index.html + mq_js_bundle.js + sail-rs.wasm.
@@ -62,13 +63,37 @@ case "${1:-}" in
     # itch.io wants index.html at the ROOT of the zip (not inside a folder), so
     # we archive the CONTENTS of dist/, not the dist/ directory itself. No `zip`
     # binary ships with git-bash on Windows, so use PowerShell's Compress-Archive.
-    OUT="sail-rs-web.zip"
-    rm -f "$OUT"
+    #
+    # Artifacts are versioned into builds/: take the highest version across all
+    # existing artifacts and bump the patch (0.1.0 when builds/ is empty).
+    mkdir -p builds
+    # `|| true` keeps set -e/pipefail from killing the script when builds/ is empty.
+    LATEST=$(ls builds/sail-rs-*.zip builds/sail-rs-*.exe 2>/dev/null \
+      | sed -E 's|.*-([0-9]+\.[0-9]+\.[0-9]+)\.[a-z]+$|\1|' | sort -V | tail -1 || true)
+    if [ -z "$LATEST" ]; then
+      VERSION="0.1.0"
+    else
+      VERSION="${LATEST%.*}.$(( ${LATEST##*.} + 1 ))"
+    fi
+    OUT="builds/sail-rs-web-$VERSION.zip"
     echo ">> packaging $OUT (itch.io-ready: index.html at root)"
     powershell -NoProfile -Command "Compress-Archive -Path 'dist/*' -DestinationPath '$OUT' -Force"
     echo ">> done -> $OUT ($(du -h "$OUT" | cut -f1))"
-    echo "   Upload to itch.io, tick 'This file will be played in the browser',"
-    echo "   and set the viewport (e.g. 1280x720) in the embed options."
+    # On Windows, also build the native exe. All assets are baked in via
+    # include_bytes!, so the exe alone is a complete artifact. It ships zipped
+    # rather than bare: players extract it into a folder of its own, so save
+    # files (written next to the exe) land there instead of e.g. Downloads.
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        echo ">> cargo build --release (native Windows exe)"
+        cargo build --release
+        WOUT="builds/sail-rs-windows-$VERSION.zip"
+        powershell -NoProfile -Command "Compress-Archive -Path 'target/release/sail-rs.exe' -DestinationPath '$WOUT' -Force"
+        echo ">> done -> $WOUT ($(du -h "$WOUT" | cut -f1))"
+        ;;
+    esac
+    echo "   Upload the web zip to itch.io, tick 'This file will be played in the"
+    echo "   browser', and set the viewport (e.g. 1280x720) in the embed options."
     ;;
   *)
     echo ">> serving http://127.0.0.1:8080  (Ctrl-C to stop)"
