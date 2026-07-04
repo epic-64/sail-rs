@@ -580,7 +580,17 @@ mod backend {
         p
     }
 
+    /// A staged dev scene (`SAIL_SCENE`, see `main::scene_spec`) plays a synthetic
+    /// voyage: the storage must come out of it untouched, so every write and
+    /// remove is refused at this choke point rather than at each caller.
+    fn read_only() -> bool {
+        std::env::var_os("SAIL_SCENE").is_some()
+    }
+
     pub fn write(key: &str, val: &str) {
+        if read_only() {
+            return;
+        }
         let _ = std::fs::write(path(key), val);
     }
 
@@ -589,6 +599,9 @@ mod backend {
     }
 
     pub fn remove(key: &str) {
+        if read_only() {
+            return;
+        }
         let _ = std::fs::remove_file(path(key));
     }
 }

@@ -114,6 +114,88 @@ fn launch_fullscreen() -> bool {
     true
 }
 
+/// A dev scene staged from `SAIL_SCENE` (a native convenience in `SAIL_WINDOWED`'s
+/// style): start a synthetic voyage instead of loading the player's save, with the
+/// ship, hold, light, weather and an optional rival set from the spec, so a change
+/// can be screenshotted reproducibly (see the game-screenshot skill). While it is
+/// set the storage backend also refuses writes (see `save::backend`), so a staged
+/// scene can never disturb the real voyage.
+///
+/// Comma-separated `key=value` pairs, every one optional (`SAIL_SCENE=1` alone
+/// stages the fresh-start defaults under full sail):
+///
+/// - `seed=N` — world seed (default 1)
+/// - `hull=N` / `cargo=N` — shipyard hull tier / units in the hold
+/// - `sail=N` — canvas notch (index into `SAIL_FRACTIONS`; default full)
+/// - `tod=F` — day clock in [0,1): 0 midnight, 0.25 sunrise, 0.5 noon
+/// - `heading=DEG` / `wind=DEG` — bow / wind-toward bearings (0 = north)
+/// - `weather=NAME` — a `Weather` rung by name (calm, clear, ... storm)
+/// - `rival=M` — a rival on the water M metres ahead, beam-on
+/// - `rival_hull=N` — the tier that rival sails (default 1)
+/// - `hud=0` — start with the HUD tucked away for a clean frame
+struct SceneSpec {
+    seed: i64,
+    hull: Option<i32>,
+    cargo: Option<i32>,
+    sail: usize,
+    tod: Option<f32>,
+    heading_deg: Option<f32>,
+    wind_deg: Option<f32>,
+    weather: Option<Weather>,
+    rival: Option<f32>,
+    rival_hull: i32,
+    hud: bool,
+}
+
+fn scene_spec() -> Option<SceneSpec> {
+    let raw = std::env::var("SAIL_SCENE").ok()?;
+    let mut sc = SceneSpec {
+        seed: 1,
+        hull: None,
+        cargo: None,
+        sail: SAIL_FRACTIONS.len() - 1,
+        tod: None,
+        heading_deg: None,
+        wind_deg: None,
+        weather: None,
+        rival: None,
+        rival_hull: 1,
+        hud: true,
+    };
+    for pair in raw.split(',') {
+        let Some((k, v)) = pair.split_once('=') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        match k {
+            "seed" => sc.seed = v.parse().unwrap_or(sc.seed),
+            "hull" => sc.hull = v.parse().ok(),
+            "cargo" => sc.cargo = v.parse().ok(),
+            "sail" => sc.sail = v.parse().unwrap_or(sc.sail),
+            "tod" => sc.tod = v.parse().ok(),
+            "heading" => sc.heading_deg = v.parse().ok(),
+            "wind" => sc.wind_deg = v.parse().ok(),
+            "weather" => {
+                sc.weather = match v.to_ascii_lowercase().as_str() {
+                    "calm" => Some(Weather::Calm),
+                    "clear" => Some(Weather::Clear),
+                    "breezy" => Some(Weather::Breezy),
+                    "choppy" => Some(Weather::Choppy),
+                    "squall" => Some(Weather::Squall),
+                    "storm" => Some(Weather::Storm),
+                    other => {
+                        eprintln!("SAIL_SCENE: unknown weather {other:?}");
+                        None
+                    }
+                }
+            }
+            "rival" => sc.rival = v.parse().ok(),
+            "rival_hull" => sc.rival_hull = v.parse().unwrap_or(sc.rival_hull),
+            "hud" => sc.hud = v != "0",
+            other => eprintln!("SAIL_SCENE: unknown key {other:?}"),
+        }
+    }
+    Some(sc)
+}
+
 #[inline]
 pub(crate) fn lerp3(a: (f32, f32, f32), b: (f32, f32, f32), t: f32) -> (f32, f32, f32) {
     (
@@ -225,9 +307,12 @@ async fn main() {
     // the chart and the save is handed to `run_game` to restore the captain's
     // progress. Otherwise start a fresh voyage on seed 1. Entering a new seed in
     // the options begins a fresh chart (no restore); each voyage autosaves as it
-    // runs (see `run_game`), so the continued state is always current.
-    let mut restore = save::Save::load();
-    let mut seed: i64 = restore.as_ref().map(|s| s.seed).unwrap_or(1);
+    // runs (see `run_game`), so the continued state is always current. A staged
+    // dev scene (`SAIL_SCENE`, see `scene_spec`) ignores the save entirely and
+    // charts its own seed.
+    let scene_seed = scene_spec().map(|sc| sc.seed);
+    let mut restore = if scene_seed.is_some() { None } else { save::Save::load() };
+    let mut seed: i64 = scene_seed.or_else(|| restore.as_ref().map(|s| s.seed)).unwrap_or(1);
     loop {
         match run_game(seed, restore.take(), &mut sounds, &mut pause, &mut bloom).await {
             GameExit::Quit => break,
@@ -304,7 +389,15 @@ async fn run_game(
     // shove is ~0.10 rad/s, a bit under half the rudder's full authority
     // (`sailing::MAX_YAW_RATE`): demanding helm work, never an uncontrollable spin.
     const STORM_YAW_GAIN: f32 = 1.5;
-    let mut tod: f32 = 0.40; // start mid-morning
+    // A staged dev scene, if `SAIL_SCENE` is set (see `scene_spec`): its overrides
+    // are applied where the restore would be, once the world and defaults exist.
+    let scene = scene_spec();
+    // Start mid-morning, unless the scene stages its own hour (set before the
+    // renderer is built, so the eased light opens on the staged hour too).
+    let mut tod: f32 = scene
+        .as_ref()
+        .and_then(|sc| sc.tod)
+        .map_or(0.40, |t| t.rem_euclid(1.0));
     let mut renderer = OceanRenderer::new(tod);
     // Post-process bloom over the whole scene (sun, moon, stars, glints, sky and
     // the water's reflections). Bloom and the 4× MSAA on the scene are toggled in the
@@ -386,15 +479,16 @@ async fn run_game(
     // The basics primer (`guide`), raised over the scene with G and paged with the
     // arrows. It opens by itself on a captain's first ever voyage and not again
     // (a global flag, see `save::guide_seen`), and can be summoned any time after.
-    let mut guide_open = !save::guide_seen();
+    let mut guide_open = !save::guide_seen() && scene.is_none();
     let mut guide_page: usize = 0;
     if guide_open {
         save::store_guide_seen();
     }
     // H tucks the helm furniture away (the corner readout + badges, the chart, and
     // the on-screen/keybind controls) for an unobstructed view of the sea. Toggles;
-    // open menus and the world still draw underneath.
-    let mut hud_hidden = false;
+    // open menus and the world still draw underneath. A staged scene can start
+    // with it tucked (`hud=0`) for a clean frame.
+    let mut hud_hidden = scene.as_ref().is_some_and(|sc| !sc.hud);
     // While the HUD is hidden, any keypress surfaces the lone "H Show HUD" hint for
     // a few seconds (see `SHOW_HUD_HINT_SECS`) so a captain who tucked it away by
     // accident can find the key back; the timer counting to zero returns the clean,
@@ -403,7 +497,9 @@ async fn run_game(
     // On the web the canvas only receives keyboard input once it has focus, which
     // a click grants. Until the captain clicks (or presses a key), a big centred
     // call-to-action sits over the scene; the first input dismisses it for good.
-    let mut need_focus_click = true;
+    // A staged scene is watched, not played: no input ever comes, so it starts
+    // dismissed (the darkened veil would sit over every screenshot).
+    let mut need_focus_click = scene.is_none();
     // The dev controls (nudge weather Q/E, fast-forward F, nudge clock T/Y, stave in
     // the hull X, nudge wind [ ]) are off until unlocked by a cheat: type "banana"
     // while the captain's log is open. Toggles, so typing it again locks them back.
@@ -503,9 +599,59 @@ async fn run_game(
             }
         }
     }
+
+    // --- Stage a dev scene (`SAIL_SCENE`, see `scene_spec`) -----------------------
+    // Applied where a restore would be, over the same fresh-start defaults, so the
+    // staged voyage flows into the loop exactly like a real one. The rival rides a
+    // zero-stake race booked across the home cluster: the race machinery is what
+    // keeps a rival on the water (one without a race is retired on the first
+    // frame), and the race's required tier picks the hull she is drawn with. She
+    // waits at the line for a heave-to that never comes, so she holds her pose.
+    if let Some(sc) = &scene {
+        if let Some(hl) = sc.hull {
+            gs.hull_level = hl.clamp(0, game_state::HULL_MAX_LEVEL);
+        }
+        if let Some(c) = sc.cargo {
+            gs.cargo[0] = c.max(0);
+        }
+        sail_mode = sc.sail.min(SAIL_FRACTIONS.len() - 1);
+        if let Some(h) = sc.heading_deg {
+            kin.heading_rad = h.to_radians();
+        }
+        if let Some(w) = sc.wind_deg {
+            wind.toward_rad = w.to_radians();
+        }
+        if let Some(wx) = sc.weather {
+            weather = WeatherState::new(wx, world.seed ^ 0x57e4_c107);
+        }
+        if let Some(d) = sc.rival {
+            let far_id = home
+                .island_ids
+                .iter()
+                .copied()
+                .max_by(|&a, &b| {
+                    let dist =
+                        |id: i32| world.islands[id as usize].pos.distance_to(start_isle.pos);
+                    dist(a).total_cmp(&dist(b))
+                })
+                .unwrap_or(start_isle.id);
+            gs.race = Some(race::Race {
+                origin_id: start_isle.id,
+                target_id: far_id,
+                stake: 0,
+                required_level: sc.rival_hull.clamp(0, game_state::HULL_MAX_LEVEL),
+            });
+            rival = Some(Kinematics::still(
+                kin.pos + Vec2::from_heading(kin.heading_rad) * d,
+                wrap_angle(kin.heading_rad + std::f32::consts::FRAC_PI_2),
+            ));
+        }
+    }
+
     // Make the on-disk save match the voyage actually being played from the first
-    // frame — a fresh start, a new-seed chart, or this restored save — so a quick
-    // quit can't leave a stale save from a previous seed behind.
+    // frame (a fresh start, a new-seed chart, or this restored save), so a quick
+    // quit can't leave a stale save from a previous seed behind. (With a scene
+    // staged this write, like every other, is refused by the backend.)
     save::store(
         seed,
         &gs,
