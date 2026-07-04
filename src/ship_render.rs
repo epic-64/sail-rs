@@ -461,23 +461,24 @@ const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is M
 /// above it. Per sail: the yard's height, the hoist, and the cloth's width at
 /// head and foot (a course is square, a topsail tapers toward its head). The
 /// mast's own cut adjusts the shared plan: `cloth_w` broadens every width,
-/// `yard_drop` hangs the course lower on its pole. Shared by the rig drawing,
-/// the rival's miniature and the deck's sail shadows, so the shadow always
-/// matches the cloth it falls from.
+/// `yard_drop` hangs the course lower on its pole, `yard_up` hoists both
+/// yards higher, and `sail_gap` opens extra daylight under the topsail.
+/// Shared by the rig drawing, the rival's miniature and the deck's sail
+/// shadows, so the shadow always matches the cloth it falls from.
 pub(crate) fn sail_cuts(mast: &hull_shape::Mast, foot_y: f32) -> Vec<(f32, f32, f32, f32)> {
     let course_w = SAIL_W_M * mast.scale * mast.cloth_w;
     (0..mast.sails)
         .map(|si| {
             if si == 0 {
                 (
-                    foot_y + (YARD_H_M - mast.yard_drop) * mast.scale,
+                    foot_y + (YARD_H_M + mast.yard_up - mast.yard_drop) * mast.scale,
                     SAIL_H_M * mast.scale,
                     course_w,
                     course_w,
                 )
             } else {
                 (
-                    foot_y + TOP_YARD_H_M * mast.scale,
+                    foot_y + (TOP_YARD_H_M + mast.yard_up + mast.sail_gap) * mast.scale,
                     TOPSAIL_H_M * mast.scale,
                     course_w * TOPSAIL_HEAD_W,
                     course_w * TOPSAIL_FOOT_W,
@@ -485,6 +486,13 @@ pub(crate) fn sail_cuts(mast: &hull_shape::Mast, foot_y: f32) -> Vec<(f32, f32, 
             }
         })
         .collect()
+}
+
+/// The masthead's height over the mast's local deck: the shared pole plus the
+/// mast's own `mast_up`, at its scale. Shared like `sail_cuts` so stays,
+/// shadows and the rival's miniature all top out on the same truck.
+pub(crate) fn mast_top(mast: &hull_shape::Mast) -> f32 {
+    (MAST_TOP_M + mast.mast_up) * mast.scale
 }
 
 const YARD_MID_R: f32 = 0.13; // the yard's radius at the slings (its middle)...
@@ -1888,7 +1896,7 @@ impl ShipRenderer {
             // not forever.
             let (tx, tz) = (-lx / ly, -lz / ly);
             let throw = (tx * tx + tz * tz).sqrt().max(1e-3);
-            let mast_h = (MAST_TOP_M * mast.scale).min(30.0 / throw);
+            let mast_h = mast_top(mast).min(30.0 / throw);
             let key_l = (lume.key.0 + lume.key.1 + lume.key.2) / 3.0;
             let amb_l = (lume.ambient.0 + lume.ambient.1 + lume.ambient.2) / 3.0;
             let key_part = (1.0 - AMBIENT_SHARE) * ly * key_l;
@@ -3056,7 +3064,7 @@ impl ShipRenderer {
         for (mi, mast) in hull.masts.iter().enumerate() {
             // The trunk stands on its local deck (a foremast rides the bow's sheer).
             let foot_y = hull.station_at(mast.z).1;
-            let mast_top = foot_y + MAST_TOP_M * mast.scale;
+            let mast_top = foot_y + mast_top(mast);
             // px per metre at this mast's plane, for the cloth shading's
             // expected cell span.
             let s0 = w * CAM_F / (hull.cam_aft - mast.z);
@@ -3348,11 +3356,32 @@ mod tests {
 
     /// The topsail's cut must fit its mast: its yard under the masthead, its
     /// foot clear above the course's yard, and the taper running head-narrow.
+    /// Checked on the shared plan and on every hull's own cut, since a mast's
+    /// offsets (`yard_up`, `sail_gap`, `mast_up`, `yard_drop`) reshuffle the
+    /// stack the constants alone guarantee.
     #[test]
     fn topsail_fits_the_rig() {
         assert!(TOP_YARD_H_M < MAST_TOP_M);
         assert!(TOP_YARD_H_M - TOPSAIL_H_M > YARD_H_M);
         assert!(TOPSAIL_HEAD_W < TOPSAIL_FOOT_W && TOPSAIL_FOOT_W <= 1.0);
+        use crate::hull_shape::{BRIG, GALLEON, INDIAMAN, SLOOP};
+        for (name, hull) in
+            [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON), ("indiaman", &INDIAMAN)]
+        {
+            for m in hull.masts {
+                let head = MAST_TOP_M + m.mast_up;
+                let course_head = YARD_H_M + m.yard_up - m.yard_drop;
+                assert!(course_head < head, "{name}: a course yard over the masthead");
+                if m.sails >= 2 {
+                    let top_yard = TOP_YARD_H_M + m.yard_up + m.sail_gap;
+                    assert!(top_yard < head, "{name}: a topsail yard over the masthead");
+                    assert!(
+                        top_yard - TOPSAIL_H_M > course_head,
+                        "{name}: a topsail foot fouling the course"
+                    );
+                }
+            }
+        }
     }
 
     /// A mast that hangs its course low (`Mast::yard_drop`) must still keep
@@ -3365,7 +3394,7 @@ mod tests {
             [("sloop", &SLOOP), ("brig", &BRIG), ("galleon", &GALLEON), ("indiaman", &INDIAMAN)]
         {
             for m in hull.masts {
-                let foot = (YARD_H_M - m.yard_drop - SAIL_H_M) * m.scale;
+                let foot = (YARD_H_M + m.yard_up - m.yard_drop - SAIL_H_M) * m.scale;
                 assert!(foot > 1.7, "{name}: a course foot brushing the deck cargo");
             }
         }

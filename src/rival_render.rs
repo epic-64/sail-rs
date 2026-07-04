@@ -30,7 +30,7 @@ use crate::projection::{curve_dip, BASE_EYE, MAX_VIEW};
 use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
-    sail_cuts, BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH,
+    mast_top, sail_cuts, BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, RAIL, SAIL_CLOTH,
     SAIL_STANDOFF_M, SPAR,
 };
 
@@ -122,7 +122,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
     let tallest = hull
         .masts
         .iter()
-        .map(|m| hull.station_at(m.z).1 + MAST_TOP_M * m.scale)
+        .map(|m| hull.station_at(m.z).1 + mast_top(m))
         .fold(0.0f32, f32::max);
     let mast_m = (hull.freeboard + tallest) * RIVAL_MAG;
     // Fake planetary curvature: past `CURVE_START` a distant sail sinks hull-first
@@ -328,7 +328,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
     );
     for mast in hull.masts {
         let foot_y = hull.station_at(mast.z).1;
-        let mast_top = foot_y + MAST_TOP_M * mast.scale;
+        let mast_top = foot_y + mast_top(mast);
         line3(
             &mut prims,
             vert(0.0, foot_y, mast.z),
@@ -390,7 +390,7 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
     // limit, so it shows the true wind even when the sail is hauled hard over.
     // A fixed bright term keeps its signal colour saturated.
     let main = hull.masts.last().unwrap();
-    let main_top = hull.station_at(main.z).1 + MAST_TOP_M * main.scale;
+    let main_top = hull.station_at(main.z).1 + mast_top(main);
     let (pw_s, pw_c) = wind_rel.sin_cos();
     tri(
         &mut prims,
