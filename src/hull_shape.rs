@@ -16,15 +16,19 @@
 //! [`for_level`].
 
 /// One mast of a hull's rig: where it stands, how large its course is cut,
-/// and where its running rigging belays. The renderers loft every spar and
-/// cloth dimension from their shared rig constants (`ship_render`'s
-/// `MAST_TOP_M` and friends) multiplied by `scale`, so a hull's masts differ
-/// in size without touching the rig code.
+/// how much canvas it flies, and where its running rigging belays. The
+/// renderers loft every spar and cloth dimension from their shared rig
+/// constants (`ship_render`'s `MAST_TOP_M` and friends) multiplied by
+/// `scale`, so a hull's masts differ in size without touching the rig code.
 pub struct Mast {
     /// Fore-aft station of the mast foot (the trunk stands on the local deck).
     pub z: f32,
     /// Rig scale on the shared dimensions: mast height, yard span, cloth.
     pub scale: f32,
+    /// Square sails flown, stacked course upward: 1 is the course alone, 2
+    /// adds a topsail on the pole above it (cut from `ship_render`'s shared
+    /// topsail constants, again by `scale`).
+    pub sails: usize,
     /// Where this mast's sheets and braces belay on the rails (fore-aft z).
     pub sheet_foot_z: f32,
     pub brace_foot_z: f32,
@@ -156,7 +160,7 @@ pub static SLOOP: HullShape = HullShape {
     cargo_z_min: -4.6,
     cargo_z_max: 1.4, // clear water kept before the wheel
     cargo_cols: &[-1.5, -0.5, 0.5, 1.5],
-    masts: &[Mast { z: 0.0, scale: 1.0, sheet_foot_z: 2.0, brace_foot_z: 4.5 }],
+    masts: &[Mast { z: 0.0, scale: 1.0, sails: 1, sheet_foot_z: 2.0, brace_foot_z: 4.5 }],
     sprit_base: (1.0, -9.7),
     sprit_tip: (2.0, -12.5),
     freeboard: 0.95,
@@ -187,7 +191,8 @@ pub static SLOOP: HullShape = HullShape {
 
 /// Tiers 1 and up: the quarterdecked brig (the original hull). The raised
 /// quarterdeck aft carries the helm; the waist between mast and break stows
-/// the cargo.
+/// the cargo. Her mast flies a topsail over the course, the first rung up
+/// from the sloop's single sail.
 pub static BRIG: HullShape = HullShape {
     stations: &[
         (-15.0, 0.05, 1.55, 0.50), // stem tip
@@ -212,7 +217,7 @@ pub static BRIG: HullShape = HullShape {
     cargo_z_min: -6.5,
     cargo_z_max: 5.0, // the quarterdeck riser
     cargo_cols: &[-2.4, -1.2, 0.0, 1.2], // clear of the stairs at x 2.0
-    masts: &[Mast { z: 0.0, scale: 1.0, sheet_foot_z: 3.5, brace_foot_z: 6.5 }],
+    masts: &[Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 3.5, brace_foot_z: 6.5 }],
     sprit_base: (1.5, -14.6),
     sprit_tip: (2.7, -18.2),
     freeboard: 1.3,
@@ -274,10 +279,11 @@ pub static GALLEON: HullShape = HullShape {
     cargo_z_max: 7.0, // the quarterdeck riser
     cargo_cols: &[-3.2, -2.0, -0.8, 0.4, 1.6], // the wider beam buys a fifth column
     // Two-masted: a smaller foremast on the rising foredeck (clear forward of
-    // the cargo run), the full-rigged main at the origin.
+    // the cargo run), the full-rigged main at the origin; both fly a topsail
+    // over the course, the most canvas in the yard.
     masts: &[
-        Mast { z: -9.5, scale: 0.78, sheet_foot_z: -4.8, brace_foot_z: -2.5 },
-        Mast { z: 0.0, scale: 1.0, sheet_foot_z: 4.5, brace_foot_z: 9.0 },
+        Mast { z: -9.5, scale: 0.78, sails: 2, sheet_foot_z: -4.8, brace_foot_z: -2.5 },
+        Mast { z: 0.0, scale: 1.0, sails: 2, sheet_foot_z: 4.5, brace_foot_z: 9.0 },
     ],
     sprit_base: (1.95, -19.4),
     sprit_tip: (3.5, -24.0),
@@ -340,6 +346,16 @@ mod tests {
         assert_eq!(BRIG.bow_reach(), 25.0);
     }
 
+    /// The canvas each tier's hull flies: the sloop a single course, the brig
+    /// a topsail over hers, the galleon a topsail over the course on both
+    /// masts.
+    #[test]
+    fn tier_rigs() {
+        assert!(SLOOP.masts.iter().all(|m| m.sails == 1));
+        assert!(BRIG.masts.iter().all(|m| m.sails == 2));
+        assert!(GALLEON.masts.iter().all(|m| m.sails == 2));
+    }
+
     /// Every hull's probes must lie inside its own lofted waterline (a probe
     /// off the hull would answer water the ship never touches), athwart
     /// offsets must cancel (the plane fit assumes it), and the quarterdeck
@@ -374,6 +390,7 @@ mod tests {
                 assert!(pair[0].z < pair[1].z, "{name}: masts out of bow-to-stern order");
             }
             for m in hull.masts {
+                assert!(m.sails >= 1, "{name}: a bare mast");
                 for z in [m.z, m.sheet_foot_z, m.brace_foot_z] {
                     assert!(
                         z > hull.z_bow() && z < hull.z_stern(),

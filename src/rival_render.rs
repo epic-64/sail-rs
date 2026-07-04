@@ -31,7 +31,8 @@ use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
     BELLY_DEPTH, BRACE_LIMIT, DECK_B, MAST_HW, MAST_TOP_M, RAIL, SAIL_CLOTH, SAIL_H_M,
-    SAIL_STANDOFF_M, SAIL_W_M, SPAR, YARD_H_M,
+    SAIL_STANDOFF_M, SAIL_W_M, SPAR, TOPSAIL_FOOT_W, TOPSAIL_HEAD_W, TOPSAIL_H_M, TOP_YARD_H_M,
+    YARD_H_M,
 };
 
 use std::f32::consts::PI;
@@ -328,55 +329,70 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3], hull: &HullSha
     );
     for mast in hull.masts {
         let foot_y = hull.station_at(mast.z).1;
-        let sail_w = SAIL_W_M * mast.scale;
+        let course_w = SAIL_W_M * mast.scale;
         let mast_top = foot_y + MAST_TOP_M * mast.scale;
-        let yard_y = foot_y + YARD_H_M * mast.scale;
         line3(
             &mut prims,
             vert(0.0, foot_y, mast.z),
             vert(0.0, mast_top, mast.z),
             MAST_HW * 0.8,
         );
-        let yhw = sail_w * 0.5 + 0.4; // the yardarms run a touch past the cloth
-        line3(
-            &mut prims,
-            vert(-cb * yhw, yard_y, mast.z + sb * yhw),
-            vert(cb * yhw, yard_y, mast.z - sb * yhw),
-            0.11,
-        );
 
-        // --- Sail: a coarse grid of cloth panels laced flat along the yard,
-        // bellying by how much wind she actually harvests on this point of sail
-        // (the physics' own curve, so the cloth hangs slack in irons), deepest
-        // toward the free foot, with the player's own draft profiles. The panel's
-        // out-of-plane offset rides in front of the mast (`z0` negative = forward)
-        // and rotates with the brace, as `ship_render::draw_rig` does it.
-        const COLS: usize = 4;
-        const ROWS: usize = 2;
-        let depth = -wind_factor_rel(wind_rel) * BELLY_DEPTH * sail_w;
-        let sail_pt = |i: usize, j: usize| {
-            let u = i as f32 / COLS as f32 - 0.5;
-            let v = j as f32 / ROWS as f32;
-            let x0 = u * sail_w;
-            let z0 = -SAIL_STANDOFF_M
-                + depth * (v * 0.75 * PI).sin() * (1.0 - 0.3 * (2.0 * u).powi(2));
-            vert(
-                x0 * cb + z0 * sb,
-                yard_y - v * SAIL_H_M * mast.scale,
-                mast.z - x0 * sb + z0 * cb,
-            )
-        };
-        for i in 0..COLS {
-            for j in 0..ROWS {
-                quad(
-                    &mut prims,
-                    sail_pt(i, j),
-                    sail_pt(i + 1, j),
-                    sail_pt(i + 1, j + 1),
-                    sail_pt(i, j + 1),
-                    SAIL_CLOTH,
-                    -1.0,
-                );
+        // The mast's sails, course upward (see `hull_shape::Mast::sails`),
+        // each its yard and cloth at the player's own dimensions: the course
+        // square, the topsail above it tapering toward its head.
+        for si in 0..mast.sails {
+            let (yard_y, hoist, w_head, w_foot) = if si == 0 {
+                (foot_y + YARD_H_M * mast.scale, SAIL_H_M * mast.scale, course_w, course_w)
+            } else {
+                (
+                    foot_y + TOP_YARD_H_M * mast.scale,
+                    TOPSAIL_H_M * mast.scale,
+                    course_w * TOPSAIL_HEAD_W,
+                    course_w * TOPSAIL_FOOT_W,
+                )
+            };
+            let yhw = w_head * 0.5 + 0.4; // the yardarms run a touch past the cloth
+            line3(
+                &mut prims,
+                vert(-cb * yhw, yard_y, mast.z + sb * yhw),
+                vert(cb * yhw, yard_y, mast.z - sb * yhw),
+                0.11,
+            );
+
+            // --- Sail: a coarse grid of cloth panels laced flat along the yard,
+            // bellying by how much wind she actually harvests on this point of sail
+            // (the physics' own curve, so the cloth hangs slack in irons), deepest
+            // toward the free foot, with the player's own draft profiles. The panel's
+            // out-of-plane offset rides in front of the mast (`z0` negative = forward)
+            // and rotates with the brace, as `ship_render::draw_rig` does it.
+            const COLS: usize = 4;
+            const ROWS: usize = 2;
+            let depth = -wind_factor_rel(wind_rel) * BELLY_DEPTH * w_foot;
+            let sail_pt = |i: usize, j: usize| {
+                let u = i as f32 / COLS as f32 - 0.5;
+                let v = j as f32 / ROWS as f32;
+                let x0 = u * (w_head + (w_foot - w_head) * v);
+                let z0 = -SAIL_STANDOFF_M
+                    + depth * (v * 0.75 * PI).sin() * (1.0 - 0.3 * (2.0 * u).powi(2));
+                vert(
+                    x0 * cb + z0 * sb,
+                    yard_y - v * hoist,
+                    mast.z - x0 * sb + z0 * cb,
+                )
+            };
+            for i in 0..COLS {
+                for j in 0..ROWS {
+                    quad(
+                        &mut prims,
+                        sail_pt(i, j),
+                        sail_pt(i + 1, j),
+                        sail_pt(i + 1, j + 1),
+                        sail_pt(i, j + 1),
+                        SAIL_CLOTH,
+                        -1.0,
+                    );
+                }
             }
         }
     }
