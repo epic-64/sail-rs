@@ -23,7 +23,7 @@ use macroquad::prelude::*;
 use crate::geometry::{clamp, wrap_angle, Vec2};
 use crate::ocean;
 use crate::ocean_renderer::WAVE_GAIN;
-use crate::projection::{BASE_EYE, MAX_VIEW};
+use crate::projection::{curve_dip, BASE_EYE, MAX_VIEW};
 use crate::sailing::{wind_factor_rel, Kinematics};
 use crate::scene::SceneView;
 use crate::ship_render::{
@@ -34,7 +34,13 @@ use crate::ship_render::{
 use std::f32::consts::PI;
 
 const RIVAL_MAG: f32 = 1.35; // drawn a touch larger than life
-const RIVAL_MIN_PX: f32 = 26.0; // masthead floor so a distant sail stays spottable
+// Masthead floor (px) so a distant hull stays a readable fleck rather than a
+// sub-pixel shimmer. Kept low: she now shrinks with true perspective like the
+// islands and is removed by sinking under the horizon (see `dip`), so she no
+// longer needs to hold a big fixed size to stay spottable while fading. A high
+// floor froze her on-screen size (and fattened her footprint) just a few hundred
+// metres out, which read as a far ship drawn weirdly huge.
+const RIVAL_MIN_PX: f32 = 10.0;
 const FOV_MARGIN: f32 = 1.12; // matches the wave mesh's column fan
 
 // The exterior the player's first-person loft never shows, so these live here
@@ -109,8 +115,13 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
     // perspective masthead would drop under the visibility floor, so a far
     // rival scales up as one shape instead of degenerating to a smear.
     let mast_m = (FREEBOARD + MAST_TOP_M) * RIVAL_MAG;
-    let foot_y = horizon + ((BASE_EYE - foot_disp) / d).atan() * px_per_rad;
-    let top_y = horizon + ((BASE_EYE - foot_disp - mast_m) / d).atan() * px_per_rad;
+    // Fake planetary curvature: past `CURVE_START` a distant sail sinks hull-first
+    // under the swell (the nearer opaque water swallows her from the waterline up)
+    // rather than fading to a ghost. One depression drops every lofted point alike,
+    // so `raw_h` (and the magnification) is untouched: she sinks whole, not shrinks.
+    let dip = curve_dip(d) * px_per_rad;
+    let foot_y = horizon + ((BASE_EYE - foot_disp) / d).atan() * px_per_rad + dip;
+    let top_y = horizon + ((BASE_EYE - foot_disp - mast_m) / d).atan() * px_per_rad + dip;
     let raw_h = (foot_y - top_y).max(0.1);
     let s = RIVAL_MAG * (RIVAL_MIN_PX / raw_h).max(1.0);
 
@@ -122,7 +133,9 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         return;
     }
     let px_per_rad_h = (w * 0.5) / half_fov_h_view;
-    let alpha = clamp((1.0 - d / MAX_VIEW) * 1.6, 0.18, 1.0);
+    // Fully opaque to the cull now: distance removes her by sinking her under the
+    // horizon (see `dip` above), not by fading her toward transparent.
+    let alpha = 1.0;
 
     // Her attitude in the swell: heel from the sea sampled off each beam, pitch
     // from ahead and astern along her keel line, by the same gain the mesh uses.
@@ -159,7 +172,8 @@ pub fn draw(rk: &Kinematics, view: &SceneView, pennant: [f32; 3]) {
         let phi = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
         P3 {
             sx: w * 0.5 + phi * px_per_rad_h,
-            sy: horizon + ((BASE_EYE - foot_disp - elev) / dv).atan() * px_per_rad,
+            sy: horizon + ((BASE_EYE - foot_disp - elev) / dv).atan() * px_per_rad
+                + curve_dip(dv) * px_per_rad,
             phi,
             d: dv,
             wx: wp.x,
