@@ -262,6 +262,31 @@ pub(crate) const TOPSAIL_HEAD_W: f32 = 0.62;
 pub(crate) const TOPSAIL_FOOT_W: f32 = 0.92;
 pub(crate) const SAIL_STANDOFF_M: f32 = 0.35; // the cloth hangs this far forward of the mast
 const MAST_HEAD_R: f32 = 0.15; // the post's radius at the head (the foot's is MAST_HW)
+
+/// A mast's canvas plan, course upward (see `hull_shape::Mast::sails`): the
+/// course on the main yard and, on a two-sail rig, the topsail on the pole
+/// above it. Per sail: the yard's height, the hoist, and the cloth's width at
+/// head and foot (a course is square, a topsail tapers toward its head).
+/// Shared by the rig drawing and the deck's sail shadows, so the shadow always
+/// matches the cloth it falls from.
+fn sail_cuts(mast: &hull_shape::Mast, foot_y: f32) -> Vec<(f32, f32, f32, f32)> {
+    let course_w = SAIL_W_M * mast.scale;
+    (0..mast.sails)
+        .map(|si| {
+            if si == 0 {
+                (foot_y + YARD_H_M * mast.scale, SAIL_H_M * mast.scale, course_w, course_w)
+            } else {
+                (
+                    foot_y + TOP_YARD_H_M * mast.scale,
+                    TOPSAIL_H_M * mast.scale,
+                    course_w * TOPSAIL_HEAD_W,
+                    course_w * TOPSAIL_FOOT_W,
+                )
+            }
+        })
+        .collect()
+}
+
 const YARD_MID_R: f32 = 0.13; // the yard's radius at the slings (its middle)...
 const YARD_TIP_R: f32 = 0.07; // ...tapering out to the yardarms
 // The bowsprit's run is part of each hull's shape (`HullShape::sprit_base` /
@@ -1541,6 +1566,63 @@ impl ShipRenderer {
             }
         };
 
+        // --- The sails' shadows, thrown the same way ---------------------------
+        // Each cloth (the plan shared with the rig via `sail_cuts`) is taken as
+        // its braced trapeze and every point dropped onto the deck along the
+        // light's horizontal throw, so the pool swings, stretches and shears
+        // with the hour, the brace and the furl together. Canvas passes part of
+        // the light (the cloth itself draws back-lit at strength), so the pool
+        // is softer than a spar's. Drawn as a grid of cells, each kept inside
+        // the hull's footprint by its own midpoint; the rows follow the throw's
+        // stretch so a long evening shadow still clips cleanly.
+        let sail_shadow = |mast: &hull_shape::Mast, z_lo: f32, z_hi: f32| {
+            let (lx, ly, lz) = lume.l;
+            if ly <= 0.05 {
+                return;
+            }
+            let (tx, tz) = (-lx / ly, -lz / ly);
+            let throw = (tx * tx + tz * tz).sqrt().max(1e-3);
+            let key_l = (lume.key.0 + lume.key.1 + lume.key.2) / 3.0;
+            let amb_l = (lume.ambient.0 + lume.ambient.1 + lume.ambient.2) / 3.0;
+            let key_part = (1.0 - AMBIENT_SHARE) * ly * key_l;
+            let shade = key_part / (key_part + AMBIENT_SHARE * amb_l + 1e-4);
+            let col = Color::new(0.0, 0.0, 0.0, 0.34 * shade);
+            let (sb, cb) = self.brace_angle.sin_cos();
+            let furl = self.set.max(0.05);
+            let foot_y = hull.station_at(mast.z).1;
+            for (sail_top, hoist, w_head, w_foot) in sail_cuts(mast, foot_y) {
+                let sail_bot = sail_top - hoist * furl;
+                // Where the cloth point at across-fraction `u` (-0.5..0.5) and
+                // down-fraction `v` (0 = the head) lands on the deck plane.
+                let land = |u: f32, v: f32| -> (f32, f32) {
+                    let x0 = u * (w_head + (w_foot - w_head) * v);
+                    let (x, zr) =
+                        (x0 * cb - SAIL_STANDOFF_M * sb, -x0 * sb - SAIL_STANDOFF_M * cb);
+                    let hgt = sail_top + (sail_bot - sail_top) * v - foot_y;
+                    (x + hgt * tx, mast.z + zr + hgt * tz)
+                };
+                // Rows sized so each cell runs about a metre along the deck
+                // however low the light stretches the throw.
+                let rows = ((hoist * furl * throw).ceil() as usize).clamp(2, 24);
+                let cols = 6;
+                for i in 0..cols {
+                    let (u0, u1) =
+                        (i as f32 / cols as f32 - 0.5, (i + 1) as f32 / cols as f32 - 0.5);
+                    for k in 0..rows {
+                        let (v0, v1) = (k as f32 / rows as f32, (k + 1) as f32 / rows as f32);
+                        let (xm, zm) = land((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+                        let (bm, _, _) = hull.station_at(zm);
+                        if xm.abs() > bm - 0.1 || !(z_lo..z_hi).contains(&zm) {
+                            continue;
+                        }
+                        let c = [land(u0, v0), land(u1, v0), land(u1, v1), land(u0, v1)]
+                            .map(|(x, z)| pt(x, hull.station_at(z).1 + 0.02, z));
+                        try_quad(c[0], c[1], c[2], c[3], col);
+                    }
+                }
+            }
+        };
+
         // --- Bulwarks: a planked wall up each side riding the deck edge, its
         // height running the sheer in the station table, with strakes and a
         // cap board. Called once per deck level.
@@ -1685,6 +1767,7 @@ impl ShipRenderer {
         if !aft {
             for m in hull.masts {
                 mast_shadow(m, z_bow + 0.5, hull.qdeck_break.unwrap_or(z_stern));
+                sail_shadow(m, z_bow + 0.5, hull.qdeck_break.unwrap_or(z_stern));
             }
             bulwarks(false);
             railing(false);
@@ -1769,6 +1852,7 @@ impl ShipRenderer {
             }
             for m in hull.masts {
                 mast_shadow(m, qdeck, z_stern - 2.5);
+                sail_shadow(m, qdeck, z_stern - 2.5);
             }
             bulwarks(true);
             railing(true);
@@ -2637,25 +2721,8 @@ impl ShipRenderer {
                 prev_head = Some(head);
             }
 
-            // The mast's sails, course upward (see `hull_shape::Mast::sails`):
-            // the course on the main yard and, on a two-sail rig, the topsail
-            // on the pole above it. Per sail: the yard's height, the hoist,
-            // and the cloth's width at head and foot (a course is square, a
-            // topsail tapers toward its head).
-            let cuts: Vec<(f32, f32, f32, f32)> = (0..mast.sails)
-                .map(|si| {
-                    if si == 0 {
-                        (foot_y + YARD_H_M * mast.scale, SAIL_H_M * mast.scale, course_w, course_w)
-                    } else {
-                        (
-                            foot_y + TOP_YARD_H_M * mast.scale,
-                            TOPSAIL_H_M * mast.scale,
-                            course_w * TOPSAIL_HEAD_W,
-                            course_w * TOPSAIL_FOOT_W,
-                        )
-                    }
-                })
-                .collect();
+            // The mast's canvas plan, shared with the deck's sail shadows.
+            let cuts = sail_cuts(mast, foot_y);
 
             // A rope from a rig point (already projected, with its pre-projection
             // depth `z` relative to the mast plane) down to another point (a belay
