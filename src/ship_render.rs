@@ -2752,6 +2752,12 @@ impl ShipRenderer {
             let mut ropes: Vec<(Vec<Vec2>, bool)> = Vec::new();
             // The yards, drawn over every sail's cloth: (height, half-span).
             let mut yards: Vec<(f32, f32)> = Vec::new();
+            // Every sail's cloth cells, collected across the mast's whole
+            // canvas and depth-sorted together before drawing: braced hard the
+            // rig sits nearly edge-on, so the course's near half crosses the
+            // topsail on screen, and a sail sorted only within itself would
+            // paint over nearer cloth below it. (depth, corners, colour).
+            let mut cloth: Vec<(f32, [Vec2; 4], Color)> = Vec::new();
 
             for (si, &(sail_top, hoist, w_head, w_foot)) in cuts.iter().enumerate() {
                 let sail_bot = sail_top - hoist * furl;
@@ -2784,9 +2790,10 @@ impl ShipRenderer {
                 // rows are what let the vertical belly actually bow in projection; a
                 // single head-to-foot quad would interpolate the arc away. Adjacent
                 // cells share their seam vertices exactly, so the cloth reads as one
-                // watertight surface from any brace angle. Drawn *before* the spars so
-                // the mast and yards (at the rig's z≈0 plane, nearest the viewer) always
-                // part the cloth instead of the cloth painting over them.
+                // watertight surface from any brace angle. The cells go into the
+                // mast's shared `cloth` list (drawn below, before the spars, so the
+                // mast and yards at the rig's z≈0 plane, nearest the viewer, always
+                // part the cloth instead of the cloth painting over them).
                 let n = SAIL_PANELS;
                 let m = SAIL_ROWS;
                 let sail_y = |v: f32| sail_top + (sail_bot - sail_top) * v;
@@ -2809,12 +2816,8 @@ impl ShipRenderer {
                     let v = (k as f32 + 0.5) / m as f32;
                     braced(u, v, panel_z(u, v)).1
                 };
-                let mut order: Vec<(usize, usize)> =
-                    (0..n).flat_map(|i| (0..m).map(move |k| (i, k))).collect();
-                // Farthest (most negative z at the cell's centre) first.
-                order.sort_by(|&a, &b| cell_z(a.0, a.1).partial_cmp(&cell_z(b.0, b.1)).unwrap());
 
-                for &(i, k) in &order {
+                for (i, k) in (0..n).flat_map(|i| (0..m).map(move |k| (i, k))) {
                     let u = (i as f32 + 0.5) / n as f32 - 0.5;
                     let v = (k as f32 + 0.5) / m as f32;
                     let tl = grid[i][k];
@@ -2836,10 +2839,9 @@ impl ShipRenderer {
                     // blacking the cloth out.
                     let toward = sb * lume.l.0 + cb * lume.l.2 + 0.35 * lume.l.1;
                     let through = if toward >= 0.0 { toward } else { -toward * 0.75 };
-                    let cloth = 0.25 + 0.75 * through.min(1.0);
-                    let col = lume.col(SAIL_CLOTH, cloth, shade);
-                    draw_triangle(tl, tr, br, col);
-                    draw_triangle(tl, br, bl, col);
+                    let lit = 0.25 + 0.75 * through.min(1.0);
+                    let col = lume.col(SAIL_CLOTH, lit, shade);
+                    cloth.push((cell_z(i, k), [tl, tr, br, bl], col));
                 }
 
                 // --- Running rigging. The course leads its ropes aft to the
@@ -2897,6 +2899,13 @@ impl ShipRenderer {
                 // The yardarms run a touch past the cloth's head (the same 8%
                 // margin the braces attach at).
                 yards.push((sail_top, 0.54 * w_head));
+            }
+            // The mast's whole canvas in one painter pass, farthest cell (most
+            // negative z at its centre) first, whichever sail it belongs to.
+            cloth.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for &(_, [tl, tr, br, bl], col) in &cloth {
+                draw_triangle(tl, tr, br, col);
+                draw_triangle(tl, br, bl, col);
             }
             // The ropes whose rig end lies forward of the mast plane, hidden by the spars.
             for (pts, behind) in &ropes {
