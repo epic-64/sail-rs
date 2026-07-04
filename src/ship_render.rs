@@ -235,10 +235,10 @@ fn draw_spar(
 struct DeckPoints {
     /// Outer silhouette for the rain's occlusion test (see `deck_silhouette`).
     silhouette: Vec<Vec2>,
-    /// Rope feet atop the rails, [port, starboard]: the sheets belay on the
-    /// waist rail, the braces on the quarterdeck rail beside the helm.
-    sheet_foot: [Vec2; 2],
-    brace_foot: [Vec2; 2],
+    /// Rope feet atop the rails, [port, starboard] per mast (aligned with
+    /// `HullShape::masts`), each at its mast's own belay stations.
+    sheet_foot: Vec<[Vec2; 2]>,
+    brace_foot: Vec<[Vec2; 2]>,
     /// The bowsprit's tip, where the forestay lands.
     bowsprit_tip: Vec2,
 }
@@ -800,8 +800,8 @@ impl ShipRenderer {
                 let j = |n: u32| slot_rand(k.wrapping_mul(97).wrapping_add(n));
                 let x = cols[(c + spin) % cols.len()] + 0.20 * (j(0) - 0.5);
                 let z = zrow + 0.20 * (j(1) - 0.5);
-                // The mast wants clear deck around its foot.
-                if x.abs() < 0.7 && z.abs() < 1.1 {
+                // Each mast wants clear deck around its foot.
+                if hull.masts.iter().any(|m| x.abs() < 0.7 && (z - m.z).abs() < 1.1) {
                     continue;
                 }
                 slots.push((k, x, z));
@@ -1142,16 +1142,19 @@ impl ShipRenderer {
                     }
                 }
             }
-            // The mast's foot: shove out along the shallower overlap.
-            let px = MAST_HW + c.hw - c.x.abs();
-            let pz = MAST_HW + c.hd - c.z.abs();
-            if px > 0.0 && pz > 0.0 {
-                if px < pz {
-                    c.x += c.x.signum() * px;
-                    c.vx = -c.vx * CRATE_BOUNCE;
-                } else {
-                    c.z += c.z.signum() * pz;
-                    c.vz = -c.vz * CRATE_BOUNCE;
+            // The mast feet: shove out along the shallower overlap.
+            for m in hull.masts {
+                let dz = c.z - m.z;
+                let px = MAST_HW + c.hw - c.x.abs();
+                let pz = MAST_HW + c.hd - dz.abs();
+                if px > 0.0 && pz > 0.0 {
+                    if px < pz {
+                        c.x += c.x.signum() * px;
+                        c.vx = -c.vx * CRATE_BOUNCE;
+                    } else {
+                        c.z += dz.signum() * pz;
+                        c.vz = -c.vz * CRATE_BOUNCE;
+                    }
                 }
             }
             if kick != (0.0, 0.0) {
@@ -1479,16 +1482,16 @@ impl ShipRenderer {
         // the wedge its edge masks are painted first and covered by it, rather
         // than painting through it.
 
-        // --- The mast's shadow, thrown across the deck by the key light --------
-        // The mast stands at the origin; each metre of it lands on the deck
-        // offset along the light's horizontal throw, so the shadow swings round
-        // the deck with the hour and the ship's heading, and stretches as the
-        // sun or moon sinks. A translucent strip drawn in segments, each kept
-        // inside the hull's footprint so it never paints on the sea; its
-        // darkness is the key light's share of a lit deck face, so it fades
-        // away under a gale's overcast or a bare night sky. Called once per
-        // deck level with that level's fore-aft range.
-        let mast_shadow = |z_lo: f32, z_hi: f32| {
+        // --- The masts' shadows, thrown across the deck by the key light -------
+        // Each metre of a mast lands on the deck offset along the light's
+        // horizontal throw, so the shadow swings round the deck with the hour
+        // and the ship's heading, and stretches as the sun or moon sinks. A
+        // translucent strip drawn in segments, each kept inside the hull's
+        // footprint so it never paints on the sea; its darkness is the key
+        // light's share of a lit deck face, so it fades away under a gale's
+        // overcast or a bare night sky. Called per mast and per deck level
+        // with that level's fore-aft range.
+        let mast_shadow = |mast: &hull_shape::Mast, z_lo: f32, z_hi: f32| {
             let (lx, ly, lz) = lume.l;
             if ly <= 0.05 {
                 return;
@@ -1498,7 +1501,7 @@ impl ShipRenderer {
             // not forever.
             let (tx, tz) = (-lx / ly, -lz / ly);
             let throw = (tx * tx + tz * tz).sqrt().max(1e-3);
-            let mast_h = MAST_TOP_M.min(30.0 / throw);
+            let mast_h = (MAST_TOP_M * mast.scale).min(30.0 / throw);
             let key_l = (lume.key.0 + lume.key.1 + lume.key.2) / 3.0;
             let amb_l = (lume.ambient.0 + lume.ambient.1 + lume.ambient.2) / 3.0;
             let key_part = (1.0 - AMBIENT_SHARE) * ly * key_l;
@@ -1511,8 +1514,8 @@ impl ShipRenderer {
                 let (t0, t1) = (i as f32 / segs as f32, (i + 1) as f32 / segs as f32);
                 // The pole tapers, so its shadow thins toward the tip.
                 let (w0, w1) = (0.17 * (1.0 - 0.45 * t0), 0.17 * (1.0 - 0.45 * t1));
-                let (x0, z0) = (t0 * mast_h * tx, t0 * mast_h * tz);
-                let (x1, z1) = (t1 * mast_h * tx, t1 * mast_h * tz);
+                let (x0, z0) = (t0 * mast_h * tx, mast.z + t0 * mast_h * tz);
+                let (x1, z1) = (t1 * mast_h * tx, mast.z + t1 * mast_h * tz);
                 let (zm, xm) = ((z0 + z1) * 0.5, (x0 + x1) * 0.5);
                 let (bm, _, _) = hull.station_at(zm);
                 if xm.abs() > bm - 0.1 || !(z_lo..z_hi).contains(&zm) {
@@ -1672,7 +1675,9 @@ impl ShipRenderer {
         // companion stairs over them (the flight is inboard of the walls). On a
         // single-decked hull this pass is the whole deck, stem to transom.
         if !aft {
-            mast_shadow(z_bow + 0.5, hull.qdeck_break.unwrap_or(z_stern));
+            for m in hull.masts {
+                mast_shadow(m, z_bow + 0.5, hull.qdeck_break.unwrap_or(z_stern));
+            }
             bulwarks(false);
             railing(false);
             if let Some(qdeck) = hull.qdeck_break {
@@ -1754,7 +1759,9 @@ impl ShipRenderer {
             for pair in hull.stations.windows(2).filter(|p| is_aft(p[0].0, p[0].2)) {
                 floor_pair(pair);
             }
-            mast_shadow(qdeck, z_stern - 2.5);
+            for m in hull.masts {
+                mast_shadow(m, qdeck, z_stern - 2.5);
+            }
             bulwarks(true);
             railing(true);
 
@@ -1888,8 +1895,9 @@ impl ShipRenderer {
         };
         let off = vec2(w * 0.5, h * 2.0); // fallback: parked far off-screen
         let foot = |side: f32, z: f32| rail_top(side, z).unwrap_or(off);
-        let sheet_foot = [foot(-1.0, hull.sheet_foot_z), foot(1.0, hull.sheet_foot_z)];
-        let brace_foot = [foot(-1.0, hull.brace_foot_z), foot(1.0, hull.brace_foot_z)];
+        let feet_at = |z: f32| [foot(-1.0, z), foot(1.0, z)];
+        let sheet_foot: Vec<_> = hull.masts.iter().map(|m| feet_at(m.sheet_foot_z)).collect();
+        let brace_foot: Vec<_> = hull.masts.iter().map(|m| feet_at(m.brace_foot_z)).collect();
         let bowsprit_tip = pt(0.0, hull.sprit_tip.0, hull.sprit_tip.1).unwrap_or(off);
 
         // Outer silhouette for rain occlusion: down each rail bow → stern (as
@@ -2574,15 +2582,11 @@ impl ShipRenderer {
         let brace = self.brace_angle;
         let (sb, cb) = brace.sin_cos();
 
-        // The cloth hangs a touch forward of the mast (away from the viewer) so
+        // The cloth hangs a touch forward of its mast (away from the viewer) so
         // the spar always parts it, never pokes through; on top of that sits
         // the belly.
         let stand_off = SAIL_STANDOFF_M;
-        let depth = -fill * BELLY_DEPTH * SAIL_W_M; // belly draft (m); negative = away
         let phase = t * FLAP_HZ * TAU;
-
-        let sail_top = YARD_H_M;
-        let sail_bot = YARD_H_M - SAIL_H_M * furl;
 
         // The belly's draft profiles. Down the height the cloth is laced flat
         // along the yard, bows to its deepest about two thirds down, and is
@@ -2592,203 +2596,230 @@ impl ShipRenderer {
         // between yard and foot rather than a bulge between its sides.
         let vert = |v: f32| (v * 0.75 * std::f32::consts::PI).sin();
         let horiz = |u: f32| 1.0 - 0.3 * (2.0 * u).powi(2);
-        // The out-of-plane offset of a cloth point at across-fraction `u`
-        // (-0.5..0.5) and down-fraction `v` (0 = the head, 1 = the foot).
-        // The belly and the flog both fade to nothing at the head, so the cloth
-        // stays pinned along the yard and swings out toward the free foot.
-        let panel_z = |u: f32, v: f32| -> f32 {
-            let belly = depth * vert(v) * horiz(u);
-            let wave = (phase - u * FLAP_WAVES * TAU).sin();
-            let flog = luff * FLAP_DEPTH * SAIL_W_M * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
-            -stand_off + belly + flog
-        };
-        // Rotate a panel edge (across `u`, out-of-plane `z0`) about the mast (the brace).
-        let braced = |u: f32, z0: f32| -> (f32, f32) {
-            let x0 = u * SAIL_W_M;
-            (x0 * cb + z0 * sb, -x0 * sb + z0 * cb)
-        };
 
-        // --- Forestay: the rope from the masthead down over the bow to the
-        // bowsprit tip (projected by draw_deck). The one piece of standing
-        // rigging forward of the canvas, so it draws *before* the sail and the
-        // cloth hides its upper run; only the lower reach to the bow shows.
-        {
-            let tip = deck.bowsprit_tip;
-            let head = project(0.0, MAST_TOP_M, 0.0);
-            let thick = (h * 0.0028).max(1.0);
-            draw_line(head.x, head.y, tip.x, tip.y, thick, rope_col);
-        }
-
-        // --- Sail cloth, a continuous mesh drawn back-to-front by depth --------
-        // A grid of cells: columns across the width, rows down the height. The
-        // rows are what let the vertical belly actually bow in projection; a
-        // single head-to-foot quad would interpolate the arc away. Adjacent
-        // cells share their seam vertices exactly, so the cloth reads as one
-        // watertight surface from any brace angle. Drawn *before* the spars so
-        // the mast and yard (at the rig's z≈0 plane, nearest the viewer) always
-        // part the cloth instead of the cloth painting over them.
-        let n = SAIL_PANELS;
-        let m = SAIL_ROWS;
-        let sail_y = |v: f32| sail_top + (sail_bot - sail_top) * v;
-        // Every grid vertex, computed once so the cells meeting at a vertex
-        // use the very same projected point.
-        let grid: Vec<Vec<Vec2>> = (0..=n)
-            .map(|j| {
-                let u = j as f32 / n as f32 - 0.5;
-                (0..=m)
-                    .map(|k| {
-                        let v = k as f32 / m as f32;
-                        let (x, z) = braced(u, panel_z(u, v));
-                        project(x, sail_y(v), z)
-                    })
-                    .collect()
-            })
-            .collect();
-        let cell_z = |i: usize, k: usize| {
-            let u = (i as f32 + 0.5) / n as f32 - 0.5;
-            let v = (k as f32 + 0.5) / m as f32;
-            braced(u, panel_z(u, v)).1
-        };
-        let mut order: Vec<(usize, usize)> =
-            (0..n).flat_map(|i| (0..m).map(move |k| (i, k))).collect();
-        // Farthest (most negative z at the cell's centre) first.
-        order.sort_by(|&a, &b| cell_z(a.0, a.1).partial_cmp(&cell_z(b.0, b.1)).unwrap());
-
-        for &(i, k) in &order {
-            let u = (i as f32 + 0.5) / n as f32 - 0.5;
-            let v = (k as f32 + 0.5) / m as f32;
-            let tl = grid[i][k];
-            let tr = grid[i + 1][k];
-            let br = grid[i + 1][k + 1];
-            let bl = grid[i][k + 1];
-            // The belly catches the light at its deepest reach and falls to
-            // shade where the cloth flattens back toward its pinned edges (the
-            // yard above, the sheeted foot, the leeches at the sides); a cell
-            // braced edge-on (small horizontal span) also dims.
-            let belly_lit = 1.0 - 0.28 * fill * (1.0 - vert(v) * horiz(u));
-            let face = ((tr.x - tl.x).abs() / (SAIL_W_M / n as f32 * s0 + 1.0)).min(1.0);
-            let shade = (0.55 + 0.45 * face) * belly_lit;
-            // Directional cloth: the braced plane's normal (the belly's edge
-            // falloff is already in `belly_lit`) against the key light, with a
-            // leak from the sky overhead. Canvas is translucent, so a back-lit
-            // sail still glows through at three-quarters strength rather than
-            // falling into flat shadow, and a small floor keeps a low sun from
-            // blacking the cloth out.
-            let toward = sb * lume.l.0 + cb * lume.l.2 + 0.35 * lume.l.1;
-            let through = if toward >= 0.0 { toward } else { -toward * 0.75 };
-            let cloth = 0.25 + 0.75 * through.min(1.0);
-            let col = lume.col(SAIL_CLOTH, cloth, shade);
-            draw_triangle(tl, tr, br, col);
-            draw_triangle(tl, br, bl, col);
-        }
-
-        // --- Running rigging: the ropes led aft to the railing. Each side
-        // carries a sheet from the clew (the foot's free corner) and, belayed
-        // further astern, a brace from the yardarm. The sheet's clew end rides
-        // the same brace/belly/luff transform as the cloth's own panels, so it
-        // leads wherever the sail swings and trembles with it when it flogs;
-        // the brace follows the rigid yard tip. Braced hard on the wind an
-        // attachment swings forward of the mast plane, farther from the eye
-        // than the spars; that rope must hide behind them, so each rope draws
-        // before or after the spars by its end's depth.
         let rope_thick = (h * 0.0028).max(1.0);
-        let ropes: Vec<(Vec<Vec2>, bool)> = {
-            let sag = h * 0.035; // the rope's own weight bows the run a little
-            let segs = 8;
-            // A rope from a rig point (already projected, with its pre-projection
-            // depth `z`) down to a belay point on the hull's railing (projected
-            // by draw_deck, so the feet ride the woodwork exactly).
-            let lead = |top: Vec2, z: f32, foot: Vec2| -> (Vec<Vec2>, bool) {
-                let run: Vec<Vec2> = (0..=segs)
-                    .map(|i| {
-                        let t = i as f32 / segs as f32;
-                        let mut p = top.lerp(foot, t);
-                        p.y += sag * (t * std::f32::consts::PI).sin();
-                        p
-                    })
-                    .collect();
-                (run, z < 0.0)
-            };
-            let mut ropes = Vec::new();
-            for (si, &side) in [-1.0f32, 1.0].iter().enumerate() {
-                // The sheet: from the sail mesh's outermost seam at the foot.
-                let u = side * 0.5;
-                let (kx, kz) = braced(u, panel_z(u, 1.0));
-                ropes.push(lead(project(kx, sail_bot, kz), kz, deck.sheet_foot[si]));
-                // The brace: from the yard's tip (matching the spar's own span).
-                let (ax, az) = braced(side * 0.54, -stand_off);
-                ropes.push(lead(project(ax, sail_top, az), az, deck.brace_foot[si]));
-                // The leech line: strung corner to corner, from the sail's head
-                // at the yard straight down to the clew, the tackle the furl
-                // hauls on. It spans free of the cloth (no belly), with just a
-                // little slack of its own that shrinks as the furl draws the
-                // corners together.
-                let (hx, hz) = braced(u, panel_z(u, 0.0));
-                let head = project(hx, sail_top, hz);
-                let clew = project(kx, sail_bot, kz);
-                let slack = head.distance(clew) * 0.05;
-                let leech: Vec<Vec2> = (0..=segs)
-                    .map(|i| {
-                        let t = i as f32 / segs as f32;
-                        let mut p = head.lerp(clew, t);
-                        p.y += slack * (t * std::f32::consts::PI).sin();
-                        p
-                    })
-                    .collect();
-                ropes.push((leech, kz < 0.0));
-            }
-            ropes
-        };
         let draw_rope = |pts: &[Vec2]| {
             for w2 in pts.windows(2) {
                 draw_line(w2[0].x, w2[0].y, w2[1].x, w2[1].y, rope_thick, rope_col);
             }
         };
-        // The ropes whose rig end lies forward of the mast plane, hidden by the spars.
-        for (pts, behind) in &ropes {
-            if *behind {
-                draw_rope(pts);
+
+        // --- The masts, each with its own course, in table order: bow to
+        // stern, which from the helm's aft eye is far to near, so a forward
+        // rig is rightly painted over by the main's. Every dimension is the
+        // shared rig constant scaled by the mast's cut; the trim (set, belly,
+        // flog, brace) is one state the whole rig shares.
+        let mut prev_head: Option<Vec2> = None;
+        for (mi, mast) in hull.masts.iter().enumerate() {
+            // The trunk stands on its local deck (a foremast rides the bow's sheer).
+            let foot_y = hull.station_at(mast.z).1;
+            let sail_w = SAIL_W_M * mast.scale;
+            let mast_top = foot_y + MAST_TOP_M * mast.scale;
+            let sail_top = foot_y + YARD_H_M * mast.scale;
+            let sail_bot = sail_top - SAIL_H_M * mast.scale * furl;
+            let depth = -fill * BELLY_DEPTH * sail_w; // belly draft (m); negative = away
+            // px per metre at this mast's plane, for the cloth shading's
+            // expected cell span.
+            let s0 = w * CAM_F / (hull.cam_aft - mast.z);
+
+            // The out-of-plane offset of a cloth point at across-fraction `u`
+            // (-0.5..0.5) and down-fraction `v` (0 = the head, 1 = the foot).
+            // The belly and the flog both fade to nothing at the head, so the cloth
+            // stays pinned along the yard and swings out toward the free foot.
+            let panel_z = |u: f32, v: f32| -> f32 {
+                let belly = depth * vert(v) * horiz(u);
+                let wave = (phase - u * FLAP_WAVES * TAU).sin();
+                let flog = luff * FLAP_DEPTH * sail_w * wave * (0.3 + u.abs()) * (0.25 + 0.75 * v);
+                -stand_off + belly + flog
+            };
+            // Rotate a panel edge (across `u`, out-of-plane `z0`) about the mast
+            // (the brace). The result stays rig-local (z relative to the mast's
+            // plane, for the depth tests); `at` shifts it onto the hull.
+            let braced = |u: f32, z0: f32| -> (f32, f32) {
+                let x0 = u * sail_w;
+                (x0 * cb + z0 * sb, -x0 * sb + z0 * cb)
+            };
+            let at = |x: f32, y: f32, zr: f32| project(x, y, mast.z + zr);
+
+            // --- Stays: the foremost masthead stays down over the bow to the
+            // bowsprit tip (projected by draw_deck); each mast abaft leads a
+            // spring stay forward to the head before it. Standing rigging
+            // forward of this canvas, so it draws *before* the sail and the
+            // cloth hides its upper run.
+            {
+                let head = at(0.0, mast_top, 0.0);
+                let fwd = if mi == 0 { deck.bowsprit_tip } else { prev_head.unwrap() };
+                draw_line(head.x, head.y, fwd.x, fwd.y, rope_thick, rope_col);
+                prev_head = Some(head);
             }
-        }
 
-        // --- Yard: a round spar along the braced across-axis at the sail's head,
-        // slung thickest at its middle and tapering out to the yardarms (two
-        // frustums of the shared spar loft). Drawn over the panels so it
-        // crosses ahead of the cloth it carries; its facets take the light by
-        // their true normals, so the lit grain follows the brace of its own
-        // accord.
-        {
-            let (lx, lz) = braced(-0.54, -stand_off);
-            let (rx, rz) = braced(0.54, -stand_off);
-            let (mx, mz) = braced(0.0, -stand_off);
-            let tip_l = (lx, sail_top, lz);
-            let slings = (mx, sail_top, mz);
-            let tip_r = (rx, sail_top, rz);
-            draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, tip_l, slings, YARD_TIP_R, YARD_MID_R);
-            draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, slings, tip_r, YARD_MID_R, YARD_TIP_R);
-        }
+            // --- Sail cloth, a continuous mesh drawn back-to-front by depth ----
+            // A grid of cells: columns across the width, rows down the height. The
+            // rows are what let the vertical belly actually bow in projection; a
+            // single head-to-foot quad would interpolate the arc away. Adjacent
+            // cells share their seam vertices exactly, so the cloth reads as one
+            // watertight surface from any brace angle. Drawn *before* the spars so
+            // the mast and yard (at the rig's z≈0 plane, nearest the viewer) always
+            // part the cloth instead of the cloth painting over them.
+            let n = SAIL_PANELS;
+            let m = SAIL_ROWS;
+            let sail_y = |v: f32| sail_top + (sail_bot - sail_top) * v;
+            // Every grid vertex, computed once so the cells meeting at a vertex
+            // use the very same projected point.
+            let grid: Vec<Vec<Vec2>> = (0..=n)
+                .map(|j| {
+                    let u = j as f32 / n as f32 - 0.5;
+                    (0..=m)
+                        .map(|k| {
+                            let v = k as f32 / m as f32;
+                            let (x, z) = braced(u, panel_z(u, v));
+                            at(x, sail_y(v), z)
+                        })
+                        .collect()
+                })
+                .collect();
+            let cell_z = |i: usize, k: usize| {
+                let u = (i as f32 + 0.5) / n as f32 - 0.5;
+                let v = (k as f32 + 0.5) / m as f32;
+                braced(u, panel_z(u, v)).1
+            };
+            let mut order: Vec<(usize, usize)> =
+                (0..n).flat_map(|i| (0..m).map(move |k| (i, k))).collect();
+            // Farthest (most negative z at the cell's centre) first.
+            order.sort_by(|&a, &b| cell_z(a.0, a.1).partial_cmp(&cell_z(b.0, b.1)).unwrap());
 
-        // --- Mast: a tapered round spar, its facets lit by their true normals
-        // so the light rolls around the timber with the hour. Drawn last of
-        // the rig, at z = 0 (its nearest plane), so it stands in front of the
-        // sail and yard; the deck's aft pass then covers its foot with the
-        // crates and rails standing nearer the eye still.
-        draw_spar(
-            &proj,
-            lume,
-            (hull.cam_up, hull.cam_aft),
-            SPAR,
-            (0.0, 0.0, 0.0),
-            (0.0, MAST_TOP_M, 0.0),
-            MAST_HW,
-            MAST_HEAD_R,
-        );
+            for &(i, k) in &order {
+                let u = (i as f32 + 0.5) / n as f32 - 0.5;
+                let v = (k as f32 + 0.5) / m as f32;
+                let tl = grid[i][k];
+                let tr = grid[i + 1][k];
+                let br = grid[i + 1][k + 1];
+                let bl = grid[i][k + 1];
+                // The belly catches the light at its deepest reach and falls to
+                // shade where the cloth flattens back toward its pinned edges (the
+                // yard above, the sheeted foot, the leeches at the sides); a cell
+                // braced edge-on (small horizontal span) also dims.
+                let belly_lit = 1.0 - 0.28 * fill * (1.0 - vert(v) * horiz(u));
+                let face = ((tr.x - tl.x).abs() / (sail_w / n as f32 * s0 + 1.0)).min(1.0);
+                let shade = (0.55 + 0.45 * face) * belly_lit;
+                // Directional cloth: the braced plane's normal (the belly's edge
+                // falloff is already in `belly_lit`) against the key light, with a
+                // leak from the sky overhead. Canvas is translucent, so a back-lit
+                // sail still glows through at three-quarters strength rather than
+                // falling into flat shadow, and a small floor keeps a low sun from
+                // blacking the cloth out.
+                let toward = sb * lume.l.0 + cb * lume.l.2 + 0.35 * lume.l.1;
+                let through = if toward >= 0.0 { toward } else { -toward * 0.75 };
+                let cloth = 0.25 + 0.75 * through.min(1.0);
+                let col = lume.col(SAIL_CLOTH, cloth, shade);
+                draw_triangle(tl, tr, br, col);
+                draw_triangle(tl, br, bl, col);
+            }
 
-        // The remaining ropes, their rig ends riding abaft the mast plane and
-        // so nearer the eye, drawn over the spars as they lead toward the rail.
-        for (pts, behind) in &ropes {
-            if !*behind {
-                draw_rope(pts);
+            // --- Running rigging: the ropes led aft to the railing. Each side
+            // carries a sheet from the clew (the foot's free corner) and, belayed
+            // further astern, a brace from the yardarm; both land at this mast's
+            // own belay stations. The sheet's clew end rides the same
+            // brace/belly/luff transform as the cloth's own panels, so it
+            // leads wherever the sail swings and trembles with it when it flogs;
+            // the brace follows the rigid yard tip. Braced hard on the wind an
+            // attachment swings forward of the mast plane, farther from the eye
+            // than the spars; that rope must hide behind them, so each rope draws
+            // before or after the spars by its end's depth.
+            let ropes: Vec<(Vec<Vec2>, bool)> = {
+                let sag = h * 0.035; // the rope's own weight bows the run a little
+                let segs = 8;
+                // A rope from a rig point (already projected, with its pre-projection
+                // depth `z` relative to the mast plane) down to a belay point on the
+                // hull's railing (projected by draw_deck, so the feet ride the
+                // woodwork exactly).
+                let lead = |top: Vec2, z: f32, foot: Vec2| -> (Vec<Vec2>, bool) {
+                    let run: Vec<Vec2> = (0..=segs)
+                        .map(|i| {
+                            let t = i as f32 / segs as f32;
+                            let mut p = top.lerp(foot, t);
+                            p.y += sag * (t * std::f32::consts::PI).sin();
+                            p
+                        })
+                        .collect();
+                    (run, z < 0.0)
+                };
+                let mut ropes = Vec::new();
+                for (si, &side) in [-1.0f32, 1.0].iter().enumerate() {
+                    // The sheet: from the sail mesh's outermost seam at the foot.
+                    let u = side * 0.5;
+                    let (kx, kz) = braced(u, panel_z(u, 1.0));
+                    ropes.push(lead(at(kx, sail_bot, kz), kz, deck.sheet_foot[mi][si]));
+                    // The brace: from the yard's tip (matching the spar's own span).
+                    let (ax, az) = braced(side * 0.54, -stand_off);
+                    ropes.push(lead(at(ax, sail_top, az), az, deck.brace_foot[mi][si]));
+                    // The leech line: strung corner to corner, from the sail's head
+                    // at the yard straight down to the clew, the tackle the furl
+                    // hauls on. It spans free of the cloth (no belly), with just a
+                    // little slack of its own that shrinks as the furl draws the
+                    // corners together.
+                    let (hx, hz) = braced(u, panel_z(u, 0.0));
+                    let head = at(hx, sail_top, hz);
+                    let clew = at(kx, sail_bot, kz);
+                    let slack = head.distance(clew) * 0.05;
+                    let leech: Vec<Vec2> = (0..=segs)
+                        .map(|i| {
+                            let t = i as f32 / segs as f32;
+                            let mut p = head.lerp(clew, t);
+                            p.y += slack * (t * std::f32::consts::PI).sin();
+                            p
+                        })
+                        .collect();
+                    ropes.push((leech, kz < 0.0));
+                }
+                ropes
+            };
+            // The ropes whose rig end lies forward of the mast plane, hidden by the spars.
+            for (pts, behind) in &ropes {
+                if *behind {
+                    draw_rope(pts);
+                }
+            }
+
+            // --- Yard: a round spar along the braced across-axis at the sail's head,
+            // slung thickest at its middle and tapering out to the yardarms (two
+            // frustums of the shared spar loft). Drawn over the panels so it
+            // crosses ahead of the cloth it carries; its facets take the light by
+            // their true normals, so the lit grain follows the brace of its own
+            // accord.
+            {
+                let (lx, lz) = braced(-0.54, -stand_off);
+                let (rx, rz) = braced(0.54, -stand_off);
+                let (mx, mz) = braced(0.0, -stand_off);
+                let tip_l = (lx, sail_top, mast.z + lz);
+                let slings = (mx, sail_top, mast.z + mz);
+                let tip_r = (rx, sail_top, mast.z + rz);
+                draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, tip_l, slings, YARD_TIP_R, YARD_MID_R);
+                draw_spar(&proj, lume, (hull.cam_up, hull.cam_aft), SPAR, slings, tip_r, YARD_MID_R, YARD_TIP_R);
+            }
+
+            // --- Mast: a tapered round spar, its facets lit by their true normals
+            // so the light rolls around the timber with the hour. Drawn last of
+            // its rig, at its nearest plane, so it stands in front of its
+            // sail and yard; the deck's aft pass then covers the main's foot with
+            // the crates and rails standing nearer the eye still.
+            draw_spar(
+                &proj,
+                lume,
+                (hull.cam_up, hull.cam_aft),
+                SPAR,
+                (0.0, foot_y - 0.1, mast.z),
+                (0.0, mast_top, mast.z),
+                MAST_HW,
+                MAST_HEAD_R,
+            );
+
+            // The remaining ropes, their rig ends riding abaft the mast plane and
+            // so nearer the eye, drawn over the spars as they lead toward the rail.
+            for (pts, behind) in &ropes {
+                if !*behind {
+                    draw_rope(pts);
+                }
             }
         }
     }

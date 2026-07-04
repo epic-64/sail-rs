@@ -15,9 +15,24 @@
 //! the [`GALLEON`] (the high-charged flagship). Pick by tier with
 //! [`for_level`].
 
+/// One mast of a hull's rig: where it stands, how large its course is cut,
+/// and where its running rigging belays. The renderers loft every spar and
+/// cloth dimension from their shared rig constants (`ship_render`'s
+/// `MAST_TOP_M` and friends) multiplied by `scale`, so a hull's masts differ
+/// in size without touching the rig code.
+pub struct Mast {
+    /// Fore-aft station of the mast foot (the trunk stands on the local deck).
+    pub z: f32,
+    /// Rig scale on the shared dimensions: mast height, yard span, cloth.
+    pub scale: f32,
+    /// Where this mast's sheets and braces belay on the rails (fore-aft z).
+    pub sheet_foot_z: f32,
+    pub brace_foot_z: f32,
+}
+
 /// One hull's geometry, shared by the renderers and the buoyancy sampling.
 /// All lengths are metres in the loft frame: +x starboard, +y up from the
-/// waist deck, +z aft, origin on the deck at the mast.
+/// waist deck, +z aft, origin on the deck at the main mast.
 pub struct HullShape {
     /// Lofting stations bow to stern: (z aft of the mast, half-beam, deck
     /// height, bulwark height). This table *is* the ship's shape; everything
@@ -45,9 +60,10 @@ pub struct HullShape {
     /// Athwartship stowage columns for the cargo slots, inside the bulwarks
     /// (and clear of the companion stairs where there is a quarterdeck).
     pub cargo_cols: &'static [f32],
-    /// Where the sheets and braces belay on the rails (fore-aft z).
-    pub sheet_foot_z: f32,
-    pub brace_foot_z: f32,
+    /// The rig, bow to stern; the aftmost mast is the main (it flies the
+    /// pennant, and its rig is cut at scale 1.0). The renderers draw the
+    /// masts in table order, which from the helm's aft eye is far to near.
+    pub masts: &'static [Mast],
     /// The bowsprit's run, (height above the waist deck, z aft) at heel and tip.
     pub sprit_base: (f32, f32),
     pub sprit_tip: (f32, f32),
@@ -140,8 +156,7 @@ pub static SLOOP: HullShape = HullShape {
     cargo_z_min: -4.6,
     cargo_z_max: 1.4, // clear water kept before the wheel
     cargo_cols: &[-1.5, -0.5, 0.5, 1.5],
-    sheet_foot_z: 2.0,
-    brace_foot_z: 4.5,
+    masts: &[Mast { z: 0.0, scale: 1.0, sheet_foot_z: 2.0, brace_foot_z: 4.5 }],
     sprit_base: (1.0, -9.7),
     sprit_tip: (2.0, -12.5),
     freeboard: 0.95,
@@ -197,8 +212,7 @@ pub static BRIG: HullShape = HullShape {
     cargo_z_min: -6.5,
     cargo_z_max: 5.0, // the quarterdeck riser
     cargo_cols: &[-2.4, -1.2, 0.0, 1.2], // clear of the stairs at x 2.0
-    sheet_foot_z: 3.5,
-    brace_foot_z: 6.5,
+    masts: &[Mast { z: 0.0, scale: 1.0, sheet_foot_z: 3.5, brace_foot_z: 6.5 }],
     sprit_base: (1.5, -14.6),
     sprit_tip: (2.7, -18.2),
     freeboard: 1.3,
@@ -226,13 +240,14 @@ pub static BRIG: HullShape = HullShape {
     ],
 };
 
-/// Tiers 2 and up: the galleon, the yard's flagship. A third again the brig's
-/// length with a beam to match, the deepest freeboard afloat, and a taller
-/// quarterdeck set further aft (the classic high stern, with the counter
-/// carried out over the transom): from her wheel you look down into a long
-/// waist that stows a fifth cargo column. The longest probed waterline in the
-/// yard plus the slowest sway response make her ride the same seas the other
-/// hulls answer: stately, leaning into the swell rather than snapping to it.
+/// Tiers 2 and up: the galleon, the yard's flagship and its only two-master.
+/// A third again the brig's length with a beam to match, the deepest
+/// freeboard afloat, and a taller quarterdeck set further aft (the classic
+/// high stern, with the counter carried out over the transom): from her wheel
+/// you look down into a long waist that stows a fifth cargo column, past a
+/// smaller foremast riding the bow. The longest probed waterline in the yard
+/// plus the slowest sway response make her ride the same seas the other hulls
+/// answer: stately, leaning into the swell rather than snapping to it.
 pub static GALLEON: HullShape = HullShape {
     stations: &[
         (-20.0, 0.05, 2.00, 0.55), // stem tip
@@ -258,8 +273,12 @@ pub static GALLEON: HullShape = HullShape {
     cargo_z_min: -8.0,
     cargo_z_max: 7.0, // the quarterdeck riser
     cargo_cols: &[-3.2, -2.0, -0.8, 0.4, 1.6], // the wider beam buys a fifth column
-    sheet_foot_z: 4.5,
-    brace_foot_z: 9.0,
+    // Two-masted: a smaller foremast on the rising foredeck (clear forward of
+    // the cargo run), the full-rigged main at the origin.
+    masts: &[
+        Mast { z: -9.5, scale: 0.78, sheet_foot_z: -4.8, brace_foot_z: -2.5 },
+        Mast { z: 0.0, scale: 1.0, sheet_foot_z: 4.5, brace_foot_z: 9.0 },
+    ],
     sprit_base: (1.95, -19.4),
     sprit_tip: (3.5, -24.0),
     freeboard: 1.75,
@@ -345,6 +364,22 @@ mod tests {
             assert!(hull.cargo_z_min < hull.cargo_z_max);
             for &c in hull.cargo_cols {
                 assert!(c.abs() < hull.half_beam(), "{name}: cargo column outboard");
+            }
+            // The rig: masts bow to stern on the loft, the aftmost the
+            // full-scale main, every belay point on the hull.
+            assert!(!hull.masts.is_empty(), "{name}: no masts");
+            let main = hull.masts.last().unwrap();
+            assert_eq!(main.scale, 1.0, "{name}: the main isn't full scale");
+            for pair in hull.masts.windows(2) {
+                assert!(pair[0].z < pair[1].z, "{name}: masts out of bow-to-stern order");
+            }
+            for m in hull.masts {
+                for z in [m.z, m.sheet_foot_z, m.brace_foot_z] {
+                    assert!(
+                        z > hull.z_bow() && z < hull.z_stern(),
+                        "{name}: mast or belay off the loft"
+                    );
+                }
             }
         }
     }
