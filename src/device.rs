@@ -28,9 +28,15 @@ pub fn update(key_pressed: bool, pad_pressed: bool) {
     }
 }
 
-/// True when the last keyboard/gamepad input came from the pad — on-screen
-/// hints should show controller glyphs instead of key letters.
+/// True when the last keyboard/gamepad input came from the pad; on-screen
+/// hints should show controller glyphs instead of key letters. `SAIL_PAD=1`
+/// (native env var) forces gamepad hints on for desktop testing without a
+/// controller, mirroring `SAIL_TOUCH` in `touch.rs`.
 pub fn gamepad() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("SAIL_PAD").is_ok_and(|v| v == "1") {
+        return true;
+    }
     GAMEPAD.with(|c| c.get())
 }
 
