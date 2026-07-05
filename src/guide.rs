@@ -222,7 +222,7 @@ pub fn render(page: usize, w: f32, h: f32) {
         dx += gap;
     }
     draw_text("\u{25C4} \u{25BA} turn the page", col_x, foot_y, fs_small() as f32, dim_ink());
-    let close = "G  close";
+    let close = crate::device::hint("G  close", "B  close");
     let cd = measure_text(close, None, fs_small(), 1.0);
     draw_text(close, x0 + pw - pad - cd.width, foot_y, fs_small() as f32, dim_ink());
 }

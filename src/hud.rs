@@ -12,17 +12,23 @@ use crate::ui::{self, px};
 
 /// Faint keybind reminders in the bottom-left while sailing (HUD shown). Only
 /// the ways in and out of the reference screens: the full control list now lives
-/// in the Guide (G), so the helm stays uncluttered. Shown only in keyboard mode
-/// (the touch HUD carries its own glyphs).
+/// in the Guide (G), so the helm stays uncluttered. Shown only in keyboard/pad
+/// mode (the touch HUD carries its own glyphs). Guide and Hide HUD have no
+/// gamepad binding, so the pad's list only names what a pad can actually do
+/// (see `crate::pad`); the keyboard keeps the full trio.
 pub fn keybind_hints(h: f32) {
-    draw_hint_stack(
-        &[
-            ("L", "Captain's Log"),
-            ("G", "Guide"),
-            ("H", "Hide HUD"),
-        ],
-        h,
-    );
+    if crate::device::gamepad() {
+        draw_hint_stack(&[("Y", "Captain's Log")], h);
+    } else {
+        draw_hint_stack(
+            &[
+                ("L", "Captain's Log"),
+                ("G", "Guide"),
+                ("H", "Hide HUD"),
+            ],
+            h,
+        );
+    }
 }
 
 /// The lone "show HUD" reminder, drawn briefly after a keypress while the HUD is

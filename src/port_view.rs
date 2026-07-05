@@ -913,7 +913,10 @@ impl PortScreen {
 
         // Footer hint.
         draw_text(
-            "Arrows move · Tab switches board · Enter trades · Esc backs out",
+            crate::device::hint(
+                "Arrows move · Tab switches board · Enter trades · Esc backs out",
+                "D-pad move · LB/RB switch board · A trades · B backs out",
+            ),
             left,
             y0 + ph - pad(),
             fs_small() as f32,

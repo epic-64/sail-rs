@@ -9,6 +9,7 @@ mod captains_log;
 mod celestial;
 mod checklist;
 mod clouds;
+mod device;
 mod dig_site;
 mod dig_view;
 mod flotsam;
@@ -759,11 +760,17 @@ async fn run_game(
         let h = screen_height();
         let horizon = h * 0.54;
 
+        // Pump the gamepad first: it emits the same verbs the keyboard does, and
+        // the touch layer below needs to know whether it just fired a button so a
+        // controller press hides the mobile overlay the same way a keypress does.
+        pad.update();
         // Refresh the touch pointers for this frame, then lay out the sailing HUD
         // (the same rects the draw below uses). Done before any input is read.
-        touch.update(dt);
-        // Pump the gamepad the same way: it emits the same verbs the keyboard does.
-        pad.update();
+        touch.update(dt, pad.any_pressed());
+        // Remember whether the keyboard or the pad was the last device to press
+        // something, so on-screen keybind hints (`hud.rs` and the menu footers)
+        // show the right glyphs. Independent of the touch overlay above.
+        device::update(!get_keys_pressed().is_empty(), pad.any_pressed());
         // Which active-ware HUD buttons to lay out: one per owned active ware, in
         // helm-slot order (see `crate::tavern`).
         let item_owned: [bool; 3] =
