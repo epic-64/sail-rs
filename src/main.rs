@@ -12,6 +12,7 @@ mod clouds;
 mod device;
 mod dig_site;
 mod dig_view;
+mod feature_models;
 mod flotsam;
 mod flotsam_render;
 mod font;
