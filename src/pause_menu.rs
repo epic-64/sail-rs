@@ -480,11 +480,21 @@ impl PauseMenu {
             ry += row_h;
         }
 
-        draw_text(
-            crate::device::hint("↑/↓ move · Enter select · Esc resume", "↑/↓ move · A select · B resume"),
+        let select_key = crate::device::hint("Enter", "A");
+        let resume_key = crate::device::hint("Esc", "B");
+        let fs = px(14.0).round() as u16;
+        crate::hint::draw(
+            &[
+                crate::hint::key("\u{2191}/\u{2193}"),
+                crate::hint::text(" move \u{b7} "),
+                crate::hint::key(select_key),
+                crate::hint::text(" select \u{b7} "),
+                crate::hint::key(resume_key),
+                crate::hint::text(" resume"),
+            ],
             cx,
             y0 + px(132.0) + row_h * MAIN_ITEMS.len() as f32 + px(8.0),
-            px(14.0),
+            fs,
             dim_ink(),
         );
     }
@@ -588,14 +598,23 @@ impl PauseMenu {
         }
         draw_text("Back", cx, back_y, px(22.0), ink());
 
-        draw_text(
-            crate::device::hint(
-                "↑/↓ move · ◄/► or Enter adjust · Esc back",
-                "↑/↓ move · ◄/► or A adjust · B back",
-            ),
+        let adjust_key = crate::device::hint("Enter", "A");
+        let back_key = crate::device::hint("Esc", "B");
+        let fs = px(14.0).round() as u16;
+        crate::hint::draw(
+            &[
+                crate::hint::key("\u{2191}/\u{2193}"),
+                crate::hint::text(" move \u{b7} "),
+                crate::hint::key("\u{25C4}/\u{25BA}"),
+                crate::hint::text(" or "),
+                crate::hint::key(adjust_key),
+                crate::hint::text(" adjust \u{b7} "),
+                crate::hint::key(back_key),
+                crate::hint::text(" back"),
+            ],
             cx,
             y0 + ph - px(20.0),
-            px(14.0),
+            fs,
             dim_ink(),
         );
     }

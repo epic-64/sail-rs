@@ -912,14 +912,25 @@ impl PortScreen {
         }
 
         // Footer hint.
-        draw_text(
-            crate::device::hint(
-                "Arrows move · Tab switches board · Enter trades · Esc backs out",
-                "D-pad move · LB/RB switch board · A trades · B backs out",
-            ),
+        let move_key = crate::device::hint("Arrows", "D-pad");
+        let switch_key = crate::device::hint("Tab", "LB/RB");
+        let switch_verb = crate::device::hint(" switches board \u{b7} ", " switch board \u{b7} ");
+        let trade_key = crate::device::hint("Enter", "A");
+        let back_key = crate::device::hint("Esc", "B");
+        crate::hint::draw(
+            &[
+                crate::hint::key(move_key),
+                crate::hint::text(" move \u{b7} "),
+                crate::hint::key(switch_key),
+                crate::hint::text(switch_verb),
+                crate::hint::key(trade_key),
+                crate::hint::text(" trades \u{b7} "),
+                crate::hint::key(back_key),
+                crate::hint::text(" backs out"),
+            ],
             left,
             y0 + ph - pad(),
-            fs_small() as f32,
+            fs_small(),
             dim_ink(),
         );
     }
@@ -1609,14 +1620,15 @@ pub fn render_prompt(
         return;
     }
     let name = &world.islands[id as usize].name;
-    let msg = if sail_furled {
+    if sail_furled {
         let key = crate::device::hint("Space", "X");
-        format!("Press  {key}  to dock at {name}")
+        let tail = format!("  to dock at {name}");
+        crate::ui::sea_prompt(&[crate::hint::text("Press  "), crate::hint::key(key), crate::hint::text(&tail)], w, h);
     } else {
         let key = crate::device::hint("S", "B");
-        format!("Furl sail ({key}) to enter {name}")
-    };
-    crate::ui::sea_prompt(&msg, w, h);
+        let tail = format!(") to enter {name}");
+        crate::ui::sea_prompt(&[crate::hint::text("Furl sail ("), crate::hint::key(key), crate::hint::text(&tail)], w, h);
+    }
 }
 
 // --- Small drawing helpers ----------------------------------------------------

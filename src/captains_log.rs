@@ -326,17 +326,53 @@ pub fn render(
         dx += gap;
     }
     // Left footer: paging, plus the cursor's keys on spreads that take one.
-    let nav = match kind {
+    let nav_x = x0 + pad;
+    match kind {
         Spread::VesselHold => {
-            crate::device::hint("\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use", "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} A  use")
+            let use_key = crate::device::hint("Enter", "A");
+            crate::hint::draw(
+                &[
+                    crate::hint::key("\u{25C4} \u{25BA}"),
+                    crate::hint::text(" pages   "),
+                    crate::hint::key("\u{25B2} \u{25BC}"),
+                    crate::hint::text(" "),
+                    crate::hint::key(use_key),
+                    crate::hint::text("  use"),
+                ],
+                nav_x,
+                foot_y,
+                fs_small(),
+                dim_ink(),
+            );
         }
-        Spread::Trinkets => "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} choose a trinket",
-        _ => "\u{25C4} \u{25BA} turn the page",
-    };
-    draw_text(nav, x0 + pad, foot_y, fs_small() as f32, dim_ink());
-    let close = crate::device::hint("L  close", "B  close");
-    let cd = measure_text(close, None, fs_small(), 1.0);
-    draw_text(close, x0 + pw - pad - cd.width, foot_y, fs_small() as f32, dim_ink());
+        Spread::Trinkets => {
+            crate::hint::draw(
+                &[
+                    crate::hint::key("\u{25C4} \u{25BA}"),
+                    crate::hint::text(" pages   "),
+                    crate::hint::key("\u{25B2} \u{25BC}"),
+                    crate::hint::text(" choose a trinket"),
+                ],
+                nav_x,
+                foot_y,
+                fs_small(),
+                dim_ink(),
+            );
+        }
+        _ => {
+            crate::hint::draw(
+                &[crate::hint::key("\u{25C4} \u{25BA}"), crate::hint::text(" turn the page")],
+                nav_x,
+                foot_y,
+                fs_small(),
+                dim_ink(),
+            );
+        }
+    }
+    let close_key = crate::device::hint("L", "B");
+    let close_parts = [crate::hint::key(close_key), crate::hint::text("  close")];
+    let cw = crate::hint::measure(&close_parts, fs_small());
+    crate::hint::draw(&close_parts, x0 + pw - pad - cw, foot_y, fs_small(), dim_ink());
 }
 
 /// **Course & Conditions** — the live readouts (the opening left page). Carries a

@@ -18,6 +18,7 @@ mod font;
 mod game_state;
 mod geometry;
 mod guide;
+mod hint;
 mod hud;
 mod hull_shape;
 mod isle_features;
@@ -59,6 +60,7 @@ use macroquad::prelude::*;
 
 use game_state::{hull, upgrades, GameState, Market};
 use geometry::{clamp, compass, wrap_angle, Vec2};
+use dig_site::DigSite;
 use dig_view::Shore;
 use port_view::Harbor;
 use ocean_renderer::OceanRenderer;
@@ -456,10 +458,11 @@ async fn run_game(
     let mut gs = GameState::start();
     let mut harbor = Harbor::new();
     let mut shore = Shore::new();
-    // Isle fields worked today, by (island id, day), so a field can't be re-dug
-    // for fresh gold until it reshuffles at the next sunrise. Session-scoped for
-    // now (a save/reload forgets it).
-    let mut dug_sites: std::collections::HashSet<(i32, u32)> = std::collections::HashSet::new();
+    // Each isle field's dig progress, by (island id, day), so leaving mid-dig and
+    // sailing back resumes the same tiles instead of reshuffling a fresh field
+    // for free gold; it settles at the next sunrise once `day` moves on.
+    // Session-scoped for now (a save/reload forgets it).
+    let mut saved_sites: std::collections::HashMap<(i32, u32), DigSite> = std::collections::HashMap::new();
     // The pause menu (`pause`, Esc in open water) and the audio bed (`sounds`) are
     // owned by `main` and handed in so they survive a change of world.
 
@@ -982,7 +985,9 @@ async fn run_game(
                 .map(|s| s.handle_input(&mut gs, sounds, &touch, &pad))
                 .unwrap_or(true);
             if put_to_sea {
-                shore.cast_off();
+                if let Some((id, site)) = shore.cast_off() {
+                    saved_sites.insert((id, gs.stats.days_passed), site);
+                }
             }
         } else {
             // Sails are set in discrete notches (W deploys, S furls): set once, the
@@ -1202,8 +1207,10 @@ async fn run_game(
             }
 
             // Offer the port the bow is pointed at; tie up on Space, sails furled.
-            // A portless isle instead offers to be landed on for a treasure dig,
-            // but only when no port is on offer here and its field is unworked today.
+            // A portless isle instead offers to be landed on for a treasure dig;
+            // the prompt shows for any close, facing bow, whether or not today's
+            // field still has anything left in it (same as a port's docking
+            // prompt, which doesn't care whether there's anything to trade).
             harbor.update_dockable(&world, &kin);
             let want_ashore =
                 (is_key_pressed(KeyCode::Space) || pad.dock() || touch.tapped_in(hud.dock)) && sail_mode == 0;
@@ -1213,16 +1220,13 @@ async fn run_game(
             } else {
                 let day = gs.stats.days_passed;
                 shore.update_landable(&world, &kin, harbor.dockable.is_some());
-                if let Some(id) = shore.landable {
-                    if dug_sites.contains(&(id, day)) {
-                        shore.landable = None;
-                    }
-                }
                 if want_ashore {
-                    if let Some(id) = shore.try_land(&world, day) {
-                        dug_sites.insert((id, day));
-                        log_open = false;
-                        guide_open = false;
+                    if let Some(id) = shore.landable {
+                        let resume = saved_sites.remove(&(id, day));
+                        if shore.try_land(&world, day, resume).is_some() {
+                            log_open = false;
+                            guide_open = false;
+                        }
                     }
                 }
             }

@@ -58,8 +58,10 @@ impl Shore {
     }
 
     /// Recompute the landable isle for this frame. `blocked` suppresses the offer
-    /// (a port is dockable here, or this isle's field is already worked today), so
-    /// the shore prompt never fights the docking prompt.
+    /// (a port is dockable here), so the shore prompt never fights the docking
+    /// prompt. Unlike a spent field's own state, this never depends on whether
+    /// today's dig is used up: like a port's docking prompt, it shows any time
+    /// the bow is close and facing, whether or not there's anything left to find.
     pub fn update_landable(&mut self, world: &World, kin: &Kinematics, blocked: bool) {
         self.landable = if blocked {
             None
@@ -72,19 +74,24 @@ impl Shore {
         };
     }
 
-    /// Go ashore on the landable isle and lay out today's field. Returns the isle
-    /// id if the captain landed, so the caller can mark it worked for the day.
-    pub fn try_land(&mut self, world: &World, day: u32) -> Option<i32> {
+    /// Go ashore on the landable isle and open its field. `resume` is today's
+    /// field as left by an earlier visit (see [`cast_off`](Self::cast_off)), if
+    /// any; passing it back in picks up right where the captain left off instead
+    /// of reshuffling a fresh one, so leaving and returning can't be used to dig
+    /// the same tiles twice. Returns the isle id if the captain landed, so the
+    /// caller can key its saved progress.
+    pub fn try_land(&mut self, world: &World, day: u32, resume: Option<DigSite>) -> Option<i32> {
         let id = self.landable?;
-        let site = DigSite::generate(world.seed, id, day);
+        let site = resume.unwrap_or_else(|| DigSite::generate(world.seed, id, day));
         self.landable = None;
         self.screen = Some(DigScreen::new(id, site));
         Some(id)
     }
 
-    /// Put back to sea: close the board.
-    pub fn cast_off(&mut self) {
-        self.screen = None;
+    /// Put back to sea: close the board, handing back its island id and field
+    /// state so the caller can save today's progress for a later visit.
+    pub fn cast_off(&mut self) -> Option<(i32, DigSite)> {
+        self.screen.take().map(|s| (s.island_id, s.site))
     }
 }
 
@@ -260,12 +267,38 @@ impl DigScreen {
                 draw_text(msg, x0 + (pw - d.width) / 2.0, footer_y - line_h(fs_small()), fs_body() as f32, col);
             }
         }
-        let hint = if self.site.finished() {
-            crate::device::hint("The field is spent · Esc puts to sea", "The field is spent · B puts to sea")
+        if self.site.finished() {
+            let sea_key = crate::device::hint("Esc", "B");
+            crate::hint::draw(
+                &[
+                    crate::hint::text("The field is spent \u{b7} "),
+                    crate::hint::key(sea_key),
+                    crate::hint::text(" puts to sea"),
+                ],
+                left,
+                footer_y,
+                fs_small(),
+                dim_ink(),
+            );
         } else {
-            crate::device::hint("Arrows move · Enter digs · Esc puts to sea", "D-pad move · A digs · B puts to sea")
-        };
-        draw_text(hint, left, footer_y, fs_small() as f32, dim_ink());
+            let move_key = crate::device::hint("Arrows", "D-pad");
+            let dig_key = crate::device::hint("Enter", "A");
+            let sea_key = crate::device::hint("Esc", "B");
+            crate::hint::draw(
+                &[
+                    crate::hint::key(move_key),
+                    crate::hint::text(" move \u{b7} "),
+                    crate::hint::key(dig_key),
+                    crate::hint::text(" digs \u{b7} "),
+                    crate::hint::key(sea_key),
+                    crate::hint::text(" puts to sea"),
+                ],
+                left,
+                footer_y,
+                fs_small(),
+                dim_ink(),
+            );
+        }
     }
 
     /// Draw one tile's face: an unturned mound while buried, or what the dig
@@ -340,12 +373,95 @@ pub fn render_prompt(shore: &Shore, world: &World, sails_furled: bool, w: f32, h
         return;
     }
     let name = &world.islands[id as usize].name;
-    let msg = if sails_furled {
+    if sails_furled {
         let key = crate::device::hint("Space", "X");
-        format!("Press  {key}  to go ashore on {name}")
+        let tail = format!("  to go ashore on {name}");
+        crate::ui::sea_prompt(&[crate::hint::text("Press  "), crate::hint::key(key), crate::hint::text(&tail)], w, h);
     } else {
         let key = crate::device::hint("S", "B");
-        format!("Furl sail ({key}) to land on {name}")
-    };
-    crate::ui::sea_prompt(&msg, w, h);
+        let tail = format!(") to land on {name}");
+        crate::ui::sea_prompt(&[crate::hint::text("Furl sail ("), crate::hint::key(key), crate::hint::text(&tail)], w, h);
+    }
+}
+
+#[cfg(test)]
+mod shore_cycle_tests {
+    use super::*;
+    use crate::world::{Cluster, IsleKind};
+
+    fn one_isle_world() -> World {
+        let isle = Island {
+            id: 0,
+            name: "Test Isle".into(),
+            pos: Vec2::new(0.0, 0.0),
+            radius: 100.0,
+            height: 20.0,
+            terrain: IsleKind::Green,
+            is_port: false,
+            is_shipyard: false,
+        };
+        World {
+            seed: 1,
+            islands: vec![isle],
+            clusters: vec![Cluster {
+                id: 0,
+                name: "C".into(),
+                center: Vec2::ZERO,
+                island_ids: vec![0],
+            }],
+        }
+    }
+
+    // Park the ship `dist` metres due south of the isle, bow swung to `heading`
+    // (0 = north, straight at the isle). Drives `update_landable` for one frame.
+    fn at(shore: &mut Shore, world: &World, dist: f32, heading: f32) {
+        let kin = Kinematics::still(Vec2::new(0.0, -dist), heading);
+        shore.update_landable(world, &kin, false);
+    }
+
+    // The port-side twin of this bug (`port_view::dock_cycle_tests`): landing and
+    // leaving must not permanently blank the prompt. Still in range and facing
+    // the isle, the captain can go straight back ashore.
+    #[test]
+    fn can_re_enter_the_shore_right_after_casting_off() {
+        let world = one_isle_world();
+        let mut shore = Shore::new();
+
+        at(&mut shore, &world, 300.0, 0.0);
+        assert!(shore.landable.is_some(), "approach should offer to land");
+
+        assert!(shore.try_land(&world, 1, None).is_some());
+        let (id, _site) = shore.cast_off().expect("a dig was open");
+
+        at(&mut shore, &world, 300.0, 0.0);
+        assert!(
+            shore.landable == Some(id),
+            "facing the isle in range should offer to land again immediately"
+        );
+        assert!(shore.try_land(&world, 1, None).is_some(), "and the captain can go ashore again");
+    }
+
+    // Resuming a field must not undo digging done on an earlier visit: leaving
+    // and coming back should find the same tiles open with the same moves left,
+    // not a fresh reshuffle (which would let a leave/return cycle farm the same
+    // coins twice).
+    #[test]
+    fn resuming_a_field_keeps_its_progress() {
+        let world = one_isle_world();
+        let mut shore = Shore::new();
+
+        at(&mut shore, &world, 300.0, 0.0);
+        shore.try_land(&world, 1, None);
+        shore.screen.as_mut().unwrap().site.dig(0);
+        let (_id, site) = shore.cast_off().unwrap();
+        let moves_after_one_dig = site.moves_left;
+        assert!(site.is_open(0), "the dug tile stays revealed");
+        assert_eq!(moves_after_one_dig, MOVES - 1);
+
+        at(&mut shore, &world, 300.0, 0.0);
+        shore.try_land(&world, 1, Some(site));
+        let resumed = &shore.screen.as_ref().unwrap().site;
+        assert!(resumed.is_open(0), "the resumed field remembers the dug tile");
+        assert_eq!(resumed.moves_left, moves_after_one_dig, "and the spent move stays spent");
+    }
 }
