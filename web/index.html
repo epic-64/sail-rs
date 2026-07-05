@@ -85,6 +85,31 @@
             name: "sailrs_localstorage",
         });
 
+        // Gamepad bridge (see `src/pad.rs`). The Gamepad API has no events for button
+        // presses or axis moves, only a live snapshot, so these three shims are plain
+        // getters `Pad::update` polls once a frame per connected pad index.
+        miniquad_add_plugin({
+            register_plugin: function (importObject) {
+                function pads() {
+                    return navigator.getGamepads ? navigator.getGamepads() : [];
+                }
+                importObject.env.quad_gamepad_connected = function (idx) {
+                    const p = pads()[idx];
+                    return p && p.connected ? 1 : 0;
+                };
+                importObject.env.quad_gamepad_button = function (idx, button) {
+                    const p = pads()[idx];
+                    return p && p.buttons[button] ? p.buttons[button].value : 0;
+                };
+                importObject.env.quad_gamepad_axis = function (idx, axis) {
+                    const p = pads()[idx];
+                    return p && p.axes[axis] !== undefined ? p.axes[axis] : 0;
+                };
+            },
+            version: "0.1.0",
+            name: "sailrs_gamepad",
+        });
+
         // Hide the loading splash once the wasm module has booted.
         const _loading = document.getElementById("loading");
         const _obs = setInterval(() => {
