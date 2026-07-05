@@ -541,8 +541,22 @@ async fn run_game(
     let mut smooth_yaw: f32 = 0.0;
     let mut smooth_pitch: f32 = 0.0;
     let mut smooth_heel: f32 = 0.0;
-    const ROLL_EASE: f32 = 2.2;
-    const PITCH_EASE: f32 = 2.6;
+    // Sway spring velocities (rad/s): the deck is *sprung* toward the sea's
+    // plane rather than eased onto it, so it carries angular momentum from
+    // frame to frame and swings through the waves instead of snapping to
+    // each one.
+    let mut roll_vel: f32 = 0.0;
+    let mut yaw_vel: f32 = 0.0;
+    let mut pitch_vel: f32 = 0.0;
+    // Natural frequencies (rad/s) of the sway springs, scaled by the hull's
+    // `sway_response`. The righting push grows with the square of these and
+    // with how far the deck sits off the water's tilt: a nose hung high over
+    // the sea is pressed down the harder.
+    const ROLL_FREQ: f32 = 2.2;
+    const PITCH_FREQ: f32 = 2.6;
+    // Damping ratio, a touch under critical: the hull settles with a hint of
+    // follow-through that reads as mass, without visible ringing.
+    const SWAY_DAMP: f32 = 0.8;
     const HEEL_EASE: f32 = 1.1; // the boat leans into / out of the heel gradually
     // At speed the hull meets crests far more often than at rest, and a real
     // hull cannot answer each one: she planes over them. The sway *amplitude*
@@ -1518,23 +1532,37 @@ async fn run_game(
         // starboard (positive roll) — and the drive curve scales it by the press.
         let heel_target =
             HEEL_GAIN * helm.throttle * sailing::wind_factor_rel(wind_rel) * wind_rel.sin();
-        // The ease rates scale by the hull's mass character (`sway_response`):
-        // a light tier-0 hull snaps to the sea's plane where the brig leans
-        // into it, so the chop the probes can't filter (a wave dead abeam
-        // spans no waterline) still works a small ship harder. Speed scales
-        // the *amplitude* instead (`ride_calm`, see `RIDE_SPEED_REF`): slowing
-        // the ease would also lag the sway, and a lagged pitch leaves the nose
-        // hanging crest-high halfway down a wave's back. Attenuating the
-        // target keeps the answer prompt, just smaller.
+        // The spring rates scale by the hull's mass character (`sway_response`):
+        // a light tier-0 hull is stiffly sprung to the sea's plane where the
+        // brig leans into it, so the chop the probes can't filter (a wave dead
+        // abeam spans no waterline) still works a small ship harder. Speed
+        // scales the *amplitude* instead (`ride_calm`, see `RIDE_SPEED_REF`):
+        // softening the spring would also lag the sway, and a lagged pitch
+        // leaves the nose hanging crest-high halfway down a wave's back.
+        // Attenuating the target keeps the answer prompt, just smaller.
         let ride_calm = {
             let s = kin.speed() / RIDE_SPEED_REF;
             1.0 / (1.0 + s * s)
         };
-        let ease = clamp(ROLL_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
-        smooth_roll += (motion.roll * ride_calm - smooth_roll) * ease;
-        smooth_yaw += (motion.yaw * ride_calm - smooth_yaw) * ease;
-        smooth_pitch += (motion.pitch * ride_calm - smooth_pitch)
-            * clamp(PITCH_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
+        // Spring-damper toward the sea's plane (semi-implicit Euler; stable
+        // for the clamped dt). The restoring push is proportional to the
+        // *delta* between deck and water, so a hull far off the plane is
+        // pressed back the harder, while small chop barely stirs it.
+        let spring = |value: &mut f32, vel: &mut f32, target: f32, freq: f32| {
+            let accel = freq * freq * (target - *value) - 2.0 * SWAY_DAMP * freq * *vel;
+            *vel += accel * dt;
+            *value += *vel * dt;
+        };
+        let roll_freq = ROLL_FREQ * ship_hull.sway_response;
+        let pitch_freq = PITCH_FREQ * ship_hull.sway_response;
+        spring(&mut smooth_roll, &mut roll_vel, motion.roll * ride_calm, roll_freq);
+        spring(&mut smooth_yaw, &mut yaw_vel, motion.yaw * ride_calm, roll_freq);
+        spring(
+            &mut smooth_pitch,
+            &mut pitch_vel,
+            motion.pitch * ride_calm,
+            pitch_freq,
+        );
         smooth_heel += (heel_target - smooth_heel) * clamp(HEEL_EASE * dt, 0.0, 1.0);
 
         // The hull's lean (swell roll + wind heel) tilts the horizon the *other* way
