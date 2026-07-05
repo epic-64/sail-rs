@@ -5,7 +5,7 @@
 //! Each island is a floor disc lying on the sea (a foreshortened ellipse, ported
 //! from `IslandFloorRenderer`) plus a faceted landmass body. The body is no
 //! longer a single circular cone: it is a polar **heightfield** ([`IsleTerrain`])
-//! whose coastline lumps in and out (lobes, inlets, peninsulas — a more complex
+//! whose coastline lumps in and out (lobes, inlets, peninsulas: a more complex
 //! shape than one circle) and whose surface rises into one or several **hills**
 //! (a sum of Gaussian peaks), flat-shaded against the sun in world space.
 //! Mechanics are unchanged: islands are placed and sized by `WorldGen`, sit on
@@ -14,10 +14,11 @@
 //! `isle.radius`; the lumpy coast stays inside it, so collision is unaffected.
 //!
 //! Correct wave occlusion is handled by the caller ([`OceanRenderer::render`]),
-//! which draws each island *between* the wave bands by distance — so a near crest
+//! which draws each island *between* the wave bands by distance, so a near crest
 //! rolls in front of a far island's base while its summit stands clear. Within an
-//! island the mound triangles are depth-sorted, and scenery on the far slopes is
-//! culled where a hill stands between it and the eye.
+//! island every triangle (the mound facets *and* the scenery models built by
+//! [`crate::feature_models`]) joins one depth-sorted list, so a hill occludes the
+//! cottage behind it facet by facet and a trunk can't clip into its slope.
 
 use macroquad::prelude::*;
 
@@ -37,11 +38,11 @@ const AMBIENT: f32 = 0.45; // floor of the directional shading
 
 const SHADOW: [f32; 3] = [8.0, 40.0, 30.0];
 
-// Per-island scenery is dense (scores of billboards each), and the costly part is
-// the per-feature occlusion raymarch. Distant isles are small on screen, so we fade
-// their features out and stop drawing them entirely past the end: between these two
-// ranges (m) feature alpha lerps 1 → 0, and beyond `FEATURE_FADE_END` the whole
-// feature pass is skipped. The island body itself keeps rendering to `MAX_VIEW`.
+// Per-island scenery is dense (scores of models, each a couple dozen triangles).
+// Distant isles are small on screen, so we fade their features out and stop
+// building them entirely past the end: between these two ranges (m) feature alpha
+// lerps 1 to 0, and beyond `FEATURE_FADE_END` the whole feature pass is skipped.
+// The island body itself keeps rendering to `MAX_VIEW`.
 const FEATURE_FADE_START: f32 = 2000.0;
 const FEATURE_FADE_END: f32 = 3500.0;
 
@@ -55,7 +56,7 @@ const FEATURE_FADE_END: f32 = 3500.0;
 /// of the ocean. Every surviving corner is within ±90°, so no two of them can
 /// straddle the ±π seam.
 #[inline]
-fn behind_camera(wp: Vec2, kin: &Kinematics) -> bool {
+pub(crate) fn behind_camera(wp: Vec2, kin: &Kinematics) -> bool {
     wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad).abs() > FRAC_PI_2
 }
 
@@ -98,12 +99,13 @@ pub struct IslandView {
 // renderer-specific because it leans on the camera projection.
 
 impl IsleTerrain {
-    /// Is a feature standing at `wp` (foot elevation `foot_z`) hidden behind the
+    /// Is a lamp glow at `wp` (foot elevation `foot_z`) hidden behind the
     /// island's own terrain from the camera at `kin.pos`? Marches a few samples
-    /// along the eye->feature ray (only the part nearer than the feature) and asks
-    /// whether the terrain there projects *above* the feature's foot on screen.
-    /// Works for flat and hilly islands alike: a hummock can hide scenery just
-    /// behind it.
+    /// along the eye->glow ray (only the part nearer than the glow) and asks
+    /// whether the terrain there projects *above* its foot on screen. The
+    /// scenery models themselves need no such test (the shared depth sort
+    /// occludes them); only the window/fire glows, drawn over the top of
+    /// everything, still have to be culled so they don't shine through a hill.
     fn occluded(&self, wp: Vec2, foot_z: f32, kin: &Kinematics, v: &IslandView) -> bool {
         let foot_y = project(wp, foot_z, false, kin, v).1;
         let to_cam = kin.pos - wp;
@@ -253,7 +255,7 @@ impl IslandView {
     /// multiply ([`lit`]/[`flat`]), then warmed toward the sunset hue
     /// ([`warm_shift`]). `diff` is the facet's Lambert term (1 for flat scenery).
     #[inline]
-    fn shade(&self, base: [f32; 3], diff: f32, alpha: f32) -> Color {
+    pub(crate) fn shade(&self, base: [f32; 3], diff: f32, alpha: f32) -> Color {
         let m = self.lit(diff);
         let c = (base[0] / 255.0 * m.0, base[1] / 255.0 * m.1, base[2] / 255.0 * m.2);
         let c = self.warm_shift(c, diff);
@@ -265,7 +267,13 @@ impl IslandView {
 /// waterline eye (so the shore matches the floor disc and the sea); otherwise the
 /// real eye height (so summits sit where the billboards used to).
 #[inline]
-fn project(wp: Vec2, z: f32, waterline: bool, kin: &Kinematics, v: &IslandView) -> (f32, f32) {
+pub(crate) fn project(
+    wp: Vec2,
+    z: f32,
+    waterline: bool,
+    kin: &Kinematics,
+    v: &IslandView,
+) -> (f32, f32) {
     let d = kin.pos.distance_to(wp).max(1.0);
     let rp = wrap_angle(kin.pos.bearing_to(wp) - kin.heading_rad);
     let sx = v.w * 0.5 + rp * v.px_per_rad_h;
@@ -317,12 +325,15 @@ fn diffuse(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32), v: &Islan
     ((nx * v.sun.0 + ny * v.sun.1 + nz * v.sun.2) / len).max(0.0)
 }
 
-/// One ready-to-draw, depth-keyed mound triangle. Screen points are kept as plain
-/// (x, y) tuples (the name `Vec2` here is our world-chart vector, not glam's).
-struct Tri {
-    key: f32, // distance from camera to world centroid (sort key, far → near)
-    p: [(f32, f32); 3],
-    color: Color,
+/// One ready-to-draw, depth-keyed triangle: a mound facet or a piece of a
+/// scenery model. Screen points are kept as plain (x, y) tuples (the name
+/// `Vec2` here is our world-chart vector, not glam's).
+pub(crate) struct Tri {
+    /// Camera distance of the source geometry (sort key, far to near). The sort
+    /// is stable, so triangles sharing a key keep their emission order.
+    pub(crate) key: f32,
+    pub(crate) p: [(f32, f32); 3],
+    pub(crate) color: Color,
 }
 
 /// Draw one island (floor disc + faceted heightfield + features), or nothing if
@@ -449,6 +460,49 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             }
         }
     }
+    // --- Features ------------------------------------------------------------
+    // Each feature is a little 3D model ([`crate::feature_models`]) standing on
+    // the terrain surface. Its triangles join the same depth-sorted list as the
+    // mound facets, so a ridge occludes the hut behind it triangle by triangle
+    // (no binary pop) and nothing can clip through the slope it stands on. Past
+    // the fade range skip the whole pass so distant isles cost only their body;
+    // within it dim the scenery toward transparent.
+    let feat_fade =
+        clamp((FEATURE_FADE_END - dist) / (FEATURE_FADE_END - FEATURE_FADE_START), 0.0, 1.0);
+    let feat_alpha = alpha * feat_fade;
+    if feat_alpha > 0.0 {
+        // A model sorts at its foot's distance, pulled a touch nearer so the
+        // ground facet directly beneath it (whose centroid can sit up to half a
+        // cell nearer) still paints first. A ridge that truly stands between eye
+        // and feature is whole cells nearer, so it still wins the sort.
+        let bias = terrain.radius / terrain.rings as f32 * 0.55;
+        for (fi, f) in features.iter().enumerate() {
+            let wp = isle.pos + f.offset;
+            // Skip scenery behind the camera: its triangles would wrap across
+            // the bearing seam (see [`behind_camera`]).
+            if behind_camera(wp, kin) {
+                continue;
+            }
+            let d = kin.pos.distance_to(wp);
+            // Sub-pixel scenery isn't worth its triangles.
+            if f.height / d.max(1.0) * v.px_per_rad < 1.0 {
+                continue;
+            }
+            let base = terrain.elevation_at(wp);
+            crate::feature_models::emit(
+                f,
+                fi,
+                wp,
+                base,
+                (d - bias).max(0.0),
+                feat_alpha,
+                kin,
+                v,
+                &mut tris,
+            );
+        }
+    }
+
     tris.sort_by(|x, y| y.key.partial_cmp(&x.key).unwrap());
     for tri in &tris {
         draw_triangle(
@@ -459,28 +513,22 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         );
     }
 
-    // --- Features ------------------------------------------------------------
-    // Stand each on the terrain surface and draw back-to-front so nearer scenery
-    // overlays farther; cull any hidden behind the island's own hills. Past the
-    // fade range skip the whole pass (no sort, no per-feature raymarch) so distant
-    // isles cost only their body; within it dim the scenery toward transparent.
-    if dist >= FEATURE_FADE_END {
+    // --- Lamp glows ------------------------------------------------------------
+    // After dusk the settlement's windows light up: a tiny warm or cold lamp in
+    // each house, the watchtower carrying a brighter beacon; a campfire or lava
+    // vent glows on any isle. The glows are additive halos drawn over the whole
+    // island (still inside its depth slot, so a nearer wave band paints over
+    // them), which is why they keep the terrain raymarch cull: without it a
+    // window behind a hill would shine through the land.
+    if v.lamp <= 0.01 || feat_alpha <= 0.0 {
         return;
     }
-    let feat_fade =
-        clamp((FEATURE_FADE_END - dist) / (FEATURE_FADE_END - FEATURE_FADE_START), 0.0, 1.0);
-    let feat_alpha = alpha * feat_fade;
-    let mut order: Vec<usize> = (0..features.len()).collect();
-    order.sort_by(|&a, &b| {
-        let da = kin.pos.distance_to(isle.pos + features[a].offset);
-        let db = kin.pos.distance_to(isle.pos + features[b].offset);
-        db.partial_cmp(&da).unwrap()
-    });
-    for &fi in &order {
-        let f = &features[fi];
+    for (fi, f) in features.iter().enumerate() {
+        let glows = matches!(f.kind, FeatureKind::Campfire | FeatureKind::LavaVent);
+        if !(isle.is_port || glows) {
+            continue;
+        }
         let wp = isle.pos + f.offset;
-        // Skip scenery behind the camera: its billboard would wrap across the seam
-        // (see [`behind_camera`]); it is out of the forward view in any case.
         if behind_camera(wp, kin) {
             continue;
         }
@@ -494,17 +542,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         if h_px < 1.0 {
             continue;
         }
-        let w_px = (h_px * feature_aspect(f.kind) * f.size).max(2.0);
-        draw_feature(f.kind, fx, fy, w_px, h_px, feat_alpha, v);
-        // After dusk the settlement's windows light up: a tiny warm or cold lamp in
-        // each house, the watchtower carrying a brighter beacon. Drawn over the
-        // building it belongs to, so it rides the island's depth slot and a nearer
-        // wave band paints over it like the rest of the isle.
-        // A campfire or lava vent glows on any isle; windows and beacons only in a port.
-        let glows = matches!(f.kind, FeatureKind::Campfire | FeatureKind::LavaVent);
-        if v.lamp > 0.01 && (isle.is_port || glows) {
-            draw_window_light(f.kind, fi, fx, fy, h_px, feat_alpha, v.lamp, v.t);
-        }
+        draw_window_light(f.kind, fi, fx, fy, h_px, feat_alpha, v.lamp, v.t);
     }
 }
 
@@ -591,282 +629,6 @@ fn draw_window_light(
     let halo = Color::new(col[0] / 255.0, col[1] / 255.0, col[2] / 255.0, a * 0.30);
     draw_circle(fx, ly, sz * 2.2, halo);
     draw_circle(fx, ly, sz, core);
-}
-
-/// Width-to-height ratio of each feature's billboard.
-fn feature_aspect(kind: FeatureKind) -> f32 {
-    match kind {
-        FeatureKind::Tree => 0.85,
-        FeatureKind::Palm => 0.8,
-        FeatureKind::Pine => 0.55,
-        FeatureKind::Fern => 1.5,
-        FeatureKind::Bush => 1.7,
-        FeatureKind::Rock => 1.4,
-        FeatureKind::Ruin => 1.2,
-        FeatureKind::Hut => 1.35,
-        FeatureKind::Cottage => 1.5,
-        FeatureKind::Tower => 0.5,
-        FeatureKind::Dock => 2.6,
-        FeatureKind::Flag => 0.6,
-        FeatureKind::Shipwreck => 1.9,
-        FeatureKind::DeadTree => 0.7,
-        FeatureKind::FlowerPatch => 1.8,
-        FeatureKind::Reeds => 1.2,
-        FeatureKind::Cactus => 0.7,
-        FeatureKind::FallenLog => 2.4,
-        FeatureKind::Cairn => 1.1,
-        FeatureKind::StoneArch => 1.3,
-        FeatureKind::LavaVent => 1.6,
-        FeatureKind::Campfire => 1.4,
-        FeatureKind::Windmill => 1.0,
-        FeatureKind::Lighthouse => 0.55,
-    }
-}
-
-// --- Feature billboards (flat-shaded vector shapes) --------------------------
-// Drawn in a local space where x ∈ [-0.5, 0.5] and y ∈ [0, 1] (0 = foot at the
-// ground, 1 = top), mapped to screen at (cx + lx·w, foot − ly·h). Two-tone where
-// it helps imply form, matching the faceted low-poly look.
-
-fn draw_feature(kind: FeatureKind, cx: f32, foot: f32, w: f32, h: f32, alpha: f32, v: &IslandView) {
-    // Local→screen.
-    let p = |lx: f32, ly: f32| vec2(cx + lx * w, foot - ly * h);
-    let quad = |x0: f32, y0: f32, x1: f32, y1: f32, c: Color| {
-        draw_triangle(p(x0, y0), p(x1, y0), p(x1, y1), c);
-        draw_triangle(p(x0, y0), p(x1, y1), p(x0, y1), c);
-    };
-    let tri = |a: (f32, f32), b: (f32, f32), cc: (f32, f32), c: Color| {
-        draw_triangle(p(a.0, a.1), p(b.0, b.1), p(cc.0, cc.1), c);
-    };
-    // Shadow the module `rgba` with one shaded by the day/night light (flat, like the
-    // floor disc), so every feature colour below takes the hour's warmth, reddens at
-    // dusk with the rest of the isle, and darkens after dark.
-    let rgba = |c: [f32; 3], a: f32| v.shade(c, 1.0, a);
-
-    const TRUNK: [f32; 3] = [92.0, 64.0, 40.0];
-    const CANOPY: [f32; 3] = [52.0, 132.0, 64.0];
-    const CANOPY_DK: [f32; 3] = [34.0, 96.0, 48.0];
-    const FROND: [f32; 3] = [60.0, 140.0, 72.0];
-    const FROND_DK: [f32; 3] = [40.0, 104.0, 56.0];
-    const PINE: [f32; 3] = [40.0, 102.0, 70.0];
-    const PINE_DK: [f32; 3] = [28.0, 76.0, 52.0];
-    const FERN: [f32; 3] = [72.0, 150.0, 80.0];
-    const FERN_DK: [f32; 3] = [50.0, 116.0, 62.0];
-    const BUSH: [f32; 3] = [66.0, 138.0, 72.0];
-    const BUSH_DK: [f32; 3] = [46.0, 106.0, 56.0];
-    const ROCK: [f32; 3] = [126.0, 122.0, 114.0];
-    const ROCK_DK: [f32; 3] = [94.0, 90.0, 84.0];
-    const STONE: [f32; 3] = [156.0, 150.0, 140.0];
-    const STONE_DK: [f32; 3] = [116.0, 110.0, 102.0];
-    const WALL: [f32; 3] = [198.0, 172.0, 132.0];
-    const WALL_DK: [f32; 3] = [160.0, 136.0, 100.0];
-    const ROOF: [f32; 3] = [150.0, 72.0, 52.0];
-    const ROOF_DK: [f32; 3] = [120.0, 56.0, 40.0];
-    const WOOD: [f32; 3] = [126.0, 90.0, 56.0];
-    const WOOD_DK: [f32; 3] = [96.0, 66.0, 40.0];
-    const FLAGC: [f32; 3] = [205.0, 64.0, 58.0];
-    const POLE: [f32; 3] = [82.0, 72.0, 60.0];
-    const WRECK: [f32; 3] = [74.0, 56.0, 42.0];
-    const WRECK_DK: [f32; 3] = [52.0, 40.0, 30.0];
-    const SNAG: [f32; 3] = [122.0, 108.0, 90.0];
-    const SNAG_DK: [f32; 3] = [92.0, 80.0, 66.0];
-    const MEADOW: [f32; 3] = [78.0, 148.0, 78.0];
-    const BLOOM_A: [f32; 3] = [236.0, 108.0, 150.0]; // pink
-    const BLOOM_B: [f32; 3] = [246.0, 214.0, 96.0]; // yellow
-    const BLOOM_C: [f32; 3] = [232.0, 236.0, 244.0]; // white
-    const REED: [f32; 3] = [150.0, 158.0, 92.0];
-    const REED_DK: [f32; 3] = [118.0, 128.0, 70.0];
-    const CACTUS: [f32; 3] = [86.0, 132.0, 78.0];
-    const CACTUS_DK: [f32; 3] = [62.0, 102.0, 60.0];
-    const MOSS: [f32; 3] = [78.0, 128.0, 72.0];
-    const BASALT: [f32; 3] = [72.0, 66.0, 66.0];
-    const BASALT_DK: [f32; 3] = [48.0, 44.0, 44.0];
-    const EMBER: [f32; 3] = [236.0, 96.0, 42.0];
-    const FLAME: [f32; 3] = [242.0, 132.0, 46.0];
-    const FLAME_HOT: [f32; 3] = [252.0, 214.0, 96.0];
-
-    match kind {
-        FeatureKind::Tree => {
-            quad(-0.08, 0.0, 0.08, 0.42, rgba(TRUNK, alpha));
-            tri((-0.45, 0.3), (0.0, 0.3), (0.0, 1.0), rgba(CANOPY, alpha));
-            tri((0.0, 0.3), (0.45, 0.3), (0.0, 1.0), rgba(CANOPY_DK, alpha));
-        }
-        FeatureKind::Palm => {
-            quad(-0.05, 0.0, 0.06, 0.6, rgba(TRUNK, alpha));
-            // Fronds fanning from the crown.
-            tri((0.0, 0.55), (-0.5, 0.78), (-0.28, 0.92), rgba(FROND, alpha));
-            tri((0.0, 0.55), (-0.18, 0.95), (0.04, 1.02), rgba(FROND, alpha));
-            tri((0.0, 0.55), (0.5, 0.8), (0.28, 0.92), rgba(FROND_DK, alpha));
-            tri((0.0, 0.55), (0.2, 0.98), (0.0, 1.0), rgba(FROND_DK, alpha));
-        }
-        FeatureKind::Pine => {
-            // A tall conifer: a slim trunk under three stacked skirts.
-            quad(-0.06, 0.0, 0.06, 0.3, rgba(TRUNK, alpha));
-            tri((-0.5, 0.24), (0.5, 0.24), (0.0, 0.58), rgba(PINE_DK, alpha));
-            tri((-0.4, 0.46), (0.4, 0.46), (0.0, 0.78), rgba(PINE, alpha));
-            tri((-0.28, 0.66), (0.28, 0.66), (0.0, 1.0), rgba(PINE, alpha));
-        }
-        FeatureKind::Fern => {
-            // A low spray of fronds fanning from the ground.
-            tri((-0.5, 0.0), (-0.12, 0.0), (-0.34, 1.0), rgba(FERN, alpha));
-            tri((-0.2, 0.0), (0.2, 0.0), (0.0, 1.05), rgba(FERN_DK, alpha));
-            tri((0.12, 0.0), (0.5, 0.0), (0.34, 1.0), rgba(FERN, alpha));
-        }
-        FeatureKind::Bush => {
-            tri((-0.5, 0.0), (0.5, 0.0), (-0.12, 0.95), rgba(BUSH, alpha));
-            tri((0.5, 0.0), (0.12, 0.95), (-0.12, 0.95), rgba(BUSH_DK, alpha));
-            tri((-0.5, 0.0), (-0.12, 0.95), (0.12, 0.95), rgba(BUSH, alpha));
-        }
-        FeatureKind::Rock => {
-            // Irregular faceted boulder.
-            tri((-0.5, 0.0), (-0.28, 0.7), (0.06, 0.95), rgba(ROCK, alpha));
-            tri((-0.5, 0.0), (0.06, 0.95), (0.5, 0.45), rgba(ROCK, alpha));
-            tri((0.06, 0.95), (0.5, 0.45), (0.5, 0.0), rgba(ROCK_DK, alpha));
-            tri((-0.5, 0.0), (0.5, 0.45), (0.5, 0.0), rgba(ROCK_DK, alpha));
-        }
-        FeatureKind::Ruin => {
-            // A few broken columns on a low base.
-            quad(-0.5, 0.0, 0.5, 0.14, rgba(STONE_DK, alpha));
-            quad(-0.4, 0.1, -0.22, 0.78, rgba(STONE, alpha));
-            quad(-0.08, 0.1, 0.1, 1.0, rgba(STONE, alpha));
-            quad(0.24, 0.1, 0.42, 0.55, rgba(STONE_DK, alpha));
-        }
-        FeatureKind::Hut => {
-            quad(-0.4, 0.0, 0.4, 0.6, rgba(WALL, alpha));
-            quad(0.0, 0.0, 0.4, 0.6, rgba(WALL_DK, alpha));
-            tri((-0.5, 0.55), (0.5, 0.55), (-0.05, 1.0), rgba(ROOF, alpha));
-            tri((0.5, 0.55), (-0.05, 1.0), (0.05, 1.0), rgba(ROOF_DK, alpha));
-        }
-        FeatureKind::Cottage => {
-            // A larger dwelling: a long body, a gable end, and a chimney.
-            quad(-0.5, 0.0, 0.5, 0.55, rgba(WALL, alpha));
-            quad(0.08, 0.0, 0.5, 0.55, rgba(WALL_DK, alpha));
-            tri((-0.5, 0.5), (0.5, 0.5), (-0.02, 0.92), rgba(ROOF, alpha));
-            tri((0.5, 0.5), (-0.02, 0.92), (0.04, 0.92), rgba(ROOF_DK, alpha));
-            quad(0.28, 0.72, 0.4, 1.0, rgba(STONE_DK, alpha));
-        }
-        FeatureKind::Tower => {
-            quad(-0.26, 0.0, 0.26, 0.82, rgba(STONE, alpha));
-            quad(0.04, 0.0, 0.26, 0.82, rgba(STONE_DK, alpha));
-            // Crenellations.
-            quad(-0.3, 0.82, -0.12, 1.0, rgba(STONE, alpha));
-            quad(-0.06, 0.82, 0.12, 1.0, rgba(STONE_DK, alpha));
-            quad(0.18, 0.82, 0.3, 1.0, rgba(STONE_DK, alpha));
-        }
-        FeatureKind::Dock => {
-            quad(-0.5, 0.3, 0.5, 0.62, rgba(WOOD, alpha));
-            // Pilings.
-            quad(-0.42, 0.0, -0.3, 0.4, rgba(WOOD_DK, alpha));
-            quad(0.3, 0.0, 0.42, 0.4, rgba(WOOD_DK, alpha));
-        }
-        FeatureKind::Flag => {
-            quad(-0.04, 0.0, 0.04, 1.0, rgba(POLE, alpha));
-            tri((0.04, 0.66), (0.5, 0.82), (0.04, 1.0), rgba(FLAGC, alpha));
-        }
-        FeatureKind::Shipwreck => {
-            // A broken hull canted on the beach with a snapped mast.
-            tri((-0.5, 0.1), (0.45, 0.0), (0.5, 0.5), rgba(WRECK, alpha));
-            tri((-0.5, 0.1), (0.5, 0.5), (-0.34, 0.55), rgba(WRECK_DK, alpha));
-            quad(0.02, 0.45, 0.14, 1.0, rgba(WOOD_DK, alpha));
-        }
-        FeatureKind::DeadTree => {
-            // A bare grey snag: a leaning trunk with a few broken branches.
-            quad(-0.06, 0.0, 0.06, 0.72, rgba(SNAG, alpha));
-            tri((0.02, 0.5), (0.34, 0.86), (0.06, 0.58), rgba(SNAG, alpha));
-            tri((-0.02, 0.6), (-0.3, 0.9), (-0.06, 0.68), rgba(SNAG_DK, alpha));
-            tri((0.0, 0.68), (0.16, 1.0), (0.0, 0.8), rgba(SNAG_DK, alpha));
-        }
-        FeatureKind::FlowerPatch => {
-            // A low green cushion dotted with bright blooms.
-            tri((-0.5, 0.0), (0.5, 0.0), (-0.14, 0.6), rgba(MEADOW, alpha));
-            tri((0.5, 0.0), (0.14, 0.6), (-0.14, 0.6), rgba(MEADOW, alpha));
-            let dot = |x: f32, y: f32, c: [f32; 3]| {
-                tri((x - 0.09, y), (x + 0.09, y), (x, y + 0.28), rgba(c, alpha));
-            };
-            dot(-0.28, 0.28, BLOOM_A);
-            dot(0.0, 0.42, BLOOM_B);
-            dot(0.3, 0.24, BLOOM_C);
-            dot(0.12, 0.14, BLOOM_A);
-        }
-        FeatureKind::Reeds => {
-            // Tall thin blades leaning off the vertical.
-            tri((-0.42, 0.0), (-0.24, 0.0), (-0.4, 1.0), rgba(REED, alpha));
-            tri((-0.12, 0.0), (0.06, 0.0), (0.14, 1.05), rgba(REED_DK, alpha));
-            tri((0.18, 0.0), (0.36, 0.0), (0.4, 0.9), rgba(REED, alpha));
-            tri((-0.02, 0.0), (0.14, 0.0), (-0.1, 0.85), rgba(REED_DK, alpha));
-        }
-        FeatureKind::Cactus => {
-            // A ribbed column with two upturned arms.
-            quad(-0.14, 0.0, 0.14, 1.0, rgba(CACTUS, alpha));
-            quad(0.02, 0.0, 0.14, 1.0, rgba(CACTUS_DK, alpha));
-            quad(-0.36, 0.36, -0.14, 0.5, rgba(CACTUS, alpha));
-            quad(-0.36, 0.36, -0.24, 0.74, rgba(CACTUS_DK, alpha));
-            quad(0.14, 0.46, 0.36, 0.6, rgba(CACTUS, alpha));
-            quad(0.26, 0.46, 0.36, 0.82, rgba(CACTUS_DK, alpha));
-        }
-        FeatureKind::FallenLog => {
-            // A mossy trunk lying on its side, one end-face turned to us.
-            quad(-0.5, 0.08, 0.42, 0.44, rgba(WOOD, alpha));
-            quad(-0.5, 0.34, 0.42, 0.46, rgba(MOSS, alpha)); // moss along the top
-            quad(0.36, 0.06, 0.5, 0.46, rgba(WOOD_DK, alpha)); // end cap
-        }
-        FeatureKind::Cairn => {
-            // A pile of balanced stones, wide at the base and tapering up.
-            quad(-0.4, 0.0, 0.4, 0.3, rgba(ROCK, alpha));
-            quad(0.08, 0.0, 0.4, 0.3, rgba(ROCK_DK, alpha));
-            quad(-0.3, 0.28, 0.3, 0.56, rgba(ROCK, alpha));
-            quad(0.04, 0.28, 0.3, 0.56, rgba(ROCK_DK, alpha));
-            quad(-0.18, 0.54, 0.18, 0.82, rgba(ROCK, alpha));
-            tri((-0.14, 0.8), (0.14, 0.8), (0.0, 1.0), rgba(ROCK_DK, alpha));
-        }
-        FeatureKind::StoneArch => {
-            // Two weathered legs bridged by a heavy lintel.
-            quad(-0.5, 0.0, -0.28, 0.82, rgba(STONE, alpha));
-            quad(-0.5, 0.0, -0.4, 0.82, rgba(STONE_DK, alpha));
-            quad(0.28, 0.0, 0.5, 0.82, rgba(STONE, alpha));
-            quad(0.4, 0.0, 0.5, 0.82, rgba(STONE_DK, alpha));
-            quad(-0.5, 0.8, 0.5, 1.0, rgba(STONE, alpha));
-            quad(-0.5, 0.92, 0.5, 1.0, rgba(STONE_DK, alpha));
-        }
-        FeatureKind::LavaVent => {
-            // A dark basalt mound split by a glowing fissure (its light is the ember
-            // glow drawn over the top; see `draw_window_light`).
-            tri((-0.5, 0.0), (0.5, 0.0), (0.16, 0.62), rgba(BASALT, alpha));
-            tri((-0.5, 0.0), (0.16, 0.62), (-0.24, 0.5), rgba(BASALT_DK, alpha));
-            tri((-0.05, 0.06), (0.07, 0.06), (0.02, 0.56), rgba(EMBER, alpha));
-        }
-        FeatureKind::Campfire => {
-            // Crossed logs in a ring of stones under a flame (glow drawn over the top).
-            quad(-0.42, 0.0, 0.42, 0.16, rgba(ROCK_DK, alpha));
-            tri((-0.4, 0.04), (0.4, 0.22), (0.34, 0.04), rgba(WOOD_DK, alpha));
-            tri((0.4, 0.04), (-0.4, 0.22), (-0.34, 0.04), rgba(WOOD, alpha));
-            tri((-0.18, 0.14), (0.18, 0.14), (0.0, 0.9), rgba(FLAME, alpha));
-            tri((-0.09, 0.14), (0.09, 0.14), (0.0, 0.62), rgba(FLAME_HOT, alpha));
-        }
-        FeatureKind::Windmill => {
-            // A tapered tower with a cap and four spread sails.
-            tri((-0.22, 0.0), (0.22, 0.0), (0.14, 0.7), rgba(WALL, alpha));
-            tri((-0.22, 0.0), (0.14, 0.7), (-0.14, 0.7), rgba(WALL, alpha));
-            tri((0.0, 0.0), (0.22, 0.0), (0.14, 0.7), rgba(WALL_DK, alpha));
-            tri((-0.2, 0.66), (0.2, 0.66), (0.0, 0.86), rgba(ROOF, alpha));
-            // Sails, an X centred on the hub.
-            tri((0.0, 0.72), (0.46, 0.98), (0.38, 0.86), rgba(WOOD, alpha));
-            tri((0.0, 0.72), (-0.46, 0.98), (-0.38, 0.86), rgba(WOOD, alpha));
-            tri((0.0, 0.72), (0.46, 0.46), (0.38, 0.58), rgba(WOOD_DK, alpha));
-            tri((0.0, 0.72), (-0.46, 0.46), (-0.38, 0.58), rgba(WOOD_DK, alpha));
-        }
-        FeatureKind::Lighthouse => {
-            // A tapered tower banded red and white under a lantern room (lit after
-            // dusk; the beacon is the window light drawn over the top).
-            tri((-0.3, 0.0), (0.3, 0.0), (0.18, 0.72), rgba(WALL, alpha));
-            tri((-0.3, 0.0), (0.18, 0.72), (-0.18, 0.72), rgba(WALL, alpha));
-            tri((0.02, 0.0), (0.3, 0.0), (0.18, 0.72), rgba(WALL_DK, alpha));
-            quad(-0.27, 0.18, 0.27, 0.3, rgba(ROOF, alpha)); // red band
-            quad(-0.22, 0.46, 0.22, 0.56, rgba(ROOF, alpha)); // red band
-            quad(-0.17, 0.72, 0.17, 0.9, rgba(STONE_DK, alpha)); // lantern room
-            tri((-0.2, 0.88), (0.2, 0.88), (0.0, 1.0), rgba(ROOF_DK, alpha)); // cap
-        }
-    }
 }
 
 #[cfg(test)]
