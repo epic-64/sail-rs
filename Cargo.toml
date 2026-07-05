@@ -15,7 +15,9 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 # Gamepad support, native only. gilrs' wasm backend pulls in wasm-bindgen/web-sys,
 # which macroquad's own JS glue (no wasm-bindgen) can't satisfy, so it's gated off the
 # web build; `pad.rs` compiles to a no-op stub there and the web keeps its touch HUD.
-# The default `wgi` feature is the Windows.Gaming.Input backend (Windows 10+).
+# gilrs picks its own backend per native target (udev on Linux, IOKit on macOS,
+# Windows.Gaming.Input/XInput on Windows) via its own cfg gates; on Linux that backend
+# needs libudev's dev headers (`libudev-dev` / equivalent) available at build time.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gilrs = "0.10"
 
