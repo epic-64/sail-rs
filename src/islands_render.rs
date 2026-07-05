@@ -460,6 +460,54 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             }
         }
     }
+    // --- Drawn-ground queries --------------------------------------------------
+    // Scenery must stand on the ground as *drawn*, not on the analytic field:
+    // the facet mesh cuts straight chords under every convex rise, so near a
+    // summit or along a ridge the rendered surface lies below `elevation_at`
+    // and a model planted at the analytic height floats above its own hill.
+    // Interpolate the same grid the strip loop above triangulates (`u` around
+    // the ring, `t` out from the centre, split on the a0-b1 diagonal exactly
+    // like the facets), so a foot always lies on a drawn triangle.
+    let mesh_ground = |wp: Vec2| -> f32 {
+        let local = wp - isle.pos;
+        let dist = local.length();
+        let af = (local.y.atan2(local.x) / TAU).rem_euclid(1.0) * MOUND_SEG as f32;
+        let i = (af as usize).min(MOUND_SEG - 1);
+        let j = (i + 1) % MOUND_SEG;
+        let u = af - i as f32;
+        // The cell's coast radius at this bearing, interpolated between its two
+        // bounding spokes (the mesh connects them by a straight edge).
+        let rc = terrain.coast_radius(i as f32 / MOUND_SEG as f32 * TAU) * (1.0 - u)
+            + terrain.coast_radius((i as f32 + 1.0) / MOUND_SEG as f32 * TAU) * u;
+        let tf = dist / rc.max(1e-3) * terrain.rings as f32;
+        if tf >= terrain.rings as f32 {
+            return 0.0; // at or beyond the coast ring, which is pinned to sea level
+        }
+        let lvl = tf as usize;
+        let t = tf - lvl as f32;
+        let (z00, z10) = (wpz[lvl][i].2, wpz[lvl][j].2);
+        let (z01, z11) = (wpz[lvl + 1][i].2, wpz[lvl + 1][j].2);
+        if u >= t {
+            z00 * (1.0 - u) + z10 * (u - t) + z11 * t
+        } else {
+            z00 * (1.0 - t) + z11 * u + z01 * (t - u)
+        }
+    };
+    // A model's terrain foot: the lowest drawn ground anywhere under its
+    // contact patch (centre + a ring of samples at the contact radius), so a
+    // flat base laid across a slope settles onto the downhill side instead of
+    // hanging over it. Trunked plants keep a small patch (see
+    // [`crate::feature_models::contact_radius`]) so a canopy may overhang.
+    let foot_of = |f: &IsleFeature, wp: Vec2| -> f32 {
+        let cr = crate::feature_models::contact_radius(f);
+        let mut z = mesh_ground(wp);
+        for k in 0..4 {
+            let a = k as f32 * FRAC_PI_2;
+            z = z.min(mesh_ground(wp + Vec2::new(a.cos() * cr, a.sin() * cr)));
+        }
+        z
+    };
+
     // --- Features ------------------------------------------------------------
     // Each feature is a little 3D model ([`crate::feature_models`]) standing on
     // the terrain surface. Its triangles join the same depth-sorted list as the
@@ -488,7 +536,7 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             if f.height / d.max(1.0) * v.px_per_rad < 1.0 {
                 continue;
             }
-            let base = terrain.elevation_at(wp);
+            let base = foot_of(f, wp);
             crate::feature_models::emit(
                 f,
                 fi,
@@ -532,7 +580,9 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
         if behind_camera(wp, kin) {
             continue;
         }
-        let base = terrain.elevation_at(wp);
+        // The same foot the model itself stands on, so a window glow stays
+        // glued to its (possibly slope-settled) house.
+        let base = foot_of(f, wp);
         if terrain.occluded(wp, base, kin, v) {
             continue;
         }

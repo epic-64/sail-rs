@@ -263,6 +263,25 @@ fn width_ratio(kind: FeatureKind) -> f32 {
     }
 }
 
+/// How far from its centre (m) a model actually bears on the ground, as opposed
+/// to overhanging it. The renderer samples the terrain across this patch and
+/// stands the model on the *lowest* point, so a flat base laid across a slope
+/// sinks to meet the downhill ground instead of hanging over it. Trunked
+/// plants touch only at the trunk (the canopy may overhang a drop freely);
+/// slender towers at their drum; spreading clumps and anything built bear on
+/// most of their footprint.
+pub fn contact_radius(f: &IsleFeature) -> f32 {
+    use FeatureKind::*;
+    let ratio = match f.kind {
+        Tree | Palm | Pine | DeadTree | Flag | Fern => 0.10,
+        Cactus => 0.18,
+        Tower | Windmill | Lighthouse => 0.32,
+        Reeds => 0.42,
+        _ => 0.5,
+    };
+    f.height * width_ratio(f.kind) * f.size * ratio
+}
+
 // Albedos, carried over from the billboard palette. Form now comes from the
 // Lambert shading, so most shapes take one base colour; the few explicit dark
 // variants left mark a genuinely different material (moss on a log, a roof
@@ -305,9 +324,10 @@ const FLAME: [f32; 3] = [242.0, 132.0, 46.0];
 const FLAME_HOT: [f32; 3] = [252.0, 214.0, 96.0];
 
 /// Build one feature's model and push its triangles onto the island's shared
-/// depth-sorted list. `foot` is the terrain elevation under it, `key` the
-/// depth-sort key the caller chose for the whole model, `alpha` the distance
-/// fade.
+/// depth-sorted list. `foot` is the ground elevation the model stands on (the
+/// caller samples the drawn facet mesh under its contact patch, see
+/// [`contact_radius`]), `key` the depth-sort key the caller chose for the
+/// whole model, `alpha` the distance fade.
 #[allow(clippy::too_many_arguments)]
 pub fn emit(
     f: &IsleFeature,
