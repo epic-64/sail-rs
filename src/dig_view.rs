@@ -330,19 +330,22 @@ const CHEST_BAND: Color = Color::new(214.0 / 255.0, 178.0 / 255.0, 74.0 / 255.0,
 const CHEST_EDGE: Color = Color::new(60.0 / 255.0, 38.0 / 255.0, 18.0 / 255.0, 1.0);
 
 /// The shore call-to-action while sailing: shown when an isle is landable (bow
-/// on, in range) and the sails are furled, mirroring the docking prompt.
+/// on, in range). Mirrors [`crate::port_view::render_prompt`] byte-for-byte in
+/// shape (same two-state wording, same [`crate::ui::sea_prompt`] styling, same
+/// [`crate::device::hint`]-driven keyboard/gamepad text) so a port and an
+/// uninhabited isle read as one system rather than two lookalikes.
 pub fn render_prompt(shore: &Shore, world: &World, sails_furled: bool, w: f32, h: f32) {
     let Some(id) = shore.landable else { return };
-    if !sails_furled {
+    if shore.is_open() {
         return;
     }
-    let isle = &world.islands[id as usize];
-    let msg = format!("Space: go ashore on {}", isle.name);
-    let fs = fs_body();
-    let d = measure_text(&msg, None, fs, 1.0);
-    let pad = px(10.0);
-    let bx = (w - d.width) / 2.0 - pad;
-    let by = h * 0.72;
-    draw_rectangle(bx, by, d.width + 2.0 * pad, line_h(fs) + pad, Color::new(0.0, 0.0, 0.0, 0.45));
-    draw_text(&msg, (w - d.width) / 2.0, by + line_h(fs) * 0.72, fs as f32, parchment());
+    let name = &world.islands[id as usize].name;
+    let msg = if sails_furled {
+        let key = crate::device::hint("Space", "X");
+        format!("Press  {key}  to go ashore on {name}")
+    } else {
+        let key = crate::device::hint("S", "B");
+        format!("Furl sail ({key}) to land on {name}")
+    };
+    crate::ui::sea_prompt(&msg, w, h);
 }

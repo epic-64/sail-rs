@@ -156,15 +156,18 @@ pub fn sail_hud(w: f32, h: f32, item_owned: [bool; 3]) -> SailHud {
 }
 
 /// Draw the sailing HUD. `turn` (−1..1) tilts the wheel's spoke for feedback,
-/// `sail_mode`/`sail_max` dim the sail arrows at the end stops, `dockable` shows
-/// the dock button, and `astern_held` lights the look-astern button while held.
+/// `sail_mode`/`sail_max` dim the sail arrows at the end stops, `dock_label` shows
+/// the dock button with that text when a port or uninhabited isle is in range
+/// (`Some("DOCK")` / `Some("LAND")`, hidden when `None` — the two never overlap,
+/// since [`crate::dig_view::Shore::update_landable`] is blocked whenever a port is
+/// dockable here), and `astern_held` lights the look-astern button while held.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_sail_hud(
     hud: &SailHud,
     turn: f32,
     sail_mode: usize,
     sail_max: usize,
-    dockable: bool,
+    dock_label: Option<&str>,
     astern_held: bool,
     // Active tavern wares, by helm slot: `Some((label, ready))` for an owned ware
     // (lit when its daily use is recharged, dimmed when spent), `None` if unowned.
@@ -212,10 +215,10 @@ pub fn draw_sail_hud(
         }
     }
 
-    // --- Dock, only when a port is in range ---
-    if dockable {
+    // --- Dock, only when a port or uninhabited isle is in range ---
+    if let Some(text) = dock_label {
         panel(hud.dock, true);
-        label(hud.dock, "DOCK", glyph());
+        label(hud.dock, text, glyph());
     }
 }
 

@@ -1585,10 +1585,13 @@ impl PortScreen {
     }
 }
 
-/// Render the "press Space to dock" call-to-action when a port is in range,
-/// drawn in screen space over the sea. `sail_furled` gates the action text.
-/// `race_target` is the finish-line island of a race in progress (if any): we
-/// suppress the prompt there so a novice doesn't furl sail short of the line.
+/// Render the "press Space to dock" call-to-action when a port is in range.
+/// `sail_furled` gates the action text; the keyboard/gamepad wording follows
+/// [`crate::device::hint`], matching whichever device last gave input. `race_target`
+/// is the finish-line island of a race in progress (if any): we suppress the prompt
+/// there so a novice doesn't furl sail short of the line. Mirrors
+/// [`crate::dig_view::render_prompt`] (shared styling in [`crate::ui::sea_prompt`])
+/// so a port and an uninhabited isle read as the same system.
 pub fn render_prompt(
     harbor: &Harbor,
     world: &World,
@@ -1607,27 +1610,13 @@ pub fn render_prompt(
     }
     let name = &world.islands[id as usize].name;
     let msg = if sail_furled {
-        format!("Press  Space  to dock at {name}")
+        let key = crate::device::hint("Space", "X");
+        format!("Press  {key}  to dock at {name}")
     } else {
-        format!("Furl sail (S) to enter {name}")
+        let key = crate::device::hint("S", "B");
+        format!("Furl sail ({key}) to enter {name}")
     };
-    // Drawn over the open sea (not the parchment board), so it keeps the larger
-    // title size to catch the eye; sizes/spacing still come from `style`.
-    use style::*;
-    let fs = fs_title();
-    let dims = measure_text(&msg, None, fs, 1.0);
-    let bx = w * 0.5 - dims.width / 2.0;
-    let by = h * 0.80;
-    let pill_h = line_h(fs) + gap();
-    let center = by - fs as f32 * CAP_RATIO;
-    draw_rectangle(
-        bx - gap(),
-        center - pill_h / 2.0,
-        dims.width + 2.0 * gap(),
-        pill_h,
-        Color::new(0.0, 0.0, 0.0, SCRIM),
-    );
-    draw_text(&msg, bx, by, fs as f32, WHITE);
+    crate::ui::sea_prompt(&msg, w, h);
 }
 
 // --- Small drawing helpers ----------------------------------------------------

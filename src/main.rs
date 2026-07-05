@@ -2168,12 +2168,19 @@ async fn run_game(
                         .filter(|it| gs.owns(*it))
                         .map(|it| (it.hud_label(), gs.item_ready(it)))
                 });
+                let dock_label = if harbor.dockable.is_some() {
+                    Some("DOCK")
+                } else if shore.landable.is_some() {
+                    Some("LAND")
+                } else {
+                    None
+                };
                 touch_ui::draw_sail_hud(
                     &hud,
                     helm.turn,
                     sail_mode,
                     SAIL_FRACTIONS.len() - 1,
-                    harbor.dockable.is_some(),
+                    dock_label,
                     look_back,
                     item_btns,
                 );
