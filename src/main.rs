@@ -1122,7 +1122,7 @@ async fn run_game(
             // Scoop up any flotsam the ship has sailed over (gold straight to the
             // purse, with a chime + a fading toast), then keep fresh salvage drifting
             // ahead of the bow for the next stretch of open water.
-            let haul = flotsam.collect_near(kin.pos, flotsam::REACH);
+            let haul = flotsam.collect_near(kin.pos, flotsam::reach_for_hull(gs.hull_level));
             // A Lucky Figurehead draws extra coin from every find: half again as much.
             let gold = if gs.owns(SpecialItem::LuckyFigurehead) {
                 haul.gold + haul.gold / 2

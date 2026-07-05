@@ -33,7 +33,7 @@ pub fn shore_at(world: &World, pos: Vec2) -> Option<&Island> {
         .islands
         .iter()
         .filter(|i| !i.is_port)
-        .find(|i| i.pos.distance_to(pos) <= i.dock_range())
+        .find(|i| i.pos.distance_to(pos) <= i.land_range())
 }
 
 /// Manages the shore handshake and owns the open dig board, if any. The parallel
@@ -427,13 +427,13 @@ mod shore_cycle_tests {
         let world = one_isle_world();
         let mut shore = Shore::new();
 
-        at(&mut shore, &world, 300.0, 0.0);
+        at(&mut shore, &world, 200.0, 0.0);
         assert!(shore.landable.is_some(), "approach should offer to land");
 
         assert!(shore.try_land(&world, 1, None).is_some());
         let (id, _site) = shore.cast_off().expect("a dig was open");
 
-        at(&mut shore, &world, 300.0, 0.0);
+        at(&mut shore, &world, 200.0, 0.0);
         assert!(
             shore.landable == Some(id),
             "facing the isle in range should offer to land again immediately"
@@ -450,7 +450,7 @@ mod shore_cycle_tests {
         let world = one_isle_world();
         let mut shore = Shore::new();
 
-        at(&mut shore, &world, 300.0, 0.0);
+        at(&mut shore, &world, 200.0, 0.0);
         shore.try_land(&world, 1, None);
         shore.screen.as_mut().unwrap().site.dig(0);
         let (_id, site) = shore.cast_off().unwrap();
@@ -458,7 +458,7 @@ mod shore_cycle_tests {
         assert!(site.is_open(0), "the dug tile stays revealed");
         assert_eq!(moves_after_one_dig, MOVES - 1);
 
-        at(&mut shore, &world, 300.0, 0.0);
+        at(&mut shore, &world, 200.0, 0.0);
         shore.try_land(&world, 1, Some(site));
         let resumed = &shore.screen.as_ref().unwrap().site;
         assert!(resumed.is_open(0), "the resumed field remembers the dug tile");
