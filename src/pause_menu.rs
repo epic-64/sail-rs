@@ -481,7 +481,7 @@ impl PauseMenu {
         }
 
         draw_text(
-            "↑/↓ move · Enter select · Esc resume",
+            crate::device::hint("↑/↓ move · Enter select · Esc resume", "↑/↓ move · A select · B resume"),
             cx,
             y0 + px(132.0) + row_h * MAIN_ITEMS.len() as f32 + px(8.0),
             px(14.0),
@@ -589,7 +589,10 @@ impl PauseMenu {
         draw_text("Back", cx, back_y, px(22.0), ink());
 
         draw_text(
-            "↑/↓ move · ◄/► or Enter adjust · Esc back",
+            crate::device::hint(
+                "↑/↓ move · ◄/► or Enter adjust · Esc back",
+                "↑/↓ move · ◄/► or A adjust · B back",
+            ),
             cx,
             y0 + ph - px(20.0),
             px(14.0),

@@ -271,6 +271,30 @@ impl Pad {
         sel(&self.now) && !sel(&self.prev)
     }
 
+    /// True if any button had a fresh down-edge this frame, or the analog helm
+    /// just left centre. Drives two things that key presses already drive: hiding
+    /// the touch overlay ([`crate::touch::TouchState::update`]) and remembering
+    /// that the pad, not the keyboard, is the device to show hints for
+    /// ([`crate::device`]).
+    pub fn any_pressed(&self) -> bool {
+        let n = &self.now;
+        let p = &self.prev;
+        n.up && !p.up
+            || n.down && !p.down
+            || n.left && !p.left
+            || n.right && !p.right
+            || n.south && !p.south
+            || n.east && !p.east
+            || n.north && !p.north
+            || n.west && !p.west
+            || n.start && !p.start
+            || n.rb && !p.rb
+            || n.lb && !p.lb
+            || n.rt && !p.rt
+            || n.rthumb && !p.rthumb
+            || n.steer != 0.0 && p.steer == 0.0
+    }
+
     // --- menu navigation (d-pad / left stick) ---
     pub fn up(&self) -> bool {
         self.edge(|l| l.up)

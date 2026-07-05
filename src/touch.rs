@@ -9,9 +9,11 @@
 //! The mouse is folded in as one synthetic pointer, so the controls can also be
 //! driven with a mouse. Every hit-test is gated on [`TouchState::active`], which
 //! follows the *last input device*: a touch or mouse click shows the controls and
-//! makes them respond; a key press hides them again (the `SAIL_TOUCH` env var forces
-//! them on). So a keyboard-only player sees nothing, and a player who switches
-//! between mouse and keyboard sees the controls come and go to match.
+//! makes them respond; a key press or a gamepad button hides them again (the
+//! `SAIL_TOUCH` env var forces them on). So a keyboard/gamepad-only player sees
+//! nothing, and a player who switches between mouse and a button device sees the
+//! controls come and go to match. [`crate::device`] tracks the finer keyboard-vs-
+//! gamepad distinction for on-screen keybind hints once the overlay is down.
 //!
 //! Screen-space maths here use macroquad's glam `Vec2`/`Rect` (pixels), *not* the
 //! game's `geometry::Vec2` — there's deliberately no `use` of the latter, so the
@@ -71,8 +73,10 @@ impl TouchState {
     }
 
     /// Pull this frame's pointers (real touches + the mouse) and classify taps.
-    /// Call once per frame, before anything reads the hit-tests.
-    pub fn update(&mut self, dt: f32) {
+    /// Call once per frame, before anything reads the hit-tests. `pad_pressed` is
+    /// this frame's [`crate::pad::Pad::any_pressed`], folded in so a controller
+    /// button hides the overlay exactly like a keyboard key does.
+    pub fn update(&mut self, dt: f32, pad_pressed: bool) {
         self.taps.clear();
         for p in self.pointers.values_mut() {
             p.seen = false;
@@ -101,11 +105,12 @@ impl TouchState {
         }
 
         // The on-screen controls follow the *last* input device: a touch or mouse
-        // click shows them; any key press hides them again. (On mobile there are no
-        // keys, so once touched they stay; `force` keeps them on for testing.)
+        // click shows them; any key press or gamepad button hides them again. (On
+        // mobile there are no keys or pads, so once touched they stay; `force`
+        // keeps them on for testing.)
         if pointer_event {
             self.pointer_active = true;
-        } else if !get_keys_pressed().is_empty() {
+        } else if !get_keys_pressed().is_empty() || pad_pressed {
             self.pointer_active = false;
         }
 

@@ -327,12 +327,14 @@ pub fn render(
     }
     // Left footer: paging, plus the cursor's keys on spreads that take one.
     let nav = match kind {
-        Spread::VesselHold => "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use",
+        Spread::VesselHold => {
+            crate::device::hint("\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} Enter  use", "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} A  use")
+        }
         Spread::Trinkets => "\u{25C4} \u{25BA} pages   \u{25B2} \u{25BC} choose a trinket",
         _ => "\u{25C4} \u{25BA} turn the page",
     };
     draw_text(nav, x0 + pad, foot_y, fs_small() as f32, dim_ink());
-    let close = "L  close";
+    let close = crate::device::hint("L  close", "B  close");
     let cd = measure_text(close, None, fs_small(), 1.0);
     draw_text(close, x0 + pw - pad - cd.width, foot_y, fs_small() as f32, dim_ink());
 }

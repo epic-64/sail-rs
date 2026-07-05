@@ -261,9 +261,9 @@ impl DigScreen {
             }
         }
         let hint = if self.site.finished() {
-            "The field is spent · Esc puts to sea"
+            crate::device::hint("The field is spent · Esc puts to sea", "The field is spent · B puts to sea")
         } else {
-            "Arrows move · Enter digs · Esc puts to sea"
+            crate::device::hint("Arrows move · Enter digs · Esc puts to sea", "D-pad move · A digs · B puts to sea")
         };
         draw_text(hint, left, footer_y, fs_small() as f32, dim_ink());
     }
