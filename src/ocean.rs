@@ -63,20 +63,21 @@ pub const MAX_AMPLITUDE: f32 = AMP[0] + AMP[1] + AMP[2] + AMP[3];
 
 // --- Deck / camera "ride" shaping (shared by main.rs and ship_render.rs) -------
 // The bow's answer to the swell is *shaped* before it drives the camera look and
-// the deck rake: amplified throughout (a swell should heave the bow, not just nod
-// it). `PITCH_DIVE` can amplify nosing *down* the back of a crest more than climbing
-// its face — set above `PITCH_CLIMB` to make a wave you slide down read as a dive
-// rather than a glide. That boost eases in with depth (over `PITCH_DIVE_KNEE`) so the
-// response is C1-continuous through the crest and never snaps as the pitch flips sign.
-// Currently the two are equal: the nod is symmetric, so the view rests on the horizon
-// on average instead of biasing downward. Ported from `SailingView`.
-pub const PITCH_CLIMB: f32 = 1.3;
-pub const PITCH_DIVE: f32 = 1.3;
+// the deck rake. The gains sit below 1: a swell should mostly *heave* the ship
+// (see `deck_heave_px`) with the nod kept secondary, so a wave reads as the water
+// rising and falling under the hull rather than a seesaw. `PITCH_DIVE` can weight
+// nosing *down* the back of a crest differently from climbing its face; the
+// difference eases in with depth (over `PITCH_DIVE_KNEE`) so the response is
+// C1-continuous through the crest and never snaps as the pitch flips sign.
+// Currently the two are equal: the nod is symmetric, so the view rests on the
+// horizon on average instead of biasing downward. Ported from `SailingView`.
+pub const PITCH_CLIMB: f32 = 0.9;
+pub const PITCH_DIVE: f32 = 0.9;
 pub const PITCH_DIVE_KNEE: f32 = 0.12; // rad of bow-down at which the dive boost is full
 
-/// The bow's shaped answer to the swell: amplified throughout, with an optional extra
-/// dive gain (`PITCH_DIVE` > `PITCH_CLIMB`) eased in with depth so it stays smooth
-/// through the crest. Symmetric while the two gains are equal. `SailingView.pitchResponse`.
+/// The bow's shaped answer to the swell: scaled by the climb/dive gains, the dive
+/// side eased in with depth so it stays smooth through the crest. Symmetric while
+/// the two gains are equal. `SailingView.pitchResponse`.
 #[inline]
 pub fn pitch_response(pitch: f32) -> f32 {
     let dive = clamp(-pitch / PITCH_DIVE_KNEE, 0.0, 1.0);
@@ -87,8 +88,8 @@ pub fn pitch_response(pitch: f32) -> f32 {
 /// 0 = all deck (a violent slide); 1 = all camera (a level deck under a heaving
 /// horizon). `SailingView.heaveCameraShare`.
 pub const HEAVE_CAMERA_SHARE: f32 = 0.42;
-const HEAVE_GAIN_PX: f32 = 27.0; // px the deck rises per metre the bow lifts above the mean
-const HEAVE_MAX_PX: f32 = 44.0; // ceiling, so a steep crest can't fling the deck
+const HEAVE_GAIN_PX: f32 = 31.0; // px the deck rises per metre the bow lifts above the mean
+const HEAVE_MAX_PX: f32 = 51.0; // ceiling, so a steep crest can't fling the deck
 
 /// Vertical screen shift (px) bobbing the deck/camera with the bow's lift above the
 /// hull's mean (`bow_lift`, metres). A plain linear gain, clamped so even a freak

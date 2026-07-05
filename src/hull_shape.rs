@@ -195,7 +195,9 @@ pub static SLOOP: HullShape = HullShape {
     sprit_base: (1.0, -9.7),
     sprit_tip: (2.0, -12.5),
     freeboard: 0.95,
-    sway_response: 1.7,
+    // Lighter than the brig's baseline, but shy of the old 1.7: at that rate
+    // she tracked the chop wave for wave and read as wobble, not liveliness.
+    sway_response: 1.3,
     // Rows every couple of metres, close enough that the plane fit acts as the
     // waterplane's true low-pass (sparser rows alias short waves back in);
     // athwart offsets follow the local beam.

@@ -543,6 +543,15 @@ async fn run_game(
     const ROLL_EASE: f32 = 2.2;
     const PITCH_EASE: f32 = 2.6;
     const HEEL_EASE: f32 = 1.1; // the boat leans into / out of the heel gradually
+    // At speed the hull meets crests far more often than at rest, and a real
+    // hull cannot answer each one: she planes over them. The sway *amplitude*
+    // falls off with the square of speed (a hull's wave response dies off past
+    // resonance the same way), so a ship at full run rides steady over seas
+    // that rock her at anchor. `RIDE_SPEED_REF` is the speed where it has
+    // halved. Only the tilts (pitch/roll/yaw) stiffen: the heave bob must
+    // keep tracking the raw bow water, or the drawn deck visibly parts from
+    // the sea it rides on.
+    const RIDE_SPEED_REF: f32 = sailing::BASE_TOP_SPEED;
 
     // Bow spray: foam off the stem and shoulders, stronger with speed and bursting
     // when the bow slams into a sea. `prev_bow_lift`/`prev_lean` give the frame-to-
@@ -1511,12 +1520,36 @@ async fn run_game(
         // The ease rates scale by the hull's mass character (`sway_response`):
         // a light tier-0 hull snaps to the sea's plane where the brig leans
         // into it, so the chop the probes can't filter (a wave dead abeam
-        // spans no waterline) still works a small ship harder.
+        // spans no waterline) still works a small ship harder. Speed scales
+        // the *amplitude* instead (`ride_calm`, see `RIDE_SPEED_REF`): slowing
+        // the ease would also lag the sway, and a lagged pitch leaves the nose
+        // hanging crest-high halfway down a wave's back. Attenuating the
+        // target keeps the answer prompt, just smaller.
+        let ride_calm = {
+            let s = kin.speed() / RIDE_SPEED_REF;
+            1.0 / (1.0 + s * s)
+        };
+        // Even a brisk ease answers late by roughly its own time constant, so
+        // the smoothed deck trails the raw-drawn water and the (unfiltered)
+        // heave bob: the ride reads slightly out of step with the waves. The
+        // swell is a pure function of place and time, so cancel the delay by
+        // aiming the filter at the sea the hull is about to meet: the sway
+        // targets are sampled one filter delay ahead, along the ship's run.
+        // (Roll's slightly slower ease leaves it a shade behind still; a hint
+        // of trailing roll reads as mass, not desync.)
+        let sway_lag = 1.0 / (PITCH_EASE * ship_hull.sway_response);
+        let led = ocean::ship_motion(
+            kin.pos + Vec2::from_heading(kin.heading_rad) * (kin.speed() * sway_lag),
+            kin.heading_rad,
+            t + sway_lag,
+            sea,
+            ship_hull,
+        );
         let ease = clamp(ROLL_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
-        smooth_roll += (motion.roll - smooth_roll) * ease;
-        smooth_yaw += (motion.yaw - smooth_yaw) * ease;
-        smooth_pitch +=
-            (motion.pitch - smooth_pitch) * clamp(PITCH_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
+        smooth_roll += (led.roll * ride_calm - smooth_roll) * ease;
+        smooth_yaw += (led.yaw * ride_calm - smooth_yaw) * ease;
+        smooth_pitch += (led.pitch * ride_calm - smooth_pitch)
+            * clamp(PITCH_EASE * ship_hull.sway_response * dt, 0.0, 1.0);
         smooth_heel += (heel_target - smooth_heel) * clamp(HEEL_EASE * dt, 0.0, 1.0);
 
         // The hull's lean (swell roll + wind heel) tilts the horizon the *other* way
