@@ -35,6 +35,13 @@ impl Island {
     pub fn dock_range(&self) -> f32 {
         self.radius + 250.0
     }
+
+    /// How close (m) the ship must come to go ashore on a portless isle:
+    /// tighter than [`dock_range`](Self::dock_range), since there's no harbour
+    /// reaching out to meet the ship.
+    pub fn land_range(&self) -> f32 {
+        self.radius + 120.0
+    }
 }
 
 /// A local archipelago: a tight knot of isles separated from its neighbours by

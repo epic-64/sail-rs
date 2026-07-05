@@ -116,10 +116,21 @@ pub const ASTERN_CULL: f32 = 500.0;
 /// float offshore rather than on the beach.
 pub const SHORE_CLEARANCE: f32 = 120.0;
 /// How close the ship must come (m) to scoop a piece aboard — a touch wider than
-/// the hull (~24 m bow-to-stern), so sailing *over* a crate lifts it without
+/// the base hull (~24 m bow-to-stern), so sailing *over* a crate lifts it without
 /// hoovering up salvage from a boat-length away. (New: the original left the reach
-/// to the caller; this is the value `main` sweeps with.)
+/// to the caller; this is the value `main` sweeps with.) Use [`reach_for_hull`] to
+/// scale this up for a bigger hull tier rather than reading it directly.
 pub const REACH: f32 = 30.0;
+/// Extra reach (m) per shipyard hull tier: a longer hull sweeps a wider swath
+/// of water alongside it, so a bigger ship should scoop up flotsam a bit
+/// farther from her rail than the base sloop.
+const REACH_PER_HULL_LEVEL: f32 = 6.0;
+
+/// The pickup reach for a given shipyard hull tier, widening [`REACH`] as the
+/// hull grows (see `game_state::upgrades`).
+pub fn reach_for_hull(hull_level: i32) -> f32 {
+    REACH + hull_level.max(0) as f32 * REACH_PER_HULL_LEVEL
+}
 /// Tries to find open water for one piece before giving up this round.
 const MAX_ATTEMPTS: i32 = 8;
 
