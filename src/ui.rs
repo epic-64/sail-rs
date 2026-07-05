@@ -80,3 +80,28 @@ pub fn format_dist(m: f32) -> String {
         format!("{} m", m.round() as i32)
     }
 }
+
+// --- Sea call-to-action ---------------------------------------------------------
+/// Draw a call-to-action pill over the open sea in screen space (not on a
+/// parchment board), so it keeps the larger title size to catch the eye. Shared by
+/// the docking prompt ([`crate::port_view::render_prompt`]) and the shore prompt
+/// ([`crate::dig_view::render_prompt`]) so an uninhabited isle reads as the same
+/// system as a port rather than a lookalike with its own sizing and colours.
+pub fn sea_prompt(msg: &str, w: f32, h: f32) {
+    let fs = fs_title();
+    let dims = measure_text(msg, None, fs, 1.0);
+    let pad = px(12.0);
+    let bx = w * 0.5 - dims.width / 2.0;
+    let by = h * 0.80;
+    let pill_h = line_h(fs) + pad;
+    // Baseline drop from the pill's vertical centre, as a fraction of font size.
+    let center = by - fs as f32 * 0.35;
+    draw_rectangle(
+        bx - pad,
+        center - pill_h / 2.0,
+        dims.width + 2.0 * pad,
+        pill_h,
+        Color::new(0.0, 0.0, 0.0, 0.5),
+    );
+    draw_text(msg, bx, by, fs as f32, WHITE);
+}
