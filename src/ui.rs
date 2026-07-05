@@ -87,11 +87,13 @@ pub fn format_dist(m: f32) -> String {
 /// the docking prompt ([`crate::port_view::render_prompt`]) and the shore prompt
 /// ([`crate::dig_view::render_prompt`]) so an uninhabited isle reads as the same
 /// system as a port rather than a lookalike with its own sizing and colours.
-pub fn sea_prompt(msg: &str, w: f32, h: f32) {
+/// `parts` lets the embedded key/button (see [`crate::hint`]) badge itself
+/// instead of sitting in the message as plain text.
+pub fn sea_prompt(parts: &[crate::hint::Part], w: f32, h: f32) {
     let fs = fs_title();
-    let dims = measure_text(msg, None, fs, 1.0);
+    let width = crate::hint::measure(parts, fs);
     let pad = px(12.0);
-    let bx = w * 0.5 - dims.width / 2.0;
+    let bx = w * 0.5 - width / 2.0;
     let by = h * 0.80;
     let pill_h = line_h(fs) + pad;
     // Baseline drop from the pill's vertical centre, as a fraction of font size.
@@ -99,9 +101,9 @@ pub fn sea_prompt(msg: &str, w: f32, h: f32) {
     draw_rectangle(
         bx - pad,
         center - pill_h / 2.0,
-        dims.width + 2.0 * pad,
+        width + 2.0 * pad,
         pill_h,
         Color::new(0.0, 0.0, 0.0, 0.5),
     );
-    draw_text(msg, bx, by, fs as f32, WHITE);
+    crate::hint::draw(parts, bx, by, fs, WHITE);
 }
