@@ -1,4 +1,4 @@
-//! Gamepad input, the controller layer (native only).
+//! Gamepad input, the controller layer.
 //!
 //! Like [`crate::touch`], this is an **additive** layer that emits the *same verbs*
 //! the keyboard already emits, so no game logic is controller-aware: every dispatch
@@ -27,13 +27,16 @@
 //! suppressed while an overlay is up (the call sites gate it on `!overlay_open`), just
 //! as the keyboard reserves its arrows for the book while it's open.
 //!
-//! `gilrs` is native-only (its wasm backend pulls in `wasm-bindgen`, which macroquad's
-//! own JS glue can't satisfy), so on the web build this whole module compiles to a
-//! no-op stub: [`Pad::update`] does nothing, the level snapshots stay all-default and
-//! every query returns `false` / `None`. The web build keeps its on-screen touch HUD.
+//! Two backends feed the same [`Levels`], one per target:
+//! - **Native** uses `gilrs` (its wasm backend pulls in `wasm-bindgen`, which
+//!   macroquad's own JS glue can't satisfy, so it's off on wasm).
+//! - **Web** reads the browser's Gamepad API through three shims a `miniquad_add_plugin`
+//!   call in `web/index.html` adds to the wasm import object (the same pattern
+//!   `save.rs` uses for `localStorage`), since polling avoids needing `wasm-bindgen`.
+//! Bindings are kept the same shape (indices matching the W3C "standard" gamepad
+//! mapping) so both backends read identically from the game's point of view.
 
 /// A stick pushed less than this far from centre reads as centred (rest-noise guard).
-#[cfg(not(target_arch = "wasm32"))]
 const DEADZONE: f32 = 0.25;
 
 /// The digital on/off state of every bound control for one frame. Buttons are levels
@@ -41,9 +44,8 @@ const DEADZONE: f32 = 0.25;
 /// by diffing against the previous frame, matching `is_key_pressed`. `steer` is the
 /// analog helm demand in `[-1, 1]` (0 = centred).
 ///
-/// Kept platform-independent so the query methods compile everywhere: on wasm nothing
-/// ever fills one in, so it stays `default()` (all false, steer 0) and the queries read
-/// as "no controller".
+/// Kept platform-independent so the query methods, and [`Levels::or_in`], compile
+/// identically for both backends.
 #[derive(Default, Clone, Copy)]
 struct Levels {
     up: bool,
@@ -62,7 +64,6 @@ struct Levels {
     steer: f32,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Levels {
     /// Fold another connected pad's state in, so *any* controller drives the game
     /// (buttons OR together; steering takes whichever stick is pushed furthest).
@@ -129,6 +130,84 @@ fn read_levels(g: &gilrs::Gamepad) -> Levels {
     }
 }
 
+/// Web: the browser's Gamepad API, reached through three shims the JS loader adds to
+/// the wasm import object (see the `miniquad_add_plugin` call in `web/index.html`).
+/// The API is poll-only (no button/axis events), so these are plain getters called
+/// once a frame per connected pad index, mirroring the shape of [`read_levels`].
+#[cfg(target_arch = "wasm32")]
+mod web {
+    unsafe extern "C" {
+        fn quad_gamepad_connected(idx: i32) -> i32;
+        fn quad_gamepad_button(idx: i32, button: i32) -> f32;
+        fn quad_gamepad_axis(idx: i32, axis: i32) -> f32;
+    }
+
+    /// The Gamepad API exposes up to four slots regardless of how many are actually
+    /// plugged in; unconnected slots read as `false`/`0.0` and cost one JS call each.
+    pub const MAX_PADS: i32 = 4;
+
+    // W3C "standard" gamepad mapping: fixed indices into `buttons[]` / `axes[]`.
+    mod button {
+        pub const SOUTH: i32 = 0;
+        pub const EAST: i32 = 1;
+        pub const WEST: i32 = 2;
+        pub const NORTH: i32 = 3;
+        pub const LB: i32 = 4;
+        pub const RB: i32 = 5;
+        pub const RT: i32 = 7;
+        pub const START: i32 = 9;
+        pub const RTHUMB: i32 = 11;
+        pub const UP: i32 = 12;
+        pub const DOWN: i32 = 13;
+        pub const LEFT: i32 = 14;
+        pub const RIGHT: i32 = 15;
+    }
+    mod axis {
+        pub const LX: i32 = 0;
+        pub const LY: i32 = 1;
+    }
+
+    pub fn connected(idx: i32) -> bool {
+        unsafe { quad_gamepad_connected(idx) != 0 }
+    }
+
+    /// Reads one connected gamepad into a [`super::Levels`], the web twin of
+    /// [`super::read_levels`].
+    pub fn read_levels(idx: i32) -> super::Levels {
+        let button = |b: i32| unsafe { quad_gamepad_button(idx, b) } > 0.5;
+        let lx = unsafe { quad_gamepad_axis(idx, axis::LX) };
+        let ly = unsafe { quad_gamepad_axis(idx, axis::LY) }; // W3C: up is negative
+        let dz = super::DEADZONE;
+        let dpad_left = button(button::LEFT);
+        let dpad_right = button(button::RIGHT);
+        let steer = if lx.abs() > dz {
+            (lx.signum() * (lx.abs() - dz) / (1.0 - dz)).clamp(-1.0, 1.0)
+        } else if dpad_right {
+            1.0
+        } else if dpad_left {
+            -1.0
+        } else {
+            0.0
+        };
+        super::Levels {
+            up: button(button::UP) || ly < -dz,
+            down: button(button::DOWN) || ly > dz,
+            left: dpad_left || lx < -dz,
+            right: dpad_right || lx > dz,
+            south: button(button::SOUTH),
+            east: button(button::EAST),
+            north: button(button::NORTH),
+            west: button(button::WEST),
+            start: button(button::START),
+            rb: button(button::RB),
+            lb: button(button::LB),
+            rt: button(button::RT),
+            rthumb: button(button::RTHUMB),
+            steer,
+        }
+    }
+}
+
 /// The controller input layer: this and the previous frame's [`Levels`], diffed to
 /// yield per-frame button edges. Ticked once per frame by [`Pad::update`], right
 /// beside `touch.update`.
@@ -172,6 +251,16 @@ impl Pad {
             let mut lv = Levels::default();
             for (_id, g) in gilrs.gamepads() {
                 lv.or_in(read_levels(&g));
+            }
+            self.now = lv;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut lv = Levels::default();
+            for idx in 0..web::MAX_PADS {
+                if web::connected(idx) {
+                    lv.or_in(web::read_levels(idx));
+                }
             }
             self.now = lv;
         }
