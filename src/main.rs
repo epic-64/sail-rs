@@ -2200,7 +2200,10 @@ async fn run_game(
 
         // The focus call-to-action, over everything until the first click or key.
         if need_focus_click {
-            if is_mouse_button_pressed(MouseButton::Left) || !get_keys_pressed().is_empty() {
+            if is_mouse_button_pressed(MouseButton::Left)
+                || !get_keys_pressed().is_empty()
+                || pad.any_pressed()
+            {
                 need_focus_click = false;
             } else {
                 draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.55));
