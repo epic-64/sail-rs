@@ -100,37 +100,6 @@ pub fn deck_heave_px(bow_lift: f32) -> f32 {
     clamp(-bow_lift * HEAVE_GAIN_PX, -HEAVE_MAX_PX, HEAVE_MAX_PX)
 }
 
-/// Sea-surface sample for the *renderer*: the elevation (m) plus a horizontal
-/// Gerstner-style chop offset (m, chart frame) that slides surface points
-/// toward the nearest crest, sharpening peaks and hollowing troughs so the
-/// drawn mesh reads as solid 3D wave shapes instead of a vertically displaced
-/// carpet. Per swell the offset is the height's quadrature (`cos` where the
-/// height is `sin`) along the travel direction, scaled by `chop`; both trains
-/// blend exactly as in [`height`], so `z` here equals `height` at the same
-/// point. Physics (buoyancy, collision, spray) keep sampling [`height`]: the
-/// chop moves points *along* the surface, never changes the water level.
-#[inline]
-pub fn surface(p: Vec2, t: f32, sea: f32, chop: f32) -> (f32, f32, f32) {
-    let mut z = 0.0;
-    let mut ox = 0.0;
-    let mut oy = 0.0;
-    let b = storm_blend(sea);
-    let mut i = 0;
-    while i < N {
-        let phase_pos = p.x * DIR_X[i] + p.y * DIR_Y[i];
-        let kc = TAU / WAVELENGTH[i];
-        let ks = TAU / (WAVELENGTH[i] * STORM_STRETCH);
-        let (sin_c, cos_c) = (phase_pos * kc - SPEED[i] * kc * t + PHASE[i]).sin_cos();
-        let (sin_s, cos_s) = (phase_pos * ks - SPEED[i] * ks * t + PHASE[i]).sin_cos();
-        z += AMP[i] * ((1.0 - b) * sin_c + b * sin_s);
-        let sway = AMP[i] * ((1.0 - b) * cos_c + b * cos_s) * chop;
-        ox += DIR_X[i] * sway;
-        oy += DIR_Y[i] * sway;
-        i += 1;
-    }
-    (ox * sea, oy * sea, z * sea)
-}
-
 /// Sea-surface elevation (m) at world point `p` and time `t` seconds.
 #[inline]
 pub fn height(p: Vec2, t: f32, sea: f32) -> f32 {
@@ -241,27 +210,6 @@ pub fn swell_yaw(pos: Vec2, heading: f32, t: f32, sea: f32, hull: &HullShape) ->
 mod tests {
     use super::*;
     use crate::hull_shape::{BRIG, GALLEON, INDIAMAN, SLOOP};
-
-    /// The renderer's chopped sample and the physics height field are the same
-    /// surface: `surface(..).2` is `height(..)` exactly, the chop offset stays
-    /// within its analytic bound, and a zero chop displaces nothing.
-    #[test]
-    fn surface_matches_height_and_chop_stays_bounded() {
-        for pi in 0..60 {
-            let p = Vec2::new(pi as f32 * 37.3 - 800.0, pi as f32 * 59.1 - 1200.0);
-            let t = pi as f32 * 0.37;
-            for &sea in &[0.3, 1.0, 1.3] {
-                let chop = 1.6;
-                let (ox, oy, z) = surface(p, t, sea, chop);
-                assert!((z - height(p, t, sea)).abs() < 1e-3);
-                let bound = chop * MAX_AMPLITUDE * sea + 1e-3;
-                assert!(ox.abs() <= bound && oy.abs() <= bound, "offset {ox},{oy} vs {bound}");
-                let (ox0, oy0, z0) = surface(p, t, sea, 0.0);
-                assert_eq!((ox0, oy0), (0.0, 0.0));
-                assert!((z0 - z).abs() < 1e-4);
-            }
-        }
-    }
 
     #[test]
     fn probe_swell_yaw_envelope() {

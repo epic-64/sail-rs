@@ -2,20 +2,19 @@
 //! `client.OceanRenderer`.
 //!
 //! Each frame we project a grid of real world points (sampled from
-//! [`ocean::surface`]) into the first-person view using the same camera the
+//! [`ocean::height`]) into the first-person view using the same camera the
 //! islands use ([`projection`]). Because the grid is anchored to the *world* and
 //! merely re-bearing-ed relative to the helm, turning sweeps the near water
-//! across the view while the horizon holds still. The surface is true low-poly
-//! 3D, matching the faceted islands and hulls: every vertex carries a
-//! Gerstner-style chop that slides it horizontally toward the nearest crest (so
-//! peaks sharpen, troughs hollow, and silhouettes jag sideways instead of only
-//! up and down), and each grid cell splits into two triangles on alternating
-//! diagonals, every one flat-shaded from its own surface normal. Per facet: a
-//! diffuse term warms crests toward the sun, a Blinn-Phong specular highlight
-//! breaks into a sparkling glitter road, a Fresnel term reflects the sky on
-//! grazing facets, back-lit crests glow with subsurface scattering, and
-//! whitecaps foam on the tallest/steepest faces. A sparse field of
-//! world-anchored foam flecks streaks across the near water to read headway.
+//! across the view while the horizon holds still. Quads are flat-shaded from the
+//! surface normal: a diffuse term warms crests toward the sun, a Blinn-Phong
+//! specular highlight breaks into a sparkling glitter road, a Fresnel term
+//! reflects the sky on grazing facets, back-lit crests glow with subsurface
+//! scattering, and whitecaps foam on the tallest/steepest faces. A sparse field
+//! of world-anchored foam flecks streaks across the near water to read headway.
+//!
+//! The Scala original draws onto a 2D `<canvas>` and coalesces same-colour quad
+//! runs into single fills; here we draw each quad as two `draw_triangle`s and let
+//! macroquad batch them.
 
 use macroquad::prelude::*;
 
@@ -93,15 +92,6 @@ pub struct OceanRenderer {
     crest_fade_lo: f32,
     crest_fade_hi: f32,
 
-    // Gerstner chop: how far (per metre of swell amplitude) a vertex slides
-    // toward its crest, and the distance window over which the slide eases in.
-    // Close aboard it must vanish: the hull rides the plain height field, so the
-    // water alongside stays put, and a metres-wide offset at a metres-near sample
-    // would swing its bearing wildly.
-    chop: f32,
-    chop_near_lo: f32,
-    chop_near_hi: f32,
-
     // Surface drift flecks.
     flow_cell: f32,
     flow_far: f32,
@@ -150,22 +140,16 @@ pub struct OceanRenderer {
     p_sky: [f32; 3],
     p_glint: [f32; 3],
 
-    // Reusable column buffers. Each row holds its vertices both in the camera
-    // frame (s right of the bow, f ahead, z up; metres, chop applied) for the
-    // facet normals, and projected to the screen (sx, sy). `prev_*` is the
-    // farther row of the band being painted.
+    // Reusable column buffers.
     phis: Vec<f32>,
-    tan_phi: Vec<f32>,
-    cur_s: Vec<f32>,
-    cur_f: Vec<f32>,
-    cur_z: Vec<f32>,
-    cur_sx: Vec<f32>,
-    cur_sy: Vec<f32>,
-    prev_s: Vec<f32>,
-    prev_f: Vec<f32>,
+    screen_x: Vec<f32>,
+    prev_y: Vec<f32>,
     prev_z: Vec<f32>,
-    prev_sx: Vec<f32>,
-    prev_sy: Vec<f32>,
+    cur_y: Vec<f32>,
+    cur_z: Vec<f32>,
+    cur_x: Vec<f32>,     // lateral world-offset factor tan(phi)
+    cos_phi: Vec<f32>,   // cos of each column bearing
+    cur_x_span: Vec<f32>, // tan(phi) span across each quad
 }
 
 #[inline]
@@ -222,9 +206,6 @@ impl OceanRenderer {
             crest_glass: 0.2,
             crest_fade_lo: 0.12,
             crest_fade_hi: 0.42,
-            chop: 1.6,
-            chop_near_lo: 8.0,
-            chop_near_hi: 28.0,
             flow_cell: 17.0,
             flow_far: 230.0,
             flow_near: 4.0,
@@ -253,17 +234,14 @@ impl OceanRenderer {
             p_sky: [0.0; 3],
             p_glint: [0.0; 3],
             phis: vec![0.0; cols],
-            tan_phi: vec![0.0; cols],
-            cur_s: vec![0.0; cols],
-            cur_f: vec![0.0; cols],
-            cur_z: vec![0.0; cols],
-            cur_sx: vec![0.0; cols],
-            cur_sy: vec![0.0; cols],
-            prev_s: vec![0.0; cols],
-            prev_f: vec![0.0; cols],
+            screen_x: vec![0.0; cols],
+            prev_y: vec![0.0; cols],
             prev_z: vec![0.0; cols],
-            prev_sx: vec![0.0; cols],
-            prev_sy: vec![0.0; cols],
+            cur_y: vec![0.0; cols],
+            cur_z: vec![0.0; cols],
+            cur_x: vec![0.0; cols],
+            cos_phi: vec![0.0; cols],
+            cur_x_span: vec![0.0; cols],
         }
     }
 
@@ -532,12 +510,21 @@ impl OceanRenderer {
             self.phis[i] = (i as f32 / (self.cols - 1) as f32 * 2.0 - 1.0)
                 * half_fov_h_view
                 * self.fov_margin;
-            self.tan_phi[i] = self.phis[i].tan();
+            self.screen_x[i] = w * 0.5 + self.phis[i] * px_per_rad_h;
+            self.cur_x[i] = self.phis[i].tan();
+            self.cos_phi[i] = self.phis[i].cos();
+            if i > 0 {
+                self.cur_x_span[i - 1] = self.cur_x[i] - self.cur_x[i - 1];
+            }
         }
 
-        // March from the far row toward the viewer, painting the triangle band
-        // between the previous row and the current one. Nearer bands draw last
-        // (on top), which is the painter's order the island interleave rides on.
+        // March from the far row toward the viewer, painting the quad band between
+        // the previous row and the current one. Nearer bands draw last (on top).
+        // `prev_f` carries the previous (farther) row's distance so each band's
+        // forward slope uses its *real* world spacing — far bands span hundreds of
+        // metres, near ones a few — instead of one coarse average. That makes the
+        // surface normals (and so the lighting) accurate at every range.
+        let mut prev_f = 0.0;
         let mut j = 0;
         while j <= self.rows {
             // Bias the depression-angle march toward the far field: small steps near
@@ -546,34 +533,17 @@ impl OceanRenderer {
             let frac = (j as f32 / self.rows as f32).powf(self.row_bias);
             let th = th_far + (th_near - th_far) * frac;
             let f = BASE_EYE / th.tan();
-            // The chop eases in over the near window (see the `chop` field).
-            let chop = self.chop
-                * clamp(
-                    (f - self.chop_near_lo) / (self.chop_near_hi - self.chop_near_lo),
-                    0.0,
-                    1.0,
-                );
             for c in 0..self.cols {
-                let s = f * self.tan_phi[c];
+                let s = f * self.cur_x[c];
                 let wp = kin.pos + fwd * f + right * s;
-                let (ox, oy, z) = ocean::surface(wp, t, sea, chop);
-                // The chart-frame chop offset swung into the camera frame; the
-                // forward component is floored so a hard chop on the very nearest
-                // rows can never pull a vertex behind the eye.
-                let off = Vec2::new(ox, oy);
-                let s2 = s + off.dot(right);
-                let f2 = (f + off.dot(fwd)).max(0.8);
-                let d = (s2 * s2 + f2 * f2).sqrt();
-                self.cur_s[c] = s2;
-                self.cur_f[c] = f2;
+                let z = ocean::height(wp, t, sea);
                 self.cur_z[c] = z;
-                // Project the displaced point: its bearing gives the screen x (so
-                // crests genuinely lean sideways), and its height, relative to the
-                // ship's heave, the screen y (the sea drops away under the camera
-                // on a crest and rises in the trough).
-                self.cur_sx[c] = w * 0.5 + s2.atan2(f2) * px_per_rad_h;
-                self.cur_sy[c] = horizon
-                    + ((BASE_EYE - (z - heave) * WAVE_GAIN) / d).atan() * px_per_rad;
+                // Project height relative to the ship's heave so the sea drops away
+                // under the camera on a crest and rises in the trough. Scale by
+                // cos(phi): the true ground distance off-axis is f / cos(phi).
+                self.cur_y[c] = horizon
+                    + ((BASE_EYE - (z - heave) * WAVE_GAIN) * self.cos_phi[c] / f).atan()
+                        * px_per_rad;
             }
 
             // Draw every island farther than this band's near edge *before* the
@@ -604,28 +574,25 @@ impl OceanRenderer {
             }
 
             if j > 0 {
-                self.paint_band(j, f, sea, lx, ly, lz, &cam_lights);
+                self.paint_band(f, prev_f - f, sea, lx, ly, lz, &cam_lights);
             }
 
-            std::mem::swap(&mut self.prev_s, &mut self.cur_s);
-            std::mem::swap(&mut self.prev_f, &mut self.cur_f);
+            std::mem::swap(&mut self.prev_y, &mut self.cur_y);
             std::mem::swap(&mut self.prev_z, &mut self.cur_z);
-            std::mem::swap(&mut self.prev_sx, &mut self.cur_sx);
-            std::mem::swap(&mut self.prev_sy, &mut self.cur_sy);
+            prev_f = f;
             j += 1;
         }
 
-        // Skirt the nearest row (now in the prev buffers after the last swap)
-        // down to the bottom edge so the near water runs unbroken into the
-        // corners on a wide window. On a normal window the near row is already
-        // off the bottom.
+        // Skirt the nearest row (now in prev_y after the last swap) down to the
+        // bottom edge so the near water runs unbroken into the corners on a wide
+        // window. On a normal window the near row is already off the bottom.
         let near_col = col3(self.p_near, 1.0);
         for sc in 0..self.cols - 1 {
-            let y_l = self.prev_sy[sc].min(h);
-            let y_r = self.prev_sy[sc + 1].min(h);
+            let y_l = self.prev_y[sc].min(h);
+            let y_r = self.prev_y[sc + 1].min(h);
             if y_l < h || y_r < h {
-                let x_l = self.prev_sx[sc];
-                let x_r = self.prev_sx[sc + 1];
+                let x_l = self.screen_x[sc];
+                let x_r = self.screen_x[sc + 1];
                 draw_triangle(vec2(x_l, y_l), vec2(x_r, y_r), vec2(x_r, h), near_col);
                 draw_triangle(vec2(x_l, y_l), vec2(x_r, h), vec2(x_l, h), near_col);
             }
@@ -659,20 +626,16 @@ impl OceanRenderer {
         self.paint_flow(&scene);
     }
 
-    /// Fill the strip between the previous (farther) row and the current (nearer)
-    /// row: each grid cell splits into two triangles on a diagonal alternated by
-    /// cell parity (`row` keys it), and every triangle is flat-shaded from its own
-    /// surface normal, so the sea reads as irregular low-poly chunks like the
-    /// islands rather than banded quads. `f_near_row` is the current row's
-    /// distance, used for the depth-based base colour (per band, not per facet, to
-    /// keep the near-to-far colour ramp running in clean bands). `lights` are the
-    /// visible ports' town lights (camera frame), baked into each facet as a warm
+    /// Fill the strip of quads between the previous (farther) row and the current
+    /// (nearer) row, shading each from its slope against the sun. `f_near_row` is
+    /// the current row's distance, used for the depth-based base colour. `lights` are
+    /// the visible ports' town lights (camera frame), baked into each facet as a warm
     /// local light so the harbour road shades the water like a low sun.
     #[allow(clippy::too_many_arguments)]
     fn paint_band(
         &self,
-        row: usize,
         f_near_row: f32,
+        row_df: f32,
         sea: f32,
         lx: f32,
         ly: f32,
@@ -728,261 +691,217 @@ impl OceanRenderer {
         let max_amp = (0.4_f32).max(ocean::MAX_AMPLITUDE * sea);
 
         for c in 0..self.cols - 1 {
-            // Cell corners as (s, f, z, sx, sy): camera-frame position (chop
-            // applied) plus the screen projection. Near row = cur, far row = prev.
-            let nl = [self.cur_s[c], self.cur_f[c], self.cur_z[c], self.cur_sx[c], self.cur_sy[c]];
-            let nr = [
-                self.cur_s[c + 1],
-                self.cur_f[c + 1],
-                self.cur_z[c + 1],
-                self.cur_sx[c + 1],
-                self.cur_sy[c + 1],
-            ];
-            let fl = [
-                self.prev_s[c],
-                self.prev_f[c],
-                self.prev_z[c],
-                self.prev_sx[c],
-                self.prev_sy[c],
-            ];
-            let fr = [
-                self.prev_s[c + 1],
-                self.prev_f[c + 1],
-                self.prev_z[c + 1],
-                self.prev_sx[c + 1],
-                self.prev_sy[c + 1],
-            ];
-            // Alternate the split diagonal per cell so the facets read as an
-            // irregular low-poly weave rather than one long diagonal rake.
-            let tris = if (row + c) & 1 == 0 {
-                [[nl, nr, fr], [nl, fr, fl]]
+            // Quad corners: near row (cur) = bottom edge, far row (prev) = top edge.
+            let z_l = self.cur_z[c];
+            let z_r = self.cur_z[c + 1];
+            let slope_lat = (z_r - z_l) / (1e-3_f32).max((self.cur_x_span[c] * f_near_row).abs());
+            let slope_fwd = (self.prev_z[c] - self.cur_z[c]) / (0.5_f32).max(row_df);
+            // Unit surface normal in the camera's (right, fwd, up) frame.
+            let inv_n = 1.0 / (slope_lat * slope_lat + slope_fwd * slope_fwd + 1.0).sqrt();
+            let nx = -slope_lat * inv_n;
+            let ny = -slope_fwd * inv_n;
+            let nz = inv_n;
+            // Diffuse term against the sun (Lambert), kept signed so the shading
+            // below can wrap it softly around the back of each swell.
+            let lambert = nx * lx + ny * ly + nz * lz;
+            let diff = lambert.max(0.0);
+
+            // View vector from this facet back to the eye.
+            let s_mid = (self.cur_x[c] + self.cur_x[c + 1]) * 0.5 * f_near_row;
+            let mid_z = (z_l + z_r) * 0.5;
+            let vxr = -s_mid;
+            let vyr = -f_near_row;
+            let vzr = BASE_EYE - mid_z;
+            let v_inv = 1.0 / (vxr * vxr + vyr * vyr + vzr * vzr).sqrt();
+            let vx = vxr * v_inv;
+            let vy = vyr * v_inv;
+            let vz = vzr * v_inv;
+
+            // Blinn-Phong specular: half-vector between sun and eye.
+            let hx0 = lx + vx;
+            let hy0 = ly + vy;
+            let hz0 = lz + vz;
+            let h_inv = 1.0 / (hx0 * hx0 + hy0 * hy0 + hz0 * hz0).sqrt();
+            let n_dot_h = clamp((nx * hx0 + ny * hy0 + nz * hz0) * h_inv, 0.0, 1.0);
+            let spec = if n_dot_h > 0.9 {
+                n_dot_h.powf(self.shininess)
             } else {
-                [[nl, nr, fl], [nr, fr, fl]]
+                0.0
             };
-            for [pa, pb, pc] in tris {
-                // Facet centroid and unit surface normal in the camera's (right,
-                // fwd, up) frame, both from the true 3D corners: this is what makes
-                // the two halves of a cell shade apart into low-poly chunks.
-                let cs = (pa[0] + pb[0] + pc[0]) / 3.0;
-                let cf = (pa[1] + pb[1] + pc[1]) / 3.0;
-                let cz = (pa[2] + pb[2] + pc[2]) / 3.0;
-                let (e1s, e1f, e1z) = (pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
-                let (e2s, e2f, e2z) = (pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]);
-                let mut nx = e1f * e2z - e1z * e2f;
-                let mut ny = e1z * e2s - e1s * e2z;
-                let mut nz = e1s * e2f - e1f * e2s;
-                if nz < 0.0 {
-                    nx = -nx;
-                    ny = -ny;
-                    nz = -nz;
-                }
-                let inv_n = 1.0 / (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
-                nx *= inv_n;
-                ny *= inv_n;
-                nz *= inv_n;
-                // The facet's forward steepness (rise per metre toward the viewer),
-                // for the breaking-face foam below. The chop folds a breaking crest
-                // near-vertical, so the floor on nz keeps it finite.
-                let slope_fwd = -ny / nz.max(0.05);
-                // Diffuse term against the sun (Lambert), kept signed so the shading
-                // below can wrap it softly around the back of each swell.
-                let lambert = nx * lx + ny * ly + nz * lz;
-                let diff = lambert.max(0.0);
+            // Fresnel reflection: grazing facets mirror the sky, head-on facets stay
+            // near-clear, on a Schlick curve (F0≈0.02 for water). The *colour* of the
+            // reflection is the live sky gradient sampled by where the reflected view
+            // ray points — facets tilted to bounce the eye toward the zenith show the
+            // deep sky, those that bounce it along the horizon show the bright band —
+            // so the same chunky facet picks up a different sky tone as it rocks.
+            let n_dot_v = clamp(nx * vx + ny * vy + nz * vz, 0.0, 1.0);
+            let u = 1.0 - n_dot_v;
+            let u2 = u * u;
+            let fres = self.fresnel_f0 + (1.0 - self.fresnel_f0) * u2 * u2 * u;
+            // Reflected view ray R = 2(N·V)N − V; its up-component is the elevation we
+            // sample the sky band at (downward bounces, rare on water, read as horizon).
+            let r_up = clamp(2.0 * n_dot_v * nz - vz, 0.0, 1.0).sqrt();
+            let sky_r = skh_r + (skz_r - skh_r) * r_up;
+            let sky_g = skh_g + (skz_g - skh_g) * r_up;
+            let sky_b = skh_b + (skz_b - skh_b) * r_up;
+            // Whitecaps: foam on the tallest crests and steepest, breaking faces.
+            let crest = clamp(mid_z / max_amp, -1.0, 1.0);
+            let steep = clamp(slope_fwd * 1.6, 0.0, 1.0);
+            let foam = (if crest > 0.55 {
+                (crest - 0.55) / 0.45 * 0.7
+            } else {
+                0.0
+            })
+            .max(steep * 0.5);
 
-                // View vector from this facet back to the eye.
-                let vxr = -cs;
-                let vyr = -cf;
-                let vzr = BASE_EYE - cz;
-                let v_inv = 1.0 / (vxr * vxr + vyr * vyr + vzr * vzr).sqrt();
-                let vx = vxr * v_inv;
-                let vy = vyr * v_inv;
-                let vz = vzr * v_inv;
+            // Subsurface glow. Two parts, both gated on a reared-up crest (thin water
+            // up top transmits light): a back-lit term that flares where the sun sits
+            // behind the wave and shines through it, plus an always-on inner glow so
+            // every crest reads as translucent lit water, not only the back-lit ones.
+            // The crest's height is the stand-in for how thin/lit the water there is.
+            let sss = if crest > 0.0 {
+                let lhx = lx + nx * self.sss_distort;
+                let lhy = ly + ny * self.sss_distort;
+                let lhz = lz + nz * self.sss_distort;
+                let lh_i = 1.0 / (lhx * lhx + lhy * lhy + lhz * lhz).sqrt();
+                let back = clamp(-(vx * lhx + vy * lhy + vz * lhz) * lh_i, 0.0, 1.0);
+                let lit = back.powf(self.sss_power) * self.sss_scale + self.sss_ambient;
+                (lit * crest).min(0.85)
+            } else {
+                0.0
+            };
 
-                // Blinn-Phong specular: half-vector between sun and eye.
-                let hx0 = lx + vx;
-                let hy0 = ly + vy;
-                let hz0 = lz + vz;
-                let h_inv = 1.0 / (hx0 * hx0 + hy0 * hy0 + hz0 * hz0).sqrt();
-                let n_dot_h = clamp((nx * hx0 + ny * hy0 + nz * hz0) * h_inv, 0.0, 1.0);
-                let spec = if n_dot_h > 0.9 {
-                    n_dot_h.powf(self.shininess)
-                } else {
-                    0.0
-                };
-                // Fresnel reflection: grazing facets mirror the sky, head-on facets stay
-                // near-clear, on a Schlick curve (F0≈0.02 for water). The *colour* of the
-                // reflection is the live sky gradient sampled by where the reflected view
-                // ray points — facets tilted to bounce the eye toward the zenith show the
-                // deep sky, those that bounce it along the horizon show the bright band —
-                // so the same chunky facet picks up a different sky tone as it rocks.
-                let n_dot_v = clamp(nx * vx + ny * vy + nz * vz, 0.0, 1.0);
-                let u = 1.0 - n_dot_v;
-                let u2 = u * u;
-                let fres = self.fresnel_f0 + (1.0 - self.fresnel_f0) * u2 * u2 * u;
-                // Reflected view ray R = 2(N·V)N − V; its up-component is the elevation we
-                // sample the sky band at (downward bounces, rare on water, read as horizon).
-                let r_up = clamp(2.0 * n_dot_v * nz - vz, 0.0, 1.0).sqrt();
-                let sky_r = skh_r + (skz_r - skh_r) * r_up;
-                let sky_g = skh_g + (skz_g - skh_g) * r_up;
-                let sky_b = skh_b + (skz_b - skh_b) * r_up;
-                // Whitecaps: foam on the tallest crests and steepest, breaking faces.
-                let crest = clamp(cz / max_amp, -1.0, 1.0);
-                let steep = clamp(slope_fwd * 1.6, 0.0, 1.0);
-                let foam = (if crest > 0.55 {
-                    (crest - 0.55) / 0.45 * 0.7
-                } else {
-                    0.0
-                })
-                .max(steep * 0.5);
-
-                // Subsurface glow. Two parts, both gated on a reared-up crest (thin water
-                // up top transmits light): a back-lit term that flares where the sun sits
-                // behind the wave and shines through it, plus an always-on inner glow so
-                // every crest reads as translucent lit water, not only the back-lit ones.
-                // The crest's height is the stand-in for how thin/lit the water there is.
-                let sss = if crest > 0.0 {
-                    let lhx = lx + nx * self.sss_distort;
-                    let lhy = ly + ny * self.sss_distort;
-                    let lhz = lz + nz * self.sss_distort;
-                    let lh_i = 1.0 / (lhx * lhx + lhy * lhy + lhz * lhz).sqrt();
-                    let back = clamp(-(vx * lhx + vy * lhy + vz * lhz) * lh_i, 0.0, 1.0);
-                    let lit = back.powf(self.sss_power) * self.sss_scale + self.sss_ambient;
-                    (lit * crest).min(0.85)
-                } else {
-                    0.0
-                };
-
-                // Facet luminance — the wave shading that lights some quads over others,
-                // three orientation cues summed about a mid-grey of 1.0:
-                //   • height: crests catch the light, troughs sit in shadow;
-                //   • sun-facing slope: a wrapped Lambert (lambert·½+½, eased) so the face
-                //     of a swell turned toward the sun glows and its lee back falls into
-                //     soft shadow, the brightness rolling up the wave rather than snapping
-                //     at the terminator;
-                //   • sky fill: facets tilted up to the open sky lift, those tipped away dim.
-                let wrapped = clamp(lambert * 0.5 + 0.5, 0.0, 1.0);
-                let sun_face = wrapped * wrapped; // ease: deeper lee shadow, brighter face
-                let sky_face = 0.5 + 0.5 * nz; // up-facing → toward 1, steep faces → toward 0.5
-                let shade = clamp(
-                    1.0 + crest * self.height_shade
-                        + (sun_face - 0.5) * self.slope_shade
-                        + (sky_face - 0.5) * self.sky_shade,
-                    0.28,
-                    1.85,
-                );
-                let mut r = base_r * shade;
-                let mut g = base_g * shade;
-                let mut b = base_b * shade;
-                // Shift the wave tops toward the bright, saturated crest tone (eased so
-                // only the upper third of the swell lifts), leaving troughs on the dark
-                // deep-water base. This is the main colour variation through the body.
-                let up = clamp(crest, 0.0, 1.0);
-                if up > 0.0 {
-                    let tc = up * up * self.crest_brighten;
-                    r += (crest_r - r) * tc;
-                    g += (crest_g - g) * tc;
-                    b += (crest_b - b) * tc;
-                }
-                // Direct sun-warmth: the light source tinting the faces turned toward it.
-                // Gated on the disc's visibility, so the overcast that hides the sun also
-                // lifts its warm wash off the water (the sky reflection below carries the
-                // grey instead).
-                let t_lit = 0.30 * diff * self.light_source_vis;
-                r += (sun_r - r) * t_lit;
-                g += (sun_g - g) * t_lit;
-                b += (sun_b - b) * t_lit;
-                let t_sky = self.reflect_strength * fres;
-                r += (sky_r - r) * t_sky;
-                g += (sky_g - g) * t_sky;
-                b += (sky_b - b) * t_sky;
-                if sss > 0.0 {
-                    let ss = sss * self.light_strength;
-                    r += (glow_r - r) * ss;
-                    g += (glow_g - g) * ss;
-                    b += (glow_b - b) * ss;
-                }
-                if spec > 0.0 {
-                    // The mirror-bright glitter of the sun/moon on the water: faded with
-                    // the disc's visibility so the storm overcast leaves no glitter road.
-                    let sp = spec * self.light_source_vis;
-                    r += (glint_r - r) * sp;
-                    g += (glint_g - g) * sp;
-                    b += (glint_b - b) * sp;
-                }
-                if self.lightning > 0.0 {
-                    // A lightning strike's glare caught on the swell: a brief cold flash,
-                    // strongest on the flatter, sky-facing facets and grazing reflections,
-                    // so it reads as the sky's flash mirrored on some quads rather than a
-                    // flat wash, plus an extra spark off the specular crests it catches.
-                    // Weighted toward grazing facets and specular crests (where an elevated
-                    // bolt actually mirrors), with only a slight flat-water floor, so the lit
-                    // patch is a reflection streak rather than a broad pool.
-                    let refl = clamp(0.12 + 0.20 * nz + 0.55 * fres + spec, 0.0, 1.0);
-                    // Confine it to a narrow pool about the strike's bearing: this facet's
-                    // own bearing against the bolt's, on a soft bell, so only the water
-                    // turned toward the strike lights.
-                    let phi = cs.atan2(cf);
-                    let dsep = wrap_angle(phi - self.lightning_rel);
-                    let dir = (-(dsep / LIGHTNING_DIR_WIDTH).powi(2)).exp();
-                    let fl = (self.lightning * dir * refl * LIGHTNING_GAIN).min(0.9);
-                    r += (LIGHTNING_COL[0] - r) * fl;
-                    g += (LIGHTNING_COL[1] - g) * fl;
-                    b += (LIGHTNING_COL[2] - b) * fl;
-                }
-                // Harbour town lights: a warm pool on the swell faces turned toward the
-                // port, plus a Blinn-Phong glitter road toward the eye. Independent of the
-                // scene light (the town burns its own lamps), so it lifts the night sea.
-                if !lights.is_empty() {
-                    let mut road = 0.0;
-                    for pl in lights {
-                        road += pl.on_facet(cs, cf, cz, nx, ny, nz, vx, vy, vz);
-                    }
-                    if road > 0.0 {
-                        // The town road reads far too hot; scale it right down so it sits as
-                        // a faint shimmer on the night sea rather than a bright glitter road.
-                        let q = clamp(road * 0.12, 0.0, 1.0);
-                        r += (road_r - r) * q;
-                        g += (road_g - g) * q;
-                        b += (road_b - b) * q;
-                        // Hot cores whiten so the glitter road sparkles rather than smears.
-                        let hot = q * q * q * 0.3;
-                        r += (255.0 - r) * hot;
-                        g += (255.0 - g) * hot;
-                        b += (255.0 - b) * hot;
-                    }
-                }
-                if foam > 0.0 {
-                    // Whitecaps fade into the water as the light fails and take on the
-                    // active light's tone, so crests glow with the time of day — warm
-                    // at dusk, cool by moonlight — instead of staying pure white over a
-                    // dark sea. Only the bright midday sea froths fully white.
-                    let tf = (foam * (0.15 + 0.85 * self.light_strength)).min(1.0);
-                    let fr = foam_r + (sun_r - foam_r) * 0.32;
-                    let fg = foam_g + (sun_g - foam_g) * 0.32;
-                    let fb = foam_b + (sun_b - foam_b) * 0.32;
-                    r += (fr - r) * tf;
-                    g += (fg - g) * tf;
-                    b += (fb - b) * tf;
-                }
-                // Glassy crest fade toward transparent, near bands only.
-                let crest_top = clamp(
-                    (crest - self.crest_fade_lo) / (self.crest_fade_hi - self.crest_fade_lo),
-                    0.0,
-                    1.0,
-                );
-                let alpha = 1.0 - crest_top * nearness * self.crest_glass;
-
-                let color = Color::new(r / 255.0, g / 255.0, b / 255.0, alpha);
-                // Neighbouring triangles share their corner vertices exactly (within a
-                // band via the shared columns, across bands via the swapped row
-                // buffers), so the mesh is watertight without any overdraw.
-                draw_triangle(
-                    vec2(pa[3], pa[4]),
-                    vec2(pb[3], pb[4]),
-                    vec2(pc[3], pc[4]),
-                    color,
-                );
+            // Facet luminance — the wave shading that lights some quads over others,
+            // three orientation cues summed about a mid-grey of 1.0:
+            //   • height: crests catch the light, troughs sit in shadow;
+            //   • sun-facing slope: a wrapped Lambert (lambert·½+½, eased) so the face
+            //     of a swell turned toward the sun glows and its lee back falls into
+            //     soft shadow, the brightness rolling up the wave rather than snapping
+            //     at the terminator;
+            //   • sky fill: facets tilted up to the open sky lift, those tipped away dim.
+            let wrapped = clamp(lambert * 0.5 + 0.5, 0.0, 1.0);
+            let sun_face = wrapped * wrapped; // ease: deeper lee shadow, brighter face
+            let sky_face = 0.5 + 0.5 * nz; // up-facing → toward 1, steep faces → toward 0.5
+            let shade = clamp(
+                1.0 + crest * self.height_shade
+                    + (sun_face - 0.5) * self.slope_shade
+                    + (sky_face - 0.5) * self.sky_shade,
+                0.28,
+                1.85,
+            );
+            let mut r = base_r * shade;
+            let mut g = base_g * shade;
+            let mut b = base_b * shade;
+            // Shift the wave tops toward the bright, saturated crest tone (eased so
+            // only the upper third of the swell lifts), leaving troughs on the dark
+            // deep-water base. This is the main colour variation through the body.
+            let up = clamp(crest, 0.0, 1.0);
+            if up > 0.0 {
+                let tc = up * up * self.crest_brighten;
+                r += (crest_r - r) * tc;
+                g += (crest_g - g) * tc;
+                b += (crest_b - b) * tc;
             }
+            // Direct sun-warmth: the light source tinting the faces turned toward it.
+            // Gated on the disc's visibility, so the overcast that hides the sun also
+            // lifts its warm wash off the water (the sky reflection below carries the
+            // grey instead).
+            let t_lit = 0.30 * diff * self.light_source_vis;
+            r += (sun_r - r) * t_lit;
+            g += (sun_g - g) * t_lit;
+            b += (sun_b - b) * t_lit;
+            let t_sky = self.reflect_strength * fres;
+            r += (sky_r - r) * t_sky;
+            g += (sky_g - g) * t_sky;
+            b += (sky_b - b) * t_sky;
+            if sss > 0.0 {
+                let ss = sss * self.light_strength;
+                r += (glow_r - r) * ss;
+                g += (glow_g - g) * ss;
+                b += (glow_b - b) * ss;
+            }
+            if spec > 0.0 {
+                // The mirror-bright glitter of the sun/moon on the water: faded with
+                // the disc's visibility so the storm overcast leaves no glitter road.
+                let sp = spec * self.light_source_vis;
+                r += (glint_r - r) * sp;
+                g += (glint_g - g) * sp;
+                b += (glint_b - b) * sp;
+            }
+            if self.lightning > 0.0 {
+                // A lightning strike's glare caught on the swell: a brief cold flash,
+                // strongest on the flatter, sky-facing facets and grazing reflections,
+                // so it reads as the sky's flash mirrored on some quads rather than a
+                // flat wash, plus an extra spark off the specular crests it catches.
+                // Weighted toward grazing facets and specular crests (where an elevated
+                // bolt actually mirrors), with only a slight flat-water floor, so the lit
+                // patch is a reflection streak rather than a broad pool.
+                let refl = clamp(0.12 + 0.20 * nz + 0.55 * fres + spec, 0.0, 1.0);
+                // Confine it to a narrow pool about the strike's bearing: this facet's
+                // own bearing (its column's tan, undone) against the bolt's, on a soft
+                // bell, so only the water turned toward the strike lights.
+                let phi = ((self.cur_x[c] + self.cur_x[c + 1]) * 0.5).atan();
+                let dsep = wrap_angle(phi - self.lightning_rel);
+                let dir = (-(dsep / LIGHTNING_DIR_WIDTH).powi(2)).exp();
+                let fl = (self.lightning * dir * refl * LIGHTNING_GAIN).min(0.9);
+                r += (LIGHTNING_COL[0] - r) * fl;
+                g += (LIGHTNING_COL[1] - g) * fl;
+                b += (LIGHTNING_COL[2] - b) * fl;
+            }
+            // Harbour town lights: a warm pool on the swell faces turned toward the
+            // port, plus a Blinn-Phong glitter road toward the eye. Independent of the
+            // scene light (the town burns its own lamps), so it lifts the night sea.
+            if !lights.is_empty() {
+                let mut road = 0.0;
+                for pl in lights {
+                    road += pl.on_facet(s_mid, f_near_row, mid_z, nx, ny, nz, vx, vy, vz);
+                }
+                if road > 0.0 {
+                    // The town road reads far too hot; scale it right down so it sits as
+                    // a faint shimmer on the night sea rather than a bright glitter road.
+                    let q = clamp(road * 0.12, 0.0, 1.0);
+                    r += (road_r - r) * q;
+                    g += (road_g - g) * q;
+                    b += (road_b - b) * q;
+                    // Hot cores whiten so the glitter road sparkles rather than smears.
+                    let hot = q * q * q * 0.3;
+                    r += (255.0 - r) * hot;
+                    g += (255.0 - g) * hot;
+                    b += (255.0 - b) * hot;
+                }
+            }
+            if foam > 0.0 {
+                // Whitecaps fade into the water as the light fails and take on the
+                // active light's tone, so crests glow with the time of day — warm
+                // at dusk, cool by moonlight — instead of staying pure white over a
+                // dark sea. Only the bright midday sea froths fully white.
+                let tf = (foam * (0.15 + 0.85 * self.light_strength)).min(1.0);
+                let fr = foam_r + (sun_r - foam_r) * 0.32;
+                let fg = foam_g + (sun_g - foam_g) * 0.32;
+                let fb = foam_b + (sun_b - foam_b) * 0.32;
+                r += (fr - r) * tf;
+                g += (fg - g) * tf;
+                b += (fb - b) * tf;
+            }
+            // Glassy crest fade toward transparent, near bands only.
+            let crest_top = clamp(
+                (crest - self.crest_fade_lo) / (self.crest_fade_hi - self.crest_fade_lo),
+                0.0,
+                1.0,
+            );
+            let alpha = 1.0 - crest_top * nearness * self.crest_glass;
+
+            let color = Color::new(r / 255.0, g / 255.0, b / 255.0, alpha);
+            // Overdraw each quad half a pixel right so neighbours tuck under and no
+            // antialiased hairline seam shows through.
+            let x_l = self.screen_x[c];
+            let x_r = self.screen_x[c + 1] + 0.5;
+            let by_l = self.cur_y[c]; // bottom (near) row
+            let by_r = self.cur_y[c + 1];
+            let ty_l = self.prev_y[c]; // top (far) row
+            let ty_r = self.prev_y[c + 1];
+            draw_triangle(vec2(x_l, by_l), vec2(x_r, by_r), vec2(x_r, ty_r), color);
+            draw_triangle(vec2(x_l, by_l), vec2(x_r, ty_r), vec2(x_l, ty_l), color);
         }
     }
 
