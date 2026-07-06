@@ -99,27 +99,44 @@ pub struct IslandView {
 // renderer-specific because it leans on the camera projection.
 
 impl IsleTerrain {
-    /// Is a lamp glow at `wp` (foot elevation `foot_z`) hidden behind the
-    /// island's own terrain from the camera at `kin.pos`? Marches a few samples
-    /// along the eye->glow ray (only the part nearer than the glow) and asks
-    /// whether the terrain there projects *above* its foot on screen. The
-    /// scenery models themselves need no such test (the shared depth sort
-    /// occludes them); only the window/fire glows, drawn over the top of
-    /// everything, still have to be culled so they don't shine through a hill.
-    fn occluded(&self, wp: Vec2, foot_z: f32, kin: &Kinematics, v: &IslandView) -> bool {
-        let foot_y = project(wp, foot_z, false, kin, v).1;
+    /// Is a lamp glow at `wp` (foot elevation `foot_z`, burning `glow_h` metres
+    /// up its model) hidden behind the island's own terrain from the camera at
+    /// `kin.pos`? Marches samples along the eye->glow ray and asks whether the
+    /// terrain there projects *above* the glow on screen. The scenery models
+    /// themselves need no such test (the shared depth sort occludes them); only
+    /// the window/fire glows, drawn over the top of everything, still have to
+    /// be culled so they don't shine through a hill.
+    fn occluded(&self, wp: Vec2, foot_z: f32, glow_h: f32, kin: &Kinematics, v: &IslandView) -> bool {
+        let glow_y = project(wp, foot_z + glow_h, false, kin, v).1;
         let to_cam = kin.pos - wp;
-        const N: usize = 5;
+        // Only the stretch of the glow->eye ray that crosses the island can hide
+        // the glow. From a camera far out at sea, samples spread over the whole
+        // ray would nearly all land on open water and miss the ridge in front
+        // (a hut light behind a hill then shines through the land), so clip the
+        // ray to the grounding circle and put every sample on the terrain. No
+        // elevation shortcut on the samples: from a low camera close inshore,
+        // even ground *below* the glow's own height occludes it (the sightline
+        // grazes up over the near slope), so every sample must be projected.
+        let m = wp - self.center;
+        let a = to_cam.dot(to_cam).max(1e-6);
+        let b = m.dot(to_cam);
+        let c = m.dot(m) - self.radius * self.radius;
+        let disc = b * b - a * c;
+        if disc <= 0.0 {
+            return false; // the ray never crosses the island's circle
+        }
+        let exit = ((-b + disc.sqrt()) / a).min(1.0);
+        if exit <= 0.0 {
+            return false;
+        }
+        const N: usize = 12;
         for s in 1..=N {
-            let frac = s as f32 / (N as f32 + 1.0);
+            let frac = exit * s as f32 / (N as f32 + 1.0);
             let sp = wp + to_cam * frac;
             let z = self.elevation_at(sp);
-            if z <= foot_z + 1.0 {
-                continue;
-            }
             let ty = project(sp, z, false, kin, v).1;
-            // Smaller screen-y is higher up: terrain crests above the foot occludes.
-            if ty < foot_y - 1.5 {
+            // Smaller screen-y is higher up: terrain crossing above the glow occludes.
+            if ty < glow_y - 1.5 {
                 return true;
             }
         }
@@ -585,9 +602,11 @@ pub fn paint_island(isle: &Island, features: &[IsleFeature], kin: &Kinematics, v
             continue;
         }
         // The same foot the model itself stands on, so a window glow stays
-        // glued to its (possibly slope-settled) house.
+        // glued to its (possibly slope-settled) house. The occlusion test runs
+        // at mid-model height, about where the glows burn (`draw_window_light`
+        // places them by each kind's own fraction).
         let base = foot_of(f, wp);
-        if terrain.occluded(wp, base, kin, v) {
+        if terrain.occluded(wp, base, f.height * 0.5, kin, v) {
             continue;
         }
         let (fx, fy) = project(wp, base, base < 0.5, kin, v);
