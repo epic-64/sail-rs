@@ -135,6 +135,28 @@ impl IsleTerrain {
                 }
                 h * 0.34
             }
+            IsleKind::Tropical => {
+                // A flat sand bar: one broad, low dome and at most a couple of
+                // gentle swells, with almost no noise so the strand stays smooth.
+                peaks.push(peak(&mut rng, 0.0, 0.22, h, 0.42));
+                let extra = rng.int_between(1, 3);
+                for _ in 0..extra {
+                    let hh = rng.between(0.4, 0.7) as f32 * h;
+                    peaks.push(peak(&mut rng, 0.24, 0.55, hh, 0.32));
+                }
+                h * 0.18
+            }
+            IsleKind::Desert => {
+                // Dune country: several broad mounds of similar height ranged
+                // across the isle, with strong noise rippling them into crests.
+                peaks.push(peak(&mut rng, 0.0, 0.24, h, 0.30));
+                let extra = rng.int_between(3, 6);
+                for _ in 0..extra {
+                    let hh = rng.between(0.5, 0.85) as f32 * h;
+                    peaks.push(peak(&mut rng, 0.18, 0.58, hh, 0.24));
+                }
+                h * 0.5
+            }
         };
 
         // Overlapping height-waves: four octaves of directional value-noise, each
@@ -157,6 +179,12 @@ impl IsleTerrain {
         }
 
         let tall = matches!(isle.terrain, IsleKind::Rocky | IsleKind::Volcanic);
+        // Tropical isles are mostly strand: the sand cutoff rides far up the (already
+        // low) profile, so a broad beach ring wraps a small palmy heart.
+        let beach = match isle.terrain {
+            IsleKind::Tropical => (h * 0.45).max(2.5),
+            _ => (h * 0.06).max(1.4),
+        };
         IsleTerrain {
             center: isle.pos,
             radius: r,
@@ -165,7 +193,7 @@ impl IsleTerrain {
             peaks,
             octaves,
             relief,
-            beach: (h * 0.06).max(1.4),
+            beach,
             rings: if tall { 14 } else { 10 },
         }
     }

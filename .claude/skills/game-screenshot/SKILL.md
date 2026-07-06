@@ -97,3 +97,11 @@ back up the save, keep it short) and avoid keys that alter game state.
 For the world-map beast art (`map_whale.rs` / `map_kraken.rs` /
 `map_wave.rs`), skip the game: `cargo run --release --example whale_preview`
 dumps a PNG to `$env:PREVIEW_OUT` and exits after 4 frames.
+
+For island scenery models (`feature_models.rs`), skip the sailing too:
+`cargo run --release --example feature_preview` stands a lineup of
+`FeatureKind` models on flat ground under the game's own projection and
+lighting, dumps a PNG to `$env:PREVIEW_OUT`, and exits after 4 frames. Edit
+`lineup` in the example to choose the kinds (repeat a kind to see another
+hashed yaw). Finding a staged isle that shows a specific feature is luck;
+the preview shows exactly the models you ask for.

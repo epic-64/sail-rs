@@ -76,6 +76,15 @@ pub enum FeatureKind {
     Campfire,
     Windmill,
     Lighthouse,
+    // Curiosities: old stones, old bones, and travellers' camps.
+    Mushrooms,
+    StandingStones,
+    Totem,
+    Statue,
+    WhaleBones,
+    BasaltColumn,
+    Tent,
+    Boat,
 }
 
 /// One element of an island, placed at a world `offset` (m) from the centre.
@@ -99,6 +108,8 @@ pub fn generate(seed: i64, isle: &Island, density: f32) -> Vec<IsleFeature> {
         IsleKind::Jungle => jungle(&mut rng, isle, density),
         IsleKind::Rocky => rocky(&mut rng, isle, density),
         IsleKind::Volcanic => volcanic(&mut rng, isle, density),
+        IsleKind::Tropical => tropical(&mut rng, isle, density),
+        IsleKind::Desert => desert(&mut rng, isle, density),
     };
     if isle.is_port {
         let mut prng = Rng::from_seed(
@@ -110,12 +121,17 @@ pub fn generate(seed: i64, isle: &Island, density: f32) -> Vec<IsleFeature> {
     // can land in a bay or out past a headland; a tree or house there would float on
     // the sea beside the visible land. Keep only features on dry land (the same
     // coastline the renderer draws and collision grounds against). Shore dwellers are
-    // exempt: a dock reaches out over the water and a wreck lies canted in the
-    // shallows, so both belong at the waterline.
+    // exempt: a dock reaches out over the water, and wrecks, beached boats and whale
+    // bones lie in the shallows, so they belong at the waterline.
     let terrain = IsleTerrain::for_island(isle);
     feats.retain(|f| {
-        matches!(f.kind, FeatureKind::Dock | FeatureKind::Shipwreck)
-            || terrain.on_land(isle.pos + f.offset, SHORE_INSET)
+        matches!(
+            f.kind,
+            FeatureKind::Dock
+                | FeatureKind::Shipwreck
+                | FeatureKind::Boat
+                | FeatureKind::WhaleBones
+        ) || terrain.on_land(isle.pos + f.offset, SHORE_INSET)
     });
     feats
 }
@@ -147,6 +163,11 @@ fn green(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     maybe_one(rng, isle, &[StoneArch, Windmill], 0.4, 12.0, 18.0, 0.55, &mut v);
     maybe_one(rng, isle, &[Campfire], 0.2, 2.5, 4.0, 0.78, &mut v);
     maybe_shore(rng, isle, Shipwreck, 0.25, 3.0, 5.0, &mut v);
+    // Toadstool clusters in the shade; rarer stone curiosities and a camped tent.
+    let n = scaled(rng, 4, 12, d);
+    v.extend(scatter(rng, n, r * 0.7, &[Mushrooms], 1.2, 2.2, 0.8, 1.3));
+    maybe_one(rng, isle, &[StandingStones, Statue], 0.3, 5.0, 8.0, 0.5, &mut v);
+    maybe_one(rng, isle, &[Tent], 0.18, 2.8, 3.6, 0.7, &mut v);
     v
 }
 
@@ -167,6 +188,11 @@ fn jungle(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     maybe_one(rng, isle, &[StoneArch], 0.5, 12.0, 18.0, 0.5, &mut v);
     maybe_one(rng, isle, &[Campfire], 0.2, 2.5, 4.0, 0.78, &mut v);
     maybe_shore(rng, isle, Shipwreck, 0.35, 3.0, 5.0, &mut v);
+    // Toadstools on the damp floor; idols of the old islanders deeper in.
+    let n = scaled(rng, 6, 14, d);
+    v.extend(scatter(rng, n, r * 0.78, &[Mushrooms], 1.2, 2.4, 0.9, 1.4));
+    maybe_one(rng, isle, &[Totem], 0.5, 7.0, 10.0, 0.55, &mut v);
+    maybe_one(rng, isle, &[Statue], 0.3, 5.0, 8.0, 0.45, &mut v);
     v
 }
 
@@ -185,6 +211,12 @@ fn rocky(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     maybe_one(rng, isle, &[StoneArch, Cairn], 0.4, 8.0, 14.0, 0.5, &mut v);
     maybe_one(rng, isle, &[Campfire], 0.18, 2.5, 4.0, 0.78, &mut v);
     maybe_shore(rng, isle, Shipwreck, 0.3, 3.0, 5.0, &mut v);
+    // Columnar outcrops; a menhir ring, a prospector's tent, old bones ashore.
+    let n = scaled(rng, 3, 9, d);
+    v.extend(scatter(rng, n, r * 0.66, &[BasaltColumn, Rock], 3.5, 7.0, 0.7, 1.1));
+    maybe_one(rng, isle, &[StandingStones], 0.3, 5.0, 8.0, 0.5, &mut v);
+    maybe_one(rng, isle, &[Tent], 0.15, 2.8, 3.6, 0.65, &mut v);
+    maybe_shore(rng, isle, WhaleBones, 0.25, 4.0, 6.0, &mut v);
     v
 }
 
@@ -201,6 +233,57 @@ fn volcanic(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
     let n = scaled(rng, 2, 8, d);
     v.extend(scatter(rng, n, r * 0.68, &[Cactus, Cairn], 3.0, 5.0, 0.6, 0.9));
     maybe_one(rng, isle, &[LavaVent], 0.6, 4.0, 7.0, 0.3, &mut v);
+    // Columnar basalt on the slopes; bones bleaching on the black shore.
+    let n = scaled(rng, 4, 10, d);
+    v.extend(scatter(rng, n, r * 0.62, &[BasaltColumn, BasaltColumn, Rock], 3.5, 7.5, 0.7, 1.2));
+    maybe_shore(rng, isle, WhaleBones, 0.2, 4.0, 6.0, &mut v);
+    v
+}
+
+fn tropical(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
+    use FeatureKind::*;
+    let r = isle.radius;
+    // Palms everywhere, thickest on the raised heart but straggling out across
+    // the strand (the wide beach ring is part of the look, so palms range far).
+    let n = scaled(rng, 70, 110, d);
+    let mut v = scatter(rng, n, r * 0.88, &[Palm, Palm, Palm, Tree], 6.0, 11.0, 0.9, 1.4);
+    let n = scaled(rng, 25, 50, d);
+    v.extend(scatter(rng, n, r * 0.85, &[Bush, Fern, FlowerPatch], 1.5, 3.5, 0.8, 1.3));
+    // Reeds and grasses fringing the lagoons; a few coral-pale rocks.
+    let n = scaled(rng, 10, 24, d);
+    v.extend(scatter(rng, n, r * 0.9, &[Reeds, Reeds, Rock], 2.0, 3.5, 0.8, 1.2));
+    // Castaway traces: a fire ring, a camped tent, a dinghy or wreck on the sand.
+    maybe_one(rng, isle, &[Campfire], 0.3, 2.5, 4.0, 0.7, &mut v);
+    maybe_one(rng, isle, &[Tent], 0.22, 2.8, 3.6, 0.6, &mut v);
+    maybe_shore(rng, isle, Boat, 0.3, 2.0, 3.0, &mut v);
+    maybe_shore(rng, isle, Shipwreck, 0.3, 3.0, 5.0, &mut v);
+    // An islander idol deep among the palms; old bones on the strand.
+    maybe_one(rng, isle, &[Totem, Statue], 0.25, 5.0, 8.0, 0.4, &mut v);
+    maybe_shore(rng, isle, WhaleBones, 0.2, 4.0, 6.0, &mut v);
+    v
+}
+
+fn desert(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
+    use FeatureKind::*;
+    let r = isle.radius;
+    // Cactus stands the dunes in place of any forest.
+    let n = scaled(rng, 25, 45, d);
+    let mut v = scatter(rng, n, r * 0.8, &[Cactus, Cactus, Cactus, DeadTree], 3.0, 7.0, 0.7, 1.2);
+    // Sun-bleached snags, wind-scoured rocks and cairns.
+    let n = scaled(rng, 12, 26, d);
+    v.extend(scatter(rng, n, r * 0.78, &[Rock, DeadTree, Cairn], 3.0, 6.0, 0.7, 1.2));
+    // The odd tough shrub clinging on in a hollow.
+    let n = scaled(rng, 4, 12, d);
+    v.extend(scatter(rng, n, r * 0.7, &[Bush], 1.5, 2.5, 0.6, 0.9));
+    // Relics of a buried civilisation out among the sands.
+    let n = scaled(rng, 0, 6, d);
+    v.extend(scatter(rng, n, r * 0.6, &[Ruin], 4.0, 7.0, 0.8, 1.2));
+    maybe_one(rng, isle, &[Statue, StandingStones], 0.35, 5.0, 9.0, 0.5, &mut v);
+    // A nomad camp; bones bleaching where the sand meets the sea.
+    maybe_one(rng, isle, &[Tent], 0.25, 2.8, 3.6, 0.6, &mut v);
+    maybe_one(rng, isle, &[Campfire], 0.22, 2.5, 4.0, 0.65, &mut v);
+    maybe_shore(rng, isle, WhaleBones, 0.35, 4.0, 6.0, &mut v);
+    maybe_shore(rng, isle, Shipwreck, 0.25, 3.0, 5.0, &mut v);
     v
 }
 
@@ -240,6 +323,8 @@ fn port_structures(rng: &mut Rng, isle: &Island, d: f32) -> Vec<IsleFeature> {
         height: rng.between(14.0, 20.0) as f32,
         size: rng.between(0.9, 1.1) as f32,
     });
+    // A spare dinghy hauled up on the strand.
+    maybe_shore(rng, isle, Boat, 0.6, 2.0, 3.0, &mut v);
     v
 }
 
@@ -334,3 +419,4 @@ fn maybe_shore(
         });
     }
 }
+

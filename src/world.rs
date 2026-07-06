@@ -15,6 +15,8 @@ pub enum IsleKind {
     Rocky,
     Jungle,
     Volcanic,
+    Tropical,
+    Desert,
 }
 
 /// A single landmass on the chart.
@@ -160,12 +162,14 @@ const CLUSTER_NOUN: [&str; 10] = [
     "Reaches", "Shoals", "Expanse", "Straits", "Atolls", "Banks", "Sound", "Chain", "Narrows",
     "Deeps",
 ];
-const TERRAINS: [IsleKind; 5] = [
+const TERRAINS: [IsleKind; 7] = [
     IsleKind::Green,
     IsleKind::Green,
     IsleKind::Rocky,
     IsleKind::Jungle,
     IsleKind::Volcanic,
+    IsleKind::Tropical,
+    IsleKind::Desert,
 ];
 
 fn capitalize(s: &str) -> String {
@@ -322,6 +326,10 @@ fn generate_cluster(seed: i64, center: Vec2, id_offset: i32) -> Vec<Island> {
                 IsleKind::Green | IsleKind::Jungle => 6.0 + radius * relief * 0.16,
                 IsleKind::Rocky => 16.0 + radius * relief * 0.52,
                 IsleKind::Volcanic => 22.0 + radius * relief * 0.58,
+                // Tropical isles lie lowest of all: a palm-topped sand bar barely
+                // clearing the swell. Desert rises into modest dune ridges.
+                IsleKind::Tropical => 4.0 + radius * relief * 0.09,
+                IsleKind::Desert => 8.0 + radius * relief * 0.24,
             };
             built.push(Island {
                 id: id_offset + idx,

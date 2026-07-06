@@ -134,6 +134,10 @@ fn palette(isle: &Island) -> ([f32; 3], [f32; 3]) {
         IsleKind::Rocky => ([150.0, 146.0, 138.0], [96.0, 92.0, 84.0]),
         IsleKind::Jungle => ([232.0, 217.0, 168.0], [31.0, 104.0, 55.0]),
         IsleKind::Green => ([232.0, 217.0, 168.0], [47.0, 143.0, 78.0]),
+        // Tropical: bright coral sand under a vivid palm-green heart.
+        IsleKind::Tropical => ([244.0, 232.0, 190.0], [52.0, 158.0, 86.0]),
+        // Desert: pale strand rising into deeper golden dunes; no green at all.
+        IsleKind::Desert => ([238.0, 220.0, 168.0], [204.0, 174.0, 112.0]),
     }
 }
 
