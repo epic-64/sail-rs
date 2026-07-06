@@ -32,7 +32,7 @@ use crate::world::Island;
 /// Vertical exaggeration applied to wave displacement (and to the ship's heave,
 /// so the bob stays in sync). Shared with the island projection so land bobs by
 /// the same factor as the sea around it.
-pub const WAVE_GAIN: f32 = 4.6;
+pub const WAVE_GAIN: f32 = 5.5;
 
 /// The cold blue-white a lightning strike throws on the water, matched to the lit
 /// cloud (`clouds::GLOW`), and how hard the flash lifts a facet toward it at full
