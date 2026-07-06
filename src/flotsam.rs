@@ -10,7 +10,7 @@
 //! — only the gold a pickup yields is. It carries its own [`Rng`] so topping it up
 //! stays deterministic from a seed: the same voyage always strews the same crates.
 //! As in the original, the *pure* generation and collection live here; `main`
-//! drives them each frame and the billboards are drawn by [`crate::flotsam_render`].
+//! drives them each frame and the 3-D models are drawn by [`crate::flotsam_render`].
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
