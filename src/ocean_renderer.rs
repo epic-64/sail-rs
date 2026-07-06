@@ -622,8 +622,31 @@ impl OceanRenderer {
             flot_idx += 1;
         }
 
-        // Streak the surface flecks on top of the finished wave mesh.
-        self.paint_flow(&scene);
+        // Streak the surface flecks on top of the finished wave mesh. They need
+        // the whole mesh under them, so they can't join the depth march like the
+        // salvage does; instead `paint_flow` culls any fleck hiding behind a
+        // solid body by ray test, or the foam would shine straight through a
+        // nearby island or hull. Islands block as their real lumpy terrain (a
+        // docked camera sits *inside* the grounding circle, where a plain
+        // circle test misfires); the other hulls block as circles.
+        let mut land: Vec<crate::isle_terrain::IsleTerrain> = Vec::new();
+        for (isle, _) in islands {
+            if kin.pos.distance_to(isle.pos) - isle.radius < self.flow_far {
+                land.push(crate::isle_terrain::IsleTerrain::for_island(isle));
+            }
+        }
+        let mut ships: Vec<(Vec2, f32)> = Vec::new();
+        if let Some(rk) = rival {
+            if kin.pos.distance_to(rk.pos) < self.flow_far {
+                ships.push((rk.pos, rival_hull.half_length()));
+            }
+        }
+        for tk in traders {
+            if kin.pos.distance_to(tk.pos) < self.flow_far {
+                ships.push((tk.pos, trader_hull.half_length()));
+            }
+        }
+        self.paint_flow(&scene, &ships, &land);
     }
 
     /// Fill the strip of quads between the previous (farther) row and the current
@@ -906,9 +929,16 @@ impl OceanRenderer {
     }
 
     /// Scatter the world-anchored foam flecks over the near water, each smeared
-    /// from where it sat one shutter ago to where it sits now — its real
-    /// screen-space optical flow.
-    fn paint_flow(&self, view: &SceneView) {
+    /// from where it sat one shutter ago to where it sits now: its real
+    /// screen-space optical flow. `ships` are hulls a fleck must not shine
+    /// through, as (centre, radius) circles; `land` is each nearby island's
+    /// terrain, tested by [`ray_crosses_land`].
+    fn paint_flow(
+        &self,
+        view: &SceneView,
+        ships: &[(Vec2, f32)],
+        land: &[crate::isle_terrain::IsleTerrain],
+    ) {
         let SceneView {
             kin,
             t,
@@ -956,6 +986,20 @@ impl OceanRenderer {
                 let phi = s.atan2(f);
                 let dist = (f * f + s * s).sqrt();
                 if phi.abs() > max_phi || dist > self.flow_far {
+                    continue;
+                }
+                // A fleck behind a solid body is hidden by it: a hull by a
+                // cheap ray-vs-circle test, land by marching the sightline
+                // against the lumpy coast (the shore stands proud of the water
+                // by `SHORE_LIFT`, so any land across the ray hides a fleck).
+                if ships.iter().any(|&(bp, br)| {
+                    let o = bp - kin.pos;
+                    let along = o.dot(d) / dist;
+                    along > 0.0 && along < dist && o.dot(o) - along * along < br * br
+                }) {
+                    continue;
+                }
+                if land.iter().any(|t| ray_crosses_land(t, kin.pos, d, dist)) {
                     continue;
                 }
                 let z = ocean::height(wp, t, sea);
@@ -1016,4 +1060,36 @@ impl OceanRenderer {
         }
         false
     }
+}
+
+/// Does the sightline from `eye` to a surface fleck at offset `d` (range
+/// `dist`) cross the island's dry land? The ray is first clipped to the
+/// grounding circle (correct even with the eye inside it, as when docked),
+/// then that stretch is marched against the lumpy coast. Land anywhere across
+/// the ray hides a fleck riding the surface behind it.
+fn ray_crosses_land(t: &crate::isle_terrain::IsleTerrain, eye: Vec2, d: Vec2, dist: f32) -> bool {
+    let dir = d * (1.0 / dist);
+    let m = eye - t.center;
+    let b = m.dot(dir);
+    let c = m.dot(m) - t.radius * t.radius;
+    let disc = b * b - c;
+    if disc <= 0.0 {
+        return false; // the ray never enters the grounding circle
+    }
+    let sq = disc.sqrt();
+    let t0 = (-b - sq).max(0.0);
+    // Back off the far end a touch so a fleck bobbing right off the shore
+    // isn't culled by its own beach cell.
+    let t1 = (-b + sq).min(dist - 1.0);
+    if t1 <= t0 {
+        return false;
+    }
+    let steps = (((t1 - t0) / 8.0).ceil() as usize).clamp(1, 24);
+    for k in 0..=steps {
+        let tau = t0 + (t1 - t0) * k as f32 / steps as f32;
+        if t.on_land(eye + dir * tau, 0.0) {
+            return true;
+        }
+    }
+    false
 }
