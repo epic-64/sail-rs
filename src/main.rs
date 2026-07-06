@@ -137,6 +137,8 @@ fn launch_fullscreen() -> bool {
 /// - `weather=NAME` — a `Weather` rung by name (calm, clear, ... storm)
 /// - `rival=M` — a rival on the water M metres ahead, beam-on
 /// - `rival_hull=N` — the tier that rival sails (default 1)
+/// - `flotsam=M`: one piece of each salvage kind strewn M metres ahead,
+///   fanned across the bow so a frame dump reads all the models at once
 /// - `refit=N`: loop the shipyard rebuild animation (swap the tier between
 ///   `hull` and N every few seconds, so a frame dump catches it mid-flight)
 /// - `hud=0` — start with the HUD tucked away for a clean frame
@@ -151,6 +153,7 @@ struct SceneSpec {
     weather: Option<Weather>,
     rival: Option<f32>,
     rival_hull: i32,
+    flotsam: Option<f32>,
     refit: Option<i32>,
     hud: bool,
 }
@@ -168,6 +171,7 @@ fn scene_spec() -> Option<SceneSpec> {
         weather: None,
         rival: None,
         rival_hull: 1,
+        flotsam: None,
         refit: None,
         hud: true,
     };
@@ -198,6 +202,7 @@ fn scene_spec() -> Option<SceneSpec> {
             }
             "rival" => sc.rival = v.parse().ok(),
             "rival_hull" => sc.rival_hull = v.parse().unwrap_or(sc.rival_hull),
+            "flotsam" => sc.flotsam = v.parse().ok(),
             "refit" => sc.refit = v.parse().ok(),
             "hud" => sc.hud = v != "0",
             other => eprintln!("SAIL_SCENE: unknown key {other:?}"),
@@ -743,6 +748,21 @@ async fn run_game(
     // the world, topped up to keep fresh salvage ahead of the bow. A pickup flashes
     // a fading toast (`salvage_flash` seconds) reading what came aboard.
     let mut flotsam = flotsam::FlotsamField::from_seed(world.seed ^ 0x5a17_f00d);
+    // A scene's staged salvage (`flotsam=M`, see `scene_spec`): one of each kind
+    // fanned across the bow. The field is already at its target count, so the
+    // per-frame replenish neither adds to nor culls the staged pieces.
+    if let Some(d) = scene.as_ref().and_then(|sc| sc.flotsam) {
+        // The fan is lopsided so no piece hides dead ahead behind the mast.
+        for (i, kind) in flotsam::FlotsamKind::ALL.into_iter().enumerate() {
+            let ang = kin.heading_rad + [-0.22, 0.10, 0.28][i];
+            flotsam.items.push(flotsam::Flotsam {
+                id: flotsam.next_id,
+                pos: kin.pos + Vec2::from_heading(ang) * d,
+                kind,
+            });
+            flotsam.next_id += 1;
+        }
+    }
     let mut salvage_flash: f32 = 0.0;
     let mut salvage_msg = String::new();
     const SALVAGE_FLASH_TIME: f32 = 1.6;
