@@ -59,6 +59,7 @@ mod world;
 
 use macroquad::prelude::*;
 
+use font::{draw_text, measure_text};
 use game_state::{hull, upgrades, GameState, Market};
 use geometry::{clamp, compass, wrap_angle, Vec2};
 use dig_site::DigSite;

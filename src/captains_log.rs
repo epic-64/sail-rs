@@ -24,6 +24,7 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::game_state::{hull, upgrades, GameState, Good, Market};
 use crate::minimap::{self, MinimapPalette};
 use crate::tavern::{self, SpecialItem};

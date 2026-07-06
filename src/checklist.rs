@@ -11,6 +11,7 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::game_state::Stats;
 use crate::ui::px;
 

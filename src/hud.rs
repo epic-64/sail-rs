@@ -5,6 +5,7 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::game_state::{hull, upgrades, GameState};
 use crate::geometry::{compass, wrap_angle};
 use crate::sailing::{self, Kinematics, Wind};

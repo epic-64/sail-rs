@@ -22,6 +22,7 @@ use std::cell::RefCell;
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::game_state::{hull, upgrades, GameState, Good, Location, Market, TradeError, UpgradeKind};
 use crate::geometry::{wrap_angle, Vec2};
 use crate::minimap::{self, MinimapPalette};
