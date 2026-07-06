@@ -607,9 +607,8 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
             draw_line(vx[k], vy[k], vx[n], vy[n], 1.2, pal.border);
         }
     };
-    // A small sepia glyph drawn over the blob, telling the isle's terrain apart at a
-    // glance: a grass tuft (green), a jagged ridge (rocky), a palm (jungle), or a
-    // crater cone (volcanic).
+    // A small sepia glyph drawn over the blob, telling the isle's terrain apart at
+    // a glance (one arm per `IsleKind` below: a grass tuft, a ridge, a palm...).
     let col = pal.ship;
     let feature = |x: f32, y: f32, r: f32, kind: IsleKind| match kind {
         IsleKind::Green => {
@@ -643,6 +642,22 @@ pub fn render_world(world: &World, rect: Rect, pal: &MinimapPalette, wares: &[Op
             draw_line(x - 0.9 * r, base_y, x - 0.35 * r, rim_y, 1.1, col);
             draw_line(x + 0.9 * r, base_y, x + 0.35 * r, rim_y, 1.1, col);
             draw_line(x - 0.35 * r, rim_y, x + 0.35 * r, rim_y, 1.1, col); // crater rim
+        }
+        IsleKind::Tropical => {
+            // A palm leaning over its beach: slanted trunk, fronds drooping seaward.
+            let (tx, ty) = (x + 0.35 * r, y - 0.45 * r);
+            draw_line(x - 0.25 * r, y + 0.6 * r, tx, ty, 1.1, col); // leaning trunk
+            for &(fx, fy) in &[(-0.75f32, 0.05f32), (0.7, 0.2), (-0.35, 0.45), (0.4, 0.5)] {
+                draw_line(tx, ty, tx + fx * r, ty + fy * r, 1.0, col); // fronds
+            }
+        }
+        IsleKind::Desert => {
+            // A saguaro cactus: upright trunk with two upturned arms.
+            draw_line(x, y + 0.6 * r, x, y - 0.7 * r, 1.1, col); // trunk
+            draw_line(x, y + 0.05 * r, x - 0.4 * r, y + 0.05 * r, 1.0, col);
+            draw_line(x - 0.4 * r, y + 0.05 * r, x - 0.4 * r, y - 0.35 * r, 1.0, col);
+            draw_line(x, y - 0.15 * r, x + 0.4 * r, y - 0.15 * r, 1.0, col);
+            draw_line(x + 0.4 * r, y - 0.15 * r, x + 0.4 * r, y - 0.5 * r, 1.0, col);
         }
     };
     // Only the ports are charted (the trading isles the captain actually visits): a

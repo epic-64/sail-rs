@@ -260,6 +260,14 @@ fn width_ratio(kind: FeatureKind) -> f32 {
         FeatureKind::Campfire => 1.4,
         FeatureKind::Windmill => 1.0,
         FeatureKind::Lighthouse => 0.55,
+        FeatureKind::Mushrooms => 1.5,
+        FeatureKind::StandingStones => 1.6,
+        FeatureKind::Totem => 0.45,
+        FeatureKind::Statue => 0.75,
+        FeatureKind::WhaleBones => 2.2,
+        FeatureKind::BasaltColumn => 1.2,
+        FeatureKind::Tent => 1.5,
+        FeatureKind::Boat => 2.0,
     }
 }
 
@@ -273,7 +281,7 @@ fn width_ratio(kind: FeatureKind) -> f32 {
 pub fn contact_radius(f: &IsleFeature) -> f32 {
     use FeatureKind::*;
     let ratio = match f.kind {
-        Tree | Palm | Pine | DeadTree | Flag | Fern => 0.10,
+        Tree | Palm | Pine | DeadTree | Flag | Fern | Totem => 0.10,
         Cactus => 0.18,
         Tower | Windmill | Lighthouse => 0.32,
         Reeds => 0.42,
@@ -322,6 +330,16 @@ const BASALT: [f32; 3] = [72.0, 66.0, 66.0];
 const EMBER: [f32; 3] = [255.0, 92.0, 44.0];
 const FLAME: [f32; 3] = [242.0, 132.0, 46.0];
 const FLAME_HOT: [f32; 3] = [252.0, 214.0, 96.0];
+const BONE: [f32; 3] = [226.0, 218.0, 198.0];
+const BONE_DK: [f32; 3] = [192.0, 184.0, 164.0];
+const MUSH_STALK: [f32; 3] = [224.0, 214.0, 192.0];
+const MUSH_CAP: [f32; 3] = [188.0, 58.0, 48.0];
+const CANVAS: [f32; 3] = [224.0, 206.0, 168.0];
+const CANVAS_DK: [f32; 3] = [186.0, 168.0, 132.0];
+const TOTEM_R: [f32; 3] = [178.0, 62.0, 50.0];
+const TOTEM_Y: [f32; 3] = [212.0, 166.0, 78.0];
+const COLUMN: [f32; 3] = [98.0, 92.0, 94.0];
+const COLUMN_DK: [f32; 3] = [72.0, 66.0, 68.0];
 
 /// Build one feature's model and push its triangles onto the island's shared
 /// depth-sorted list. `foot` is the ground elevation the model stands on (the
@@ -618,6 +636,127 @@ pub fn emit(
             }
             s.tube(STONE_DK, (0.0, 0.0, 0.72), 0.16, (0.0, 0.0, 0.9), 0.15, 6, false);
             s.tube(ROOF_DK, (0.0, 0.0, 0.9), 0.19, (0.0, 0.0, 1.0), 0.0, 6, false);
+        }
+        FeatureKind::Mushrooms => {
+            // A toadstool cluster: squat pale stalks under broad red cone caps,
+            // fanned around the centre so all three read from any bearing.
+            for k in 0..3 {
+                let kf = k as f32;
+                let a = kf / 3.0 * TAU + s.jit(kf * 3.1 + 0.4) * 1.4;
+                let r = 0.16 + s.jit(kf * 1.9 + 2.6) * 0.26;
+                let (x, y) = (a.cos() * r, a.sin() * r);
+                let sc = 0.55 + s.jit(kf + 5.2) * 0.45;
+                let cap = 0.40 * sc;
+                s.tube(MUSH_STALK, (x, y, 0.0), 0.075 * sc, (x, y, cap), 0.06 * sc, 4, false);
+                s.tube(MUSH_CAP, (x, y, cap - 0.05 * sc), 0.26 * sc, (x, y, cap + 0.15 * sc), 0.0, 6, false);
+            }
+        }
+        FeatureKind::StandingStones => {
+            // A weathered ring of menhirs, each leaning its own way.
+            for k in 0..5 {
+                let kf = k as f32;
+                let a = kf / 5.0 * TAU + s.jit(0.8) * 1.2;
+                let (x, y) = (a.cos() * 0.48, a.sin() * 0.48);
+                let lx = (s.jit(kf * 2.3 + 1.5) - 0.5) * 0.16;
+                let ly = (s.jit(kf * 3.7 + 2.8) - 0.5) * 0.16;
+                let h = 0.55 + s.jit(kf + 4.4) * 0.35;
+                let col = if k % 2 == 0 { STONE } else { STONE_DK };
+                s.tube(col, (x, y, 0.0), 0.085, (x + lx, y + ly, h), 0.055, 4, true);
+            }
+        }
+        FeatureKind::Totem => {
+            // A carved pole: painted bands stacked under a winged crown.
+            s.tube(WOOD_DK, (0.0, 0.0, 0.0), 0.14, (0.0, 0.0, 0.3), 0.13, 5, false);
+            s.tube(TOTEM_R, (0.0, 0.0, 0.3), 0.13, (0.0, 0.0, 0.52), 0.12, 5, false);
+            s.tube(WOOD, (0.0, 0.0, 0.52), 0.12, (0.0, 0.0, 0.74), 0.11, 5, false);
+            s.tube(TOTEM_Y, (0.0, 0.0, 0.74), 0.11, (0.0, 0.0, 0.92), 0.11, 5, false);
+            s.tube(TOTEM_R, (0.0, 0.0, 0.92), 0.13, (0.0, 0.0, 1.0), 0.0, 5, false);
+            s.fin_quad(
+                WOOD_DK,
+                (-0.5, 0.0, 0.80),
+                (-0.12, 0.0, 0.84),
+                (-0.12, 0.0, 0.92),
+                (-0.5, 0.0, 0.86),
+            );
+            s.fin_quad(
+                WOOD_DK,
+                (0.12, 0.0, 0.84),
+                (0.5, 0.0, 0.80),
+                (0.5, 0.0, 0.86),
+                (0.12, 0.0, 0.92),
+            );
+        }
+        FeatureKind::Statue => {
+            // A weathered idol on a plinth: a tapering body under a heavy
+            // capped head, arms folded as a waist band.
+            s.boxy(STONE_DK, -0.32, -0.32, 0.0, 0.32, 0.32, 0.16);
+            s.tube(STONE, (0.0, 0.0, 0.16), 0.20, (0.0, 0.0, 0.56), 0.14, 5, false);
+            s.tube(STONE_DK, (0.0, 0.0, 0.38), 0.21, (0.0, 0.0, 0.48), 0.19, 5, false);
+            s.tube(STONE, (0.0, 0.0, 0.56), 0.12, (0.0, 0.0, 0.82), 0.12, 5, true);
+            s.tube(STONE_DK, (0.0, 0.0, 0.82), 0.16, (0.0, 0.0, 0.92), 0.15, 5, true);
+            s.tube(STONE_DK, (0.0, 0.0, 0.92), 0.10, (0.0, 0.0, 1.0), 0.0, 5, false);
+        }
+        FeatureKind::WhaleBones => {
+            // A bleached ribcage arched over the strand, skull toward the sea.
+            for (k, (rx, hs)) in
+                [(-0.30f32, 1.0f32), (-0.06, 0.9), (0.18, 0.78), (0.40, 0.62)].into_iter().enumerate()
+            {
+                let col = if k % 2 == 0 { BONE } else { BONE_DK };
+                for side in [-1.0f32, 1.0] {
+                    let y0 = side * 0.42 * hs;
+                    s.tube(col, (rx, y0, 0.0), 0.028, (rx, y0 * 0.45, 0.75 * hs), 0.022, 4, false);
+                    s.tube(col, (rx, y0 * 0.45, 0.75 * hs), 0.022, (rx, y0 * 0.06, hs), 0.014, 4, false);
+                }
+            }
+            s.tube(BONE, (-0.42, 0.0, 0.06), 0.13, (-0.78, 0.0, 0.14), 0.04, 5, true);
+        }
+        FeatureKind::BasaltColumn => {
+            // A columnar basalt outcrop: hex prisms stepped like organ pipes.
+            for k in 0..4 {
+                let kf = k as f32;
+                let a = kf / 4.0 * TAU + s.jit(kf * 2.7 + 0.9) * 1.5;
+                let r = 0.12 + s.jit(kf * 1.3 + 3.4) * 0.30;
+                let (x, y) = (a.cos() * r, a.sin() * r);
+                let h = 0.30 + s.jit(kf + 6.1) * 0.70;
+                let col = if k % 2 == 0 { COLUMN } else { COLUMN_DK };
+                s.tube(col, (x, y, 0.0), 0.14, (x * 1.1, y * 1.1, h), 0.12, 6, true);
+            }
+        }
+        FeatureKind::Tent => {
+            // A canvas ridge tent, closed at both ends, poles crossed at the
+            // door end of the ridge.
+            let inside = (0.0, 0.0, 0.3);
+            s.wall_quad(
+                CANVAS,
+                (-0.5, -0.55, 0.0),
+                (0.5, -0.5, 0.0),
+                (0.5, 0.0, 0.85),
+                (-0.5, 0.0, 0.92),
+                inside,
+            );
+            s.wall_quad(
+                CANVAS,
+                (0.5, 0.5, 0.0),
+                (-0.5, 0.55, 0.0),
+                (-0.5, 0.0, 0.92),
+                (0.5, 0.0, 0.85),
+                inside,
+            );
+            s.wall(CANVAS_DK, (-0.5, -0.55, 0.0), (-0.5, 0.55, 0.0), (-0.5, 0.0, 0.92), inside);
+            s.wall(CANVAS_DK, (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (0.5, 0.0, 0.85), inside);
+            s.tube(POLE, (0.52, -0.20, 0.0), 0.028, (0.5, 0.0, 0.9), 0.02, 3, false);
+            s.tube(POLE, (0.52, 0.20, 0.0), 0.028, (0.5, 0.0, 0.9), 0.02, 3, false);
+        }
+        FeatureKind::Boat => {
+            // A dinghy hauled up past the tide line: a squat hull spindle with
+            // raised stem and stern, a darker gunwale line sketching the sheer.
+            s.tube(WOOD, (-0.5, 0.0, 0.20), 0.025, (-0.05, 0.0, 0.14), 0.13, 5, false);
+            s.tube(WOOD, (-0.05, 0.0, 0.14), 0.13, (0.5, 0.0, 0.20), 0.025, 5, false);
+            for side in [-1.0f32, 1.0] {
+                let ym = side * 0.115;
+                s.tube(WOOD_DK, (-0.5, 0.0, 0.22), 0.02, (-0.05, ym, 0.26), 0.02, 3, false);
+                s.tube(WOOD_DK, (-0.05, ym, 0.26), 0.02, (0.5, 0.0, 0.22), 0.02, 3, false);
+            }
         }
     }
 }
