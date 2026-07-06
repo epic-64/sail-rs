@@ -46,6 +46,16 @@ changes during development.
   (load-bearing — drop it and a heading's face bleeds into the rest of the frame). Draw a
   heading by wrapping `draw_text`/`measure_text` in `font::heading(|| …)`. Table column
   labels, row labels, item titles, tabs, buttons and hints stay sans.
+- **`font_size` is a glyph-cache key; macroquad never evicts.** Every distinct size
+  rasterizes a fresh glyph set and re-uploads the whole atlas: a continuously varying
+  size leaks memory every frame, and even a fixed new size hitches the frame that
+  first draws it. So **text is drawn through `font::draw_text` / `font::measure_text`**
+  (same signatures as macroquad's; import them explicitly and they shadow the prelude,
+  like `geometry::Vec2` does): they quantize every size through `font::bucket`, which
+  keeps the reachable size set finite, and `font::init` pre-warms it. Never call the
+  prelude's text functions directly in new code; a draw that needs raw `TextParams`
+  (rotation) must run its size through `font::bucket` itself (see the berth tags in
+  `ship_render.rs`).
 
 ## Sound (`sound.rs`, `build.rs`)
 

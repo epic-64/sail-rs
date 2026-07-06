@@ -15,6 +15,7 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::geometry::Vec2;
 use crate::sailing::{Kinematics, Wind};
 use crate::world::{IsleKind, World};

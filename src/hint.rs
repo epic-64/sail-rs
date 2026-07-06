@@ -15,6 +15,7 @@
 //! `LB/RB` shoulder pair) share a single badge rather than one each — that
 //! mirrors how the hint text already names them as one unit.
 
+use crate::font::{draw_text, measure_text};
 use crate::ui::px;
 use macroquad::prelude::*;
 

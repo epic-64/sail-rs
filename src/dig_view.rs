@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use macroquad::prelude::*;
 
 use crate::dig_site::{Buried, DigResult, DigSite, GRID, MOVES, TILES};
-use crate::font;
+use crate::font::{self, draw_text, measure_text};
 use crate::game_state::GameState;
 use crate::geometry::{wrap_angle, Vec2};
 use crate::sailing::Kinematics;

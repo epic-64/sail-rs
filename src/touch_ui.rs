@@ -19,6 +19,8 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
+
 // --- Palette / sizing -------------------------------------------------------
 fn fill() -> Color {
     Color::new(0.10, 0.07, 0.03, 0.30)

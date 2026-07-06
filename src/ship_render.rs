@@ -2855,12 +2855,18 @@ impl ShipRenderer {
         let tag_face = lume.face(CHART_PARCH, (0.0, 0.2, 0.98));
         let tag_ink = lume.face(CHART_INK, (0.0, 0.2, 0.98));
         let letter = |text: &str, cx: f32, base_y: f32, size_m: f32| {
-            let mut px = (size_m * s).round().max(6.0) as u16;
-            let mut dims = measure_text(text, None, px, 1.0);
+            // The projected size varies with every camera move; raw macroquad
+            // would rasterize (and permanently cache) a fresh glyph set per
+            // view angle. Quantize through [`crate::font::bucket`] instead,
+            // the residual `font_scale` landing the exact size. This draw
+            // needs `TextParams` (rotation), so it can't use the module's
+            // `draw_text` shadow and buckets by hand.
+            let (px, mut scale) = crate::font::bucket((size_m * s).max(6.0));
+            let mut dims = measure_text(text, None, px, scale);
             let max_w = 0.21 * s;
             if dims.width > max_w {
-                px = (px as f32 * max_w / dims.width).floor().max(6.0) as u16;
-                dims = measure_text(text, None, px, 1.0);
+                scale = (scale * max_w / dims.width).max(6.0 / px as f32);
+                dims = measure_text(text, None, px, scale);
             }
             let (Some(p0), Some(p1)) = (pt(cx - 0.1, base_y, zt), pt(cx + 0.1, base_y, zt))
             else {
@@ -2874,6 +2880,7 @@ impl ShipRenderer {
                 start.y,
                 TextParams {
                     font_size: px,
+                    font_scale: scale,
                     rotation: run.y.atan2(run.x),
                     color: tag_ink,
                     ..Default::default()

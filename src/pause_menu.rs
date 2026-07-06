@@ -28,6 +28,7 @@ use std::cell::RefCell;
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 use crate::pad::Pad;
 use crate::sound::SoundBank;
 use crate::touch::TouchState;

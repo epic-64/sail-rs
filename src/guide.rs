@@ -11,6 +11,7 @@
 
 use macroquad::prelude::*;
 
+use crate::font::{draw_text, measure_text};
 // The ink/parchment palette and the type scale are shared with the log and the
 // port board; see `crate::ui`.
 use crate::ui::{
