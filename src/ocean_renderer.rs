@@ -32,7 +32,7 @@ use crate::world::Island;
 /// Vertical exaggeration applied to wave displacement (and to the ship's heave,
 /// so the bob stays in sync). Shared with the island projection so land bobs by
 /// the same factor as the sea around it.
-pub const WAVE_GAIN: f32 = 4.6;
+pub const WAVE_GAIN: f32 = 5.5;
 
 /// The cold blue-white a lightning strike throws on the water, matched to the lit
 /// cloud (`clouds::GLOW`), and how hard the flash lifts a facet toward it at full
@@ -188,8 +188,8 @@ impl OceanRenderer {
         // triangles at the horizon — see `row_bias` in `render`. The mesh runs all
         // the way out to `f_far` (near the true horizon) so the sea fills the
         // distance, while the colour ramp uses the nearer `depth_far`.
-        let cols = 60;
-        let rows = 104;
+        let cols = 66;
+        let rows = 124;
         // Nearest sampled distance (m). In calm water this row runs off-screen
         // under the deck, but it must reach close to the bow: when a large crest
         // rears up a few metres ahead, the water on *its near face* (between the
@@ -215,16 +215,16 @@ impl OceanRenderer {
             lightning_rel: 0.0,
             shininess: 90.0,
             base_saturation: 1.7,
-            height_shade: 0.62,
+            height_shade: 0.74,
             slope_shade: 0.42,
             sky_shade: 0.16,
-            crest_brighten: 0.74,
+            crest_brighten: 0.84,
             crest_glass: 0.2,
             crest_fade_lo: 0.12,
             crest_fade_hi: 0.42,
-            chop: 1.6,
+            chop: 2.3,
             chop_near_lo: 8.0,
-            chop_near_hi: 28.0,
+            chop_near_hi: 26.0,
             flow_cell: 17.0,
             flow_far: 230.0,
             flow_near: 4.0,
