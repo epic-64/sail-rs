@@ -1,0 +1,11 @@
+# Web (wasm) build only — see build-web.sh.
+#
+# miniquad/quad-snd declare their JS-glue functions (init_webgl, now, audio_*,
+# gl*, …) in bare `extern "C"` blocks with no `#[link(wasm_import_module)]`.
+# `wasm32-unknown-unknown` used to pass `--import-undefined` to wasm-ld, which
+# turned those undefined externs into wasm imports resolved at runtime by
+# mq_js_bundle.js. Recent Rust (>=1.82) dropped that default, so the same
+# symbols now fail linking as "undefined symbol". Re-enable it here. This scopes
+# to the wasm target only, so the native desktop build is unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--import-undefined"]
